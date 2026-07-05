@@ -1,0 +1,51 @@
+/*  Creator: make/0
+
+    Purpose: Provide index for autoload
+*/
+
+index(pengine_create(:), pengines, pengines).
+index(pengine_ask(?,?,?), pengines, pengines).
+index(pengine_next(?,?), pengines, pengines).
+index(pengine_stop(?,?), pengines, pengines).
+index(pengine_event(?,?), pengines, pengines).
+index(pengine_input(?,?), pengines, pengines).
+index(pengine_output(?), pengines, pengines).
+index(pengine_respond(?,?,?), pengines, pengines).
+index(pengine_debug(?,?), pengines, pengines).
+index(pengine_self(?), pengines, pengines).
+index(pengine_pull_response(?,?), pengines, pengines).
+index(pengine_destroy(?), pengines, pengines).
+index(pengine_destroy(?,?), pengines, pengines).
+index(pengine_abort(?), pengines, pengines).
+index(pengine_application(?), pengines, pengines).
+index(current_pengine_application(?), pengines, pengines).
+index(pengine_property(?,?), pengines, pengines).
+index(pengine_user(?), pengines, pengines).
+index(pengine_event_loop(1,+), pengines, pengines).
+index(pengine_rpc(?,?), pengines, pengines).
+index(pengine_rpc(+,+,:), pengines, pengines).
+index(pengine_writeln(?), pengines_io, pengines_io).
+index(pengine_nl, pengines_io, pengines_io).
+index(pengine_tab(?), pengines_io, pengines_io).
+index(pengine_flush_output, pengines_io, pengines_io).
+index(pengine_format(?), pengines_io, pengines_io).
+index(pengine_format(+,:), pengines_io, pengines_io).
+index(pengine_write_term(?,?), pengines_io, pengines_io).
+index(pengine_write(?), pengines_io, pengines_io).
+index(pengine_writeq(?), pengines_io, pengines_io).
+index(pengine_display(?), pengines_io, pengines_io).
+index(pengine_print(?), pengines_io, pengines_io).
+index(pengine_write_canonical(?), pengines_io, pengines_io).
+index(pengine_listing, pengines_io, pengines_io).
+index(pengine_listing(?), pengines_io, pengines_io).
+index(pengine_portray_clause(?), pengines_io, pengines_io).
+index(pengine_read(?), pengines_io, pengines_io).
+index(pengine_read_line_to_string(?,?), pengines_io, pengines_io).
+index(pengine_read_line_to_codes(?,?), pengines_io, pengines_io).
+index(pengine_io_predicate(?), pengines_io, pengines_io).
+index(pengine_bind_io_to_html(?), pengines_io, pengines_io).
+index(pengine_io_goal_expansion(?,?), pengines_io, pengines_io).
+index(message_lines_to_html(?,?,?), pengines_io, pengines_io).
+index(:(public,send_html(_)), pengines_io, pengines_io).
+index(term_to_json(?,?,?), term_to_json, term_to_json).
+index(term_to_json(?,?), term_to_json, term_to_json).

@@ -1,0 +1,55 @@
+/*  Creator: make/0
+
+    Purpose: Provide index for autoload
+*/
+
+index(jpl_get_default_jvm_opts(?), jpl, jpl).
+index(jpl_set_default_jvm_opts(?), jpl, jpl).
+index(jpl_get_actual_jvm_opts(?), jpl, jpl).
+index(jpl_pl_lib_version(?), jpl, jpl).
+index(jpl_c_lib_version(?), jpl, jpl).
+index(jpl_pl_syntax(?), jpl, jpl).
+index(jpl_new(?,?,?), jpl, jpl).
+index(jpl_call(?,?,?,?), jpl, jpl).
+index(jpl_get(?,?,?), jpl, jpl).
+index(jpl_set(?,?,?), jpl, jpl).
+index(jpl_servlet_byref(?,?,?), jpl, jpl).
+index(jpl_servlet_byval(?,?,?), jpl, jpl).
+index(jpl_class_to_classname(?,?), jpl, jpl).
+index(jpl_class_to_type(?,?), jpl, jpl).
+index(jpl_classname_to_class(?,?), jpl, jpl).
+index(jpl_classname_to_type(?,?), jpl, jpl).
+index(jpl_datum_to_type(?,?), jpl, jpl).
+index(jpl_entityname_to_type(?,?), jpl, jpl).
+index(jpl_false(?), jpl, jpl).
+index(jpl_is_class(?), jpl, jpl).
+index(jpl_is_false(?), jpl, jpl).
+index(jpl_is_null(?), jpl, jpl).
+index(jpl_is_object(?), jpl, jpl).
+index(jpl_is_object_type(?), jpl, jpl).
+index(jpl_is_ref(?), jpl, jpl).
+index(jpl_is_true(?), jpl, jpl).
+index(jpl_is_type(?), jpl, jpl).
+index(jpl_is_void(?), jpl, jpl).
+index(jpl_null(?), jpl, jpl).
+index(jpl_object_to_class(?,?), jpl, jpl).
+index(jpl_object_to_type(?,?), jpl, jpl).
+index(jpl_primitive_type(?), jpl, jpl).
+index(jpl_ref_to_type(?,?), jpl, jpl).
+index(jpl_true(?), jpl, jpl).
+index(jpl_type_to_class(?,?), jpl, jpl).
+index(jpl_type_to_classname(?,?), jpl, jpl).
+index(jpl_type_to_entityname(?,?), jpl, jpl).
+index(jpl_void(?), jpl, jpl).
+index(jpl_array_to_length(?,?), jpl, jpl).
+index(jpl_array_to_list(?,?), jpl, jpl).
+index(jpl_datums_to_array(?,?), jpl, jpl).
+index(jpl_enumeration_element(?,?), jpl, jpl).
+index(jpl_enumeration_to_list(?,?), jpl, jpl).
+index(jpl_hashtable_pair(?,?), jpl, jpl).
+index(jpl_iterator_element(?,?), jpl, jpl).
+index(jpl_list_to_array(?,?), jpl, jpl).
+index(jpl_terms_to_array(?,?), jpl, jpl).
+index(jpl_array_to_terms(?,?), jpl, jpl).
+index(jpl_map_element(?,?), jpl, jpl).
+index(jpl_set_element(?,?), jpl, jpl).

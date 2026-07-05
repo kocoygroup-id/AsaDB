@@ -1,0 +1,28 @@
+# User/local database state
+data/*.asa
+data/*.asa.journal
+data/*.asa.current_db
+*.journal
+*.current_db
+
+# Logs/temp
+*.log
+*.tmp
+--port*
+.env
+.env.*
+
+# OS/editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+
+# Never add dev source drops into this public package
+/src/
+/tests/
+/tools/
+/docs/
+/build/
+/dist/
+/.agents/
