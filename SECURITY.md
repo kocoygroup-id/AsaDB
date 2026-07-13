@@ -1,23 +1,32 @@
-# Security Notes
+# Security Policy
 
-This release package is prepared for public upload without AsaDB engine source.
+## Supported Version
 
-Included:
+Security fixes are developed for the latest source branch and the newest
+published release. Older releases may no longer receive fixes.
 
-- Portable Windows runtime in `app/`
-- AsAPanel UI in `app/web/`
-- Safe SQL samples in `samples/`
-- Local launch scripts
+## Reporting a Vulnerability
 
-Not included:
+Do not open a public issue for vulnerabilities that could expose data, execute
+untrusted input, bypass localhost protections, corrupt storage, or compromise a
+host system.
 
-- `src/` Prolog engine source
-- `tests/`
-- `tools/`
-- internal architecture/binary-format notes
-- private `.asa`, `.journal`, `.current_db`, log, or temp files
-- development build scripts
+Use GitHub's private vulnerability reporting feature for this repository. When
+that feature is unavailable, contact the maintainer through the GitHub
+organization profile and request a private reporting channel.
 
-Before uploading to GitHub, keep the repository public folder exactly like this package. Do not add the original project root.
+Include:
 
-Absolute anti-copy protection does not exist once a binary is public, but this package avoids exposing the readable Prolog source and keeps the public surface focused on local evaluation.
+- affected version and operating system;
+- minimal reproduction steps;
+- expected and observed behavior;
+- potential impact;
+- logs or a test database with all sensitive data removed.
+
+Please allow a reasonable remediation window before public disclosure.
+
+## Deployment Boundary
+
+AsAPanel is designed for `127.0.0.1`. Do not expose it directly to a public
+network. AsaDB is an experimental database and should not be the only copy of
+important data.

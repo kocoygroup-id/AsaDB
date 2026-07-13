@@ -1,0 +1,403 @@
+<!doctype html>
+<!-- Copyright (C) 2026 Kocoy Group and AsaDB contributors -->
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AsAPanel - AsaDB Local Panel</title>
+  <link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+  <div id="startupLoader" class="startup-loader" aria-live="polite">
+    <div class="startup-loader-panel">
+      <div class="startup-loader-mark">AsaDB</div>
+      <div class="startup-loader-title">Asa lagi pemanasan</div>
+      <div class="startup-loader-copy">Nyiapin Prolog runtime, katalog, dan panel biar lebih enteng.</div>
+      <div class="startup-loader-bar" aria-hidden="true"><span></span></div>
+    </div>
+  </div>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <img class="brand-logo" src="assets/asadb-logo.png" alt="AsaDB" />
+        <div class="brand-copy">
+          <h1>AsAPanel</h1>
+          <p>AsaDB Admin</p>
+          <a class="support-link" href="https://saweria.co/asadb" target="_blank" rel="noopener noreferrer">
+            Buy Me a Noddles <span aria-hidden="true">&#10084;&#65039;</span>
+          </a>
+        </div>
+      </div>
+
+      <section class="db-panel" aria-label="Database selector">
+        <div class="db-line">
+          <label for="dbName">DB</label>
+          <input id="dbName" placeholder="database_name" />
+        </div>
+        <div class="db-actions">
+          <button id="createDbBtn" class="use-button" type="button">Create DB</button>
+          <select id="dbSelect" aria-label="Select database">
+            <option value="">Select DB</option>
+          </select>
+        </div>
+      </section>
+
+      <nav class="sidebar-tools" aria-label="Database tools">
+        <button id="sqlCommandBtn" class="tool-link" type="button">
+          <span class="tool-icon sql-icon" aria-hidden="true"></span>
+          SQL command
+        </button>
+        <span class="tool-divider" aria-hidden="true"></span>
+        <button id="importViewBtn" class="tool-link" type="button">
+          <span class="tool-icon import-icon" aria-hidden="true"></span>
+          Import
+        </button>
+        <span class="tool-divider" aria-hidden="true"></span>
+        <button id="exportViewBtn" class="tool-link" type="button">
+          <span class="tool-icon export-icon" aria-hidden="true"></span>
+          Export
+        </button>
+      </nav>
+
+      <button id="createTableBtn" class="create-table" type="button">
+        <span class="table-icon add-icon" aria-hidden="true"></span>
+        Create table
+      </button>
+
+      <input id="tableSearch" class="table-search" aria-label="Filter tables" />
+      <div class="table-meta">
+        <span id="tableCount">0 tables</span>
+      </div>
+      <nav id="tableList" class="table-list" aria-label="Tables"></nav>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Local AsaDB</p>
+          <h2 id="pageTitle">SQL Workspace</h2>
+        </div>
+        <div class="topbar-actions">
+          <div class="db-quick-actions" aria-label="Database quick actions">
+            <button id="saveDbBtn" class="db-action-button save-db-button" type="button" title="Save database" aria-label="Save database">
+              <span class="save-db-icon" aria-hidden="true"></span>
+            </button>
+            <button id="dropDbBtn" class="db-action-button drop-db-button" type="button" title="Drop database" aria-label="Drop database">
+              <span class="trash-db-icon" aria-hidden="true"></span>
+            </button>
+          </div>
+          <div id="engineStatus" class="status muted">Mode: detecting...</div>
+          <button id="pingBtn" type="button">Check Engine</button>
+        </div>
+      </header>
+
+      <section id="sqlView" class="view-panel">
+        <div class="workspace">
+          <div class="editor card">
+            <div class="toolbar">
+              <h2>SQL command</h2>
+              <div class="toolbar-actions">
+                <button id="runBtn" class="primary" type="button">Run SQL</button>
+                <button id="loadSampleBtn" type="button">Sample</button>
+                <button id="clearBtn" class="danger" type="button">Clear</button>
+              </div>
+            </div>
+            <div id="sqlEditor" class="sql-editor-shell">
+              <div id="sqlLineNumbers" class="sql-line-numbers" aria-hidden="true"></div>
+              <div class="sql-code-area">
+                <pre id="sqlHighlight" class="sql-highlight" aria-hidden="true"></pre>
+                <textarea id="sqlInput" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Tulis SQL di sini..."></textarea>
+              </div>
+            </div>
+            <div id="sqlDiagnostics" class="sql-diagnostics" aria-live="polite"></div>
+          </div>
+
+          <div class="result card">
+            <div class="toolbar">
+              <h2>Result</h2>
+              <span id="lastRun" class="muted">Belum ada query.</span>
+            </div>
+            <div id="resultBox" class="result-box"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="importView" class="admin-page" hidden>
+        <h2 class="legacy-heading">Import</h2>
+
+        <div class="import-source-grid">
+          <section class="import-source-card">
+            <div class="source-card-title">
+              <span class="tool-icon import-icon" aria-hidden="true"></span>
+              File upload
+            </div>
+            <div class="source-control-row">
+              <label class="source-label" for="importFileInput">File</label>
+              <input id="importFileInput" type="file" multiple accept=".asa,.asadb,.json,.csv,.xlsx,.xls,.sql,.pgsql,.psql,.postgres,.mysql,.gz,text/csv,application/sql,text/plain" />
+              <button id="importExecuteBtn" class="flat-primary" type="button">Execute</button>
+            </div>
+          </section>
+
+          <section class="import-source-card">
+            <div class="source-card-title">
+              <span class="tool-icon export-icon" aria-hidden="true"></span>
+              From server
+            </div>
+            <div class="source-control-row server-source-row">
+              <label class="source-label" for="importServerPath">Server file</label>
+              <input id="importServerPath" value="samples/demo.sql" />
+              <button id="importRunServerBtn" class="flat-primary" type="button">Run file</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="import-filter-row">
+          <label class="check-option import-toggle"><input id="importStopOnError" type="checkbox" checked /> Stop on error</label>
+          <label class="check-option import-toggle"><input id="importShowOnlyErrors" type="checkbox" /> Show only errors</label>
+        </div>
+
+        <div class="option-table import-options">
+          <div class="option-row">
+            <div class="option-label">Format</div>
+            <div class="option-control">
+              <select id="importFormat">
+                <option value="auto">Auto detect</option>
+                <option value="asadb">AsaDB</option>
+                <option value="csv">CSV</option>
+                <option value="xlsx">XLSX</option>
+                <option value="postgresql">PostgreSQL</option>
+                <option value="mysql">MySQL</option>
+              </select>
+            </div>
+          </div>
+          <div class="option-row">
+            <div class="option-label">Target</div>
+            <div class="option-control">
+              <select id="importWriteMode">
+                <option value="replace">DROP+CREATE</option>
+                <option value="append">CREATE/APPEND</option>
+              </select>
+              <label for="importTargetTable">CSV table</label>
+              <input id="importTargetTable" value="imported_table" />
+            </div>
+          </div>
+        </div>
+
+        <div class="import-summary-panel">
+          <div class="preview-title">Summary</div>
+          <pre id="importSummary" class="conversion-preview"></pre>
+        </div>
+      </section>
+
+      <section id="exportView" class="admin-page" hidden>
+        <h2 class="legacy-heading">Export: <span id="exportDbName">No database selected</span></h2>
+
+        <div class="option-table export-options">
+          <div class="option-row">
+            <div class="option-label">Output</div>
+            <div id="exportOutputGroup" class="option-control radio-line">
+              <label><input type="radio" name="exportOutput" value="save" checked /> Download</label>
+              <label><input type="radio" name="exportOutput" value="open" /> Open preview</label>
+              <label><input type="radio" name="exportOutput" value="gzip" /> Gzip</label>
+            </div>
+          </div>
+          <div class="option-row">
+            <div class="option-label">Format</div>
+            <div id="exportFormatGroup" class="option-control radio-line">
+              <label><input type="radio" name="exportFormat" value="asadb" checked /> AsaDB</label>
+              <label><input type="radio" name="exportFormat" value="csv" /> CSV</label>
+              <label><input type="radio" name="exportFormat" value="xlsx" /> XLSX</label>
+              <label><input type="radio" name="exportFormat" value="postgresql" /> PostgreSQL</label>
+              <label><input type="radio" name="exportFormat" value="mysql" /> MySQL</label>
+            </div>
+          </div>
+          <div class="option-row">
+            <div class="option-label">Database</div>
+            <div class="option-control">
+              <select id="exportDatabaseMode">
+                <option value="create">CREATE</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+          </div>
+          <div class="option-row shade">
+            <div class="option-label">Tables</div>
+            <div class="option-control">
+              <select id="exportTableMode">
+                <option value="drop_create">DROP+CREATE</option>
+                <option value="create">CREATE</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+          </div>
+          <div class="option-row">
+            <div class="option-label">Data</div>
+            <div class="option-control">
+              <select id="exportDataMode">
+                <option value="insert">INSERT</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="export-actions">
+          <button id="exportRunBtn" class="flat-primary export-submit" type="button">Export</button>
+        </div>
+
+        <div class="export-grid">
+          <table class="table-pick export-table-pick">
+            <thead>
+              <tr>
+                <th><label><input id="exportAllTables" type="checkbox" checked /> Tables</label></th>
+                <th><label><input id="exportAllData" type="checkbox" checked /> Data</label></th>
+              </tr>
+            </thead>
+            <tbody id="exportTableRows"></tbody>
+          </table>
+
+          <div class="export-preview-panel">
+            <div class="preview-title">Preview</div>
+            <pre id="exportPreview" class="conversion-preview"></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="tableView" class="admin-page table-page" hidden>
+        <h2 class="legacy-heading">Table: <span id="tableDetailName">No table selected</span></h2>
+
+        <nav class="table-actions" aria-label="Table actions">
+          <button id="tableSelectDataBtn" class="admin-link" type="button">
+            <span class="table-icon" aria-hidden="true"></span>
+            Select data
+          </button>
+          <span class="tool-divider" aria-hidden="true"></span>
+          <button id="tableShowStructureBtn" class="admin-link strong" type="button">
+            <span class="table-icon" aria-hidden="true"></span>
+            Show structure
+          </button>
+          <span class="tool-divider" aria-hidden="true"></span>
+          <button id="tableAlterBtn" class="admin-link" type="button">
+            <span class="table-icon edit-icon" aria-hidden="true"></span>
+            Alter table
+          </button>
+          <span class="tool-divider" aria-hidden="true"></span>
+          <button id="tableNewItemBtn" class="admin-link" type="button">
+            <span class="small-add-icon" aria-hidden="true"></span>
+            New item
+          </button>
+          <span class="tool-divider" aria-hidden="true"></span>
+          <button id="tableDropBtn" class="admin-link danger-link" type="button">
+            <span class="drop-icon" aria-hidden="true"></span>
+            Drop table
+          </button>
+        </nav>
+
+        <div id="tableStructurePanel">
+          <div class="admin-table-scroll structure-scroll">
+            <table class="legacy-data-table structure-table">
+              <thead>
+                <tr>
+                  <th>Column</th>
+                  <th>Type</th>
+                  <th>Comment</th>
+                </tr>
+              </thead>
+              <tbody id="tableStructureBody"></tbody>
+            </table>
+          </div>
+
+          <h3 class="section-title">Indexes</h3>
+          <div class="admin-table-scroll indexes-scroll">
+            <table class="legacy-data-table indexes-table">
+              <tbody id="tableIndexBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="tableDataPanel" hidden>
+          <div id="tableDataBox" class="admin-table-scroll data-table-box"></div>
+        </div>
+      </section>
+
+      <section id="createTableView" class="admin-page create-table-page" hidden>
+        <h2 class="legacy-heading">Create table</h2>
+
+        <form id="createTableForm">
+          <div class="create-header-row">
+            <label for="createTableName">Table name:</label>
+            <input id="createTableName" />
+            <select id="createEngine">
+              <option value="AsaDB" selected>AsaDB</option>
+            </select>
+            <select id="createCollation">
+              <option value="">(collation)</option>
+              <option>utf8_general_ci</option>
+              <option>utf8mb4_general_ci</option>
+              <option>binary</option>
+            </select>
+            <button class="flat-primary" type="submit">Save</button>
+          </div>
+
+          <div class="admin-table-scroll create-table-scroll">
+            <table class="legacy-data-table create-definition-table">
+              <thead>
+                <tr>
+                  <th>Column name</th>
+                  <th>Type</th>
+                  <th>Length</th>
+                  <th>Options</th>
+                  <th>NULL</th>
+                  <th>
+                    <div class="auto-increment-heading">
+                      <label><input id="createAllAutoIncrement" type="radio" name="createAutoIncrementPick" /> Auto inc.</label>
+                      <button id="createAutoIncrementHelpBtn" class="help-button" type="button" aria-expanded="false" aria-controls="autoIncrementHelpPopover">?</button>
+                    </div>
+                  </th>
+                  <th><button id="createAddHeaderBtn" class="mini-button" type="button" title="Add column" aria-label="Add column">+</button></th>
+                </tr>
+              </thead>
+              <tbody id="createColumnsBody"></tbody>
+            </table>
+          </div>
+
+          <div id="autoIncrementHelpPopover" class="help-popover" hidden>
+            <strong>Auto inc.</strong>
+            <span>Auto increment untuk kolom angka. Biasanya dipakai di primary key seperti <code>id INT</code>; nilainya naik otomatis saat row baru dibuat.</span>
+          </div>
+
+          <div class="create-options-row">
+            <label class="field-inline" for="createAutoIncrement">
+              <span>Auto Increment</span>
+              <input id="createAutoIncrement" />
+            </label>
+            <label class="check-option"><input id="createDefaultValues" type="checkbox" /> Default values</label>
+            <label class="check-option"><input id="createComment" type="checkbox" /> Comment</label>
+          </div>
+
+          <button class="flat-primary create-save-bottom" type="submit">Save</button>
+
+          <fieldset class="partition-box">
+            <legend>Partition by</legend>
+          </fieldset>
+        </form>
+      </section>
+
+      <section class="card log-card">
+        <div class="toolbar">
+          <h2>Execution Log</h2>
+          <div class="toolbar-actions">
+            <button id="resetSandboxBtn" type="button">Reset sandbox</button>
+            <button id="clearLogBtn" type="button">Clear log</button>
+          </div>
+        </div>
+        <pre id="logBox"></pre>
+      </section>
+    </main>
+  </div>
+
+  <script src="assets/app.js"></script>
+</body>
+</html>

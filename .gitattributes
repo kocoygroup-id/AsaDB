@@ -1,0 +1,15 @@
+* text=auto
+*.pl text eol=lf
+*.sh text eol=lf
+*.sql text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cs text eol=crlf
+*.png binary
+*.ico binary
+*.mp3 binary
+*.docx binary
+*.zip binary
+*.exe binary

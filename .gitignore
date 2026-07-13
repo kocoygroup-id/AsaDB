@@ -1,28 +1,31 @@
-# User/local database state
-data/*.asa
-data/*.asa.journal
-data/*.asa.current_db
-*.journal
-*.current_db
-
-# Logs/temp
-*.log
-*.tmp
---port*
-.env
-.env.*
-
-# OS/editor
-Thumbs.db
-.DS_Store
+build/
+dist/
+.agents/
 .vscode/
 .idea/
-
-# Never add dev source drops into this public package
-/src/
-/tests/
-/tools/
-/docs/
-/build/
-/dist/
-/.agents/
+node_modules/
+*.asa
+*.asa.journal
+*.asa.current_db
+*.asa.store/
+*.asa.store.*
+*.idx
+*.wal
+*.undo
+*.recovery
+.tmp*
+--port*
+asadb.port
+*.log
+*.bak
+*.zip
+*.exe
+/*.png
+.env
+.env.*
+*.key
+*.pem
+.DS_Store
+Thumbs.db
+benchmark-output/
+tests/.generated/

@@ -1,322 +1,213 @@
-# AsaDB v1.0.0
+# AsaDB
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Runtime: SWI-Prolog](https://img.shields.io/badge/runtime-SWI--Prolog-E61B23.svg)](https://www.swi-prolog.org/)
+
+AsaDB is a local SQL database experiment powered by SWI-Prolog. It ships with
+AsAPanel, a small local web workspace for creating databases, running SQL,
+importing/exporting data, and inspecting tables without a cloud server.
+
+Current release target: **v1.2.1 Windows portable**.
+
+AsaDB is developed in the open under **GNU GPL v3.0 only**. Bug reports, test
+cases, documentation, storage-engine review, and code contributions are
+welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[project governance guide](GOVERNANCE.md).
+
+## What Makes It Different
+
+- Prolog-backed SQL parser, executor, catalog, and storage.
+- Local `.asa` database files with journal-style persistence.
+- One Windows launcher: `AsaDB.exe` starts the backend and panel together.
+- AsAPanel runs on `127.0.0.1` and auto-selects a free port.
+- Browser UI stays usable for big SQL files by sending imports to the Prolog backend.
+
+## v1.2.1 Highlights
+
+v1.2.1 is a storage-engine and data-safety release. Compared with v1.2.0:
+
+- Fixed `DELETE ... WHERE ...` safety for small and large tables; a targeted
+  delete no longer risks clearing unrelated rows.
+- Made table and column matching case-insensitive for safer `ID`/`id` style
+  queries.
+- Prevented duplicate `ALTER TABLE ADD COLUMN` names from creating duplicate
+  storage columns.
+- Added boot-time cleanup for older `.asa` files that already contain duplicate
+  columns or duplicate row keys.
+- Kept inserted bare names such as `Denji` and `Kishibe` as text values instead
+  of turning them into `NULL`.
+- Moved user rows to versioned, fixed 4 KB slotted pages under `.asa.store`.
+- Added persistent B+Tree equality/range indexes with linked leaf pages and a
+  bounded external bulk builder.
+- Added a configurable Clock buffer pool with pin/unpin, dirty tracking,
+  protected eviction, and incremental flush.
+- Added streaming file import, bounded batches, periodic heap cleanup, bounded
+  result windows, and indexed ORDER/LIMIT iteration.
+- Fixed one-click Run SQL, removed the full-state post-run refresh, and limited
+  success/failure audio to one active channel.
+- Validated 50,000 and 100,000-row workloads with a measured peak working set of
+  about 230 MB on the test machine.
+- Added regression tests for delete safety, duplicate column handling, and
+  beginner-friendly bare identifier inserts.
+
+## v1.2.0 Highlights
+
+v1.2.0 is a UI polish release on top of the v1.0.2 stability base:
 
-This repository contains the public Windows release package for AsaDB, including
-the portable runtime, AsAPanel local web interface, launcher scripts, and sample
-SQL files.
+- Added random Run SQL sounds: four success variants and four failure variants.
+- Replaced save/drop quick-action drawings with the provided PNG icons.
+- Kept sound playback fail-safe so blocked audio cannot break SQL execution.
+- Rebuilt the Windows package under `Public Release/v1.2.0`.
+
+## v1.0.2 Stability Base
+
+v1.0.2 is a stability and import release. Compared with v1.0.1:
+
+- Added real backend multipart upload for Import > Choose File SQL imports.
+- Large selected `.sql` files now stream through Prolog instead of being fully swallowed by browser memory.
+- Fixed post-run refresh so sidebar/table catalog updates after backend execution more consistently.
+- Added catalog regression coverage for multiple tables in one database.
+- Fixed Windows backslash database paths and first-run journal creation inside subfolders.
+- Revalidated `public_safety_archive_5500.sql`: 62 statements, 0 errors, 5,500 rows.
+- Kept `ORDER BY` stable when duplicate sort values exist.
+- Kept numeric text comparisons natural for values such as `'100'`, `'90'`, and `50`.
+
+## Supported SQL Surface
+
+Stable core:
+
+- `CREATE DATABASE`, `DROP DATABASE`, `USE`
+- `CREATE TABLE`, `DROP TABLE`, `TRUNCATE TABLE`
+- `INSERT`, `SELECT`, `UPDATE`, `DELETE`
+- `SHOW DATABASES`, `SHOW TABLES`, `SHOW INDEX`, `DESCRIBE`
+- `ALTER TABLE` for add/drop/modify/change/rename column flows
+- `ORDER BY`, `LIMIT`, `LIMIT offset,count`, `LIMIT count OFFSET offset`
+- `WHERE` expressions, `LIKE`, `BETWEEN`, `IN`, `IS NULL`
+- `INNER JOIN`, `LEFT JOIN`, `RIGHT JOIN`
+- `GROUP BY` with `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`
+- Basic subqueries: scalar, `IN (SELECT ...)`, `EXISTS`
+- `UNION`, `CASE WHEN`, `CONCAT`
+- `CREATE VIEW` and selecting from views
+- Transaction commands: `BEGIN`, `START TRANSACTION`, `COMMIT`, `ROLLBACK`
+- Basic user/grant catalog: `CREATE USER`, `GRANT`, `REVOKE`, `SHOW GRANTS`, `LOGIN`
+- Metadata routines: `CREATE/DROP TRIGGER`, `CREATE/DROP PROCEDURE`, `CREATE/DROP FUNCTION`
+
+User rows now live in persistent 4 KB slotted heap pages. Indexed equality,
+range, and simple ordered scans use persistent B+Tree files with linked leaf
+pages. The bounded buffer pool uses a Clock-style policy with pin/unpin and dirty
+tracking. Recovery uses append undo records, page mutation backups, transaction
+snapshots, and atomic catalog replacement. This is not yet MVCC or ARIES.
+
+Runtime limits are configured in `asadb.conf`. Keep each `.asa` catalog together
+with its matching `.asa.store` directory when moving a database.
 
-AsaDB is a local database runtime backed by a Prolog engine. It can be used from
-a browser-based local panel or directly from the command line through `AsA.exe`.
+## Running The Portable Windows Release
 
-This README describes the release package layout, how to run the runtime, what
-is included in the package, and how the local database files are handled.
+Extract the release zip and run:
 
-## Release Package
+```powershell
+AsaDB.exe
+```
 
-The v1.0.0 package is designed as a portable Windows distribution.
+Optional:
 
-The package includes:
+```powershell
+AsaDB.exe panel data\mydb.asa 8088
+AsaDB.exe cli data\mydb.asa web\samples\feature-tour.sql
+```
 
-    app/                    Runtime directory
-    app/AsA.exe              Main AsaDB executable
-    app/web/                 AsAPanel local web interface
-    data/                    Local database files
-    samples/                 Safe sample SQL files
-    START_ASADB.bat          Start AsaDB and open the browser
-    START_ASADB_NO_BROWSER.bat
-                             Start AsaDB without opening the browser
-    RUN_CLI_SAMPLE.bat       Run the CLI sample
-    LICENSE.md               License information
-    SECURITY.md              Security policy
-    README.md                This file
+The panel URL is written to `asadb.port`.
 
-The engine source tree, internal development tools, internal tests, and private
-database files are not part of this release package.
+## Running From Source
 
-## Starting AsaDB
+Install SWI-Prolog and make sure `swipl` is on `PATH`.
 
-The simplest way to start AsaDB is to run:
+```powershell
+swipl -q -s src\asadb_web.pl -- data.asa 8088
+```
 
-    START_ASADB.bat
+CLI:
 
-This starts the local AsaDB runtime and opens AsAPanel in the browser.
+```powershell
+swipl -q -s src\asadb.pl -- data.asa examples\demo.sql
+```
 
-The panel runs on:
+Tests:
 
-    http://127.0.0.1:8088
+```powershell
+swipl -q -s tests\run_tests.pl
+```
 
-If the browser does not open automatically, open the address manually.
+Storage benchmarks (10k, 50k, and 100k rows):
 
-To start the runtime without opening a browser, run:
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\run_storage_benchmarks.ps1
+```
 
-    START_ASADB_NO_BROWSER.bat
+Build Windows portable folder:
 
-## Running The CLI Sample
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_exe.ps1
+```
 
-A CLI sample is included so the runtime can be tested without using the web
-panel.
+## Project Layout
 
-Run:
+```text
+src/
+  asadb_core.pl      SQL parser, planner, executor, and catalog
+  asadb_page_manager.pl  4 KB slotted-page format
+  asadb_pager.pl     Disk page I/O
+  asadb_buffer_pool.pl  Bounded page cache
+  asadb_record_manager.pl  Heap records and mutation recovery
+  asadb_btree.pl     In-memory compatibility tree and persistent B+Tree
+  asadb_config.pl    Runtime storage configuration
+  asadb_web.pl       Local HTTP API for AsAPanel
+  asa_portable.pl    Portable EXE entrypoint
+web/
+  index.html
+  assets/app.js
+  assets/style.css
+  samples/
+tests/
+  run_tests.pl
+  *.sql
+Stress Test/
+  public_safety_archive_5500.sql
+scripts/
+  build_windows_exe.ps1
+```
 
-    RUN_CLI_SAMPLE.bat
+## Security
 
-Or run the executable manually:
+AsAPanel binds to localhost only and protects API calls with a per-run local
+token cookie/header. It is meant for local development, not public hosting.
 
-    cd app
-    AsA.exe cli ..\data\sample-run.asa ..\samples\feature-tour.sql
+Please report security-sensitive findings through the private process in
+[SECURITY.md](SECURITY.md), not through a public issue.
 
-The command above runs AsaDB against a local `.asa` database file and executes
-the sample SQL script from the `samples/` directory.
+## Contributing
 
-## AsAPanel
+Contributions are accepted under GPL-3.0-only and require a Developer
+Certificate of Origin sign-off. The sign-off confirms that you have the right
+to submit the contribution; it does not transfer your copyright. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the complete workflow.
 
-AsAPanel is the local browser interface included in this release.
+Good contribution areas include:
 
-It is served from the local runtime and is intended for working with local
-database files. From the panel, users can create databases, execute SQL, inspect
-tables, and import the sample SQL script.
-
-The public panel is wired to the local Prolog-backed runtime through `AsA.exe`.
-
-## Supported SQL Surface In v1.0.0
-
-The v1.0.0 release supports the following SQL surface.
-
-### Database and Table Commands
-
-    CREATE
-    DROP
-    USE
-    SHOW
-    DESCRIBE
-
-### Data Manipulation
-
-    INSERT
-    SELECT
-    UPDATE
-    DELETE
-    TRUNCATE
-
-### ALTER TABLE
-
-    ADD COLUMN
-    DROP COLUMN
-    MODIFY COLUMN
-    CHANGE COLUMN
-    RENAME COLUMN
-    RENAME TABLE
-
-### SELECT Features
-
-    INNER JOIN
-    LEFT JOIN
-    RIGHT JOIN
-    GROUP BY
-    COUNT
-    SUM
-    AVG
-    MIN
-    MAX
-
-### Expressions and Functions
-
-    UNION
-    CASE
-    CONCAT
-    LOWER
-    UPPER
-
-### Subqueries
-
-    IN (SELECT ...)
-    scalar subquery
-
-### Views
-
-    CREATE VIEW
-    DROP VIEW
-    SELECT from view
-
-### Routine Catalog
-
-    CREATE FUNCTION
-    DROP FUNCTION
-    CREATE PROCEDURE
-    DROP PROCEDURE
-    CREATE TRIGGER
-    DROP TRIGGER
-
-Routine statements are stored in the AsaDB catalog for metadata-level handling.
-
-### Index Catalog
-
-    CREATE INDEX
-    DROP INDEX
-    SHOW INDEX
-
-Index statements are tracked in the AsaDB catalog.
-
-### Transaction Snapshot
-
-    BEGIN
-    START TRANSACTION
-    COMMIT
-    ROLLBACK
-
-### User and Permission Catalog
-
-    CREATE USER
-    GRANT
-    REVOKE
-    SHOW GRANTS
-    LOGIN
-
-## Database Files
-
-AsaDB stores local database data inside the `data/` directory.
-
-The package uses the following file types:
-
-    *.asa
-    *.journal
-
-The `.asa` file contains local database state. The `.journal` file is used for
-runtime state tracking and transaction-related recovery data.
-
-User database files should not be committed to a public Git repository. A public
-release repository should ignore local database files with a `.gitignore` entry
-similar to:
-
-    data/*.asa
-    data/*.journal
-
-## Source Distribution
-
-This repository is a public release package, not the internal engine source
-tree.
-
-The following internal development directories and files are intentionally not
-included in this package:
-
-    src/
-    tests/
-    tools/
-    internal docs/
-    private .asa files
-    development-only scripts
-
-The public package is distributed around the portable executable runtime and the
-local panel assets.
-
-## Runtime Flow
-
-A typical runtime session looks like this:
-
-    1. User runs START_ASADB.bat
-    2. AsA.exe starts the local runtime
-    3. AsAPanel is served at 127.0.0.1:8088
-    4. User opens or creates a database in data/
-    5. SQL is submitted from the panel or CLI
-    6. The local engine processes the statement
-    7. Database changes are written back to the local .asa file
-
-The same runtime can also be used from the CLI by passing a database path and
-SQL script path to `AsA.exe`.
-
-## Package Tree Map
-
-    AsaDB-v1.0.0-Windows/
-    |-- app/
-    |   |-- AsA.exe
-    |   `-- web/
-    |
-    |-- data/
-    |   |-- .gitkeep
-    |   |-- *.asa
-    |   `-- *.journal
-    |
-    |-- samples/
-    |   `-- feature-tour.sql
-    |
-    |-- START_ASADB.bat
-    |-- START_ASADB_NO_BROWSER.bat
-    |-- RUN_CLI_SAMPLE.bat
-    |-- LICENSE.md
-    |-- SECURITY.md
-    `-- README.md
-
-## Release Notes
-
-AsaDB v1.0.0 is the first public Windows release package.
-
-This release focuses on:
-
-    - portable local runtime
-    - browser-based local panel
-    - command-line execution path
-    - local `.asa` database files
-    - SQL feature tour sample
-    - public package layout suitable for GitHub releases
-
-## Verifying A Release Package
-
-When downloading AsaDB from a release page, use the release archive provided by
-the maintainer.
-
-For release builds, a SHA256 checksum can be published together with the archive.
-On Windows, a downloaded executable can be checked with:
-
-    certutil -hashfile app\AsA.exe SHA256
-
-Compare the output against the checksum published in the release notes.
-
-Do not compare against a checksum from an untrusted mirror.
-
-## Uploading This Package To GitHub
-
-Use the public release folder as a new repository.
-
-Do not initialize Git from the internal development project folder.
-
-Example:
-
-    cd "AsaDB-v1.0.0-Windows"
-    git init
-    git add .
-    git commit -m "AsaDB v1.0.0 public release"
-    git branch -M main
-    git remote add origin https://github.com/USERNAME/REPO.git
-    git push -u origin main
-
-Before pushing, check the files that will be committed:
-
-    git status
-    git diff --cached --name-only
-
-Make sure the commit does not include private database files, internal source
-files, test fixtures, or development-only tools.
-
-## Contact
-
-Bug reports, feature requests, and usage questions can be opened through the
-GitHub issue tracker for the public release repository.
-
-For security-related reports, follow the instructions in:
-
-    SECURITY.md
-
-Do not post private `.asa` databases, private journals, access credentials, or
-sensitive user data in public issues.
+- SQL parser and compatibility tests;
+- page, buffer-pool, B+Tree, and recovery correctness;
+- bounded-memory execution and import performance;
+- Windows packaging and Linux/macOS validation;
+- documentation, examples, accessibility, and localization.
 
 ## License
 
-See:
+AsaDB source code and project-owned assets in this repository are licensed
+under the **GNU General Public License version 3 only** (`GPL-3.0-only`). See
+[LICENSE](LICENSE).
 
-    LICENSE.md
-
-## Maintainer
-
-AsaDB is built and maintained by Aires Zam Wibisono.
-
-The project provides a portable local database runtime, a browser-based local
-panel, and a Prolog-backed engine packaged for Windows.
+Distributing an AsaDB binary or a modified build requires making the complete
+corresponding source available under the same license. The license does not
+grant rights to present a modified build as an official AsaDB release. See
+[TRADEMARKS.md](TRADEMARKS.md), [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md),
+and [LICENSE_HISTORY.md](LICENSE_HISTORY.md).

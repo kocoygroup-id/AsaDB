@@ -1,0 +1,65 @@
+name: Bug report
+description: Report reproducible incorrect behavior in AsaDB
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve AsaDB. Remove private data before attaching databases or logs.
+  - type: input
+    id: version
+    attributes:
+      label: AsaDB version or commit
+      placeholder: v1.2.1 or commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows portable release
+        - Windows from source
+        - Linux from source
+        - macOS from source
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: sql
+    attributes:
+      label: Minimal SQL reproduction
+      description: Include the smallest complete schema and query that reproduce the problem.
+      render: sql
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs and context
+      description: Include row count, import method, and relevant logs. Do not include credentials or personal data.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for the same problem.
+          required: true
+        - label: I removed sensitive information from this report.
+          required: true
+        - label: This is not a private security vulnerability.
+          required: true
