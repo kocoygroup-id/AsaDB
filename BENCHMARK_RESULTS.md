@@ -1,24 +1,101 @@
-# AsaDB v1.2.1 Storage Benchmark
+# AsaDB v1.3.0 Stress And Panel Benchmark
 
-Measured on Windows with SWI-Prolog. The generated workload uses a table with
-three columns and 100-row multi-value INSERT statements. Every run verifies
-COUNT, indexed lookup, indexed range/order behavior, UPDATE, DELETE, bounded
-result retrieval, shutdown, reopen, and persisted row count.
+## v1.3.0 release-gate audit
 
-| Rows | Import | First indexed lookup and build | Indexed ORDER/LIMIT | UPDATE | DELETE | 500-row result | Peak working set | Result |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 10,000 | 7.1 s | 6.1 s | 80 ms | 144 ms | 109 ms | 804 ms | not separately sampled | PASS |
-| 50,000 | 34.7 s | 31.6 s | 46 ms | 234 ms | 213 ms | 948 ms | 229.9 MB | PASS |
-| 100,000 | 73.9 s | 76.1 s | 19 ms | 519 ms | 401 ms | 654 ms | 229.8 MB | PASS |
+The maintenance-release audit ran on 4MLinux 51.2 (Linux 6.12.94, x86_64),
+Intel Core i5-6300U, 8 GB RAM. `make test-all`, the runtime capability probe,
+the package regression, the 15,000 + 15,000 indexed JOIN regression, and the
+Reservoir/UI checks passed. Import smoke tests also passed for 25,000 rows with
+one column (2.25 s) and ten columns (25.75 s); a 5,000-row transaction rolled
+back to zero rows. A `Double_Company.sql` admission smoke reached live progress
+and cooperative cancellation, and the cancelled job removed its staged rows.
 
-The measured 50,000 and 100,000-row runs had the same approximately 230 MB
-peak working set. The configured logical buffer pool was 64 x 4 KB pages; peak
-working set also includes the SWI-Prolog runtime, parser, temporary external
-sort runs, and benchmark process.
+These are release-gate observations, not a replacement for the historical
+v1.2.1 reference. Disk speed, filesystem cache, and browser/runtime versions
+can change elapsed times.
 
-The earlier 100,000-row prototype baseline took almost 11 minutes and peaked at
-about 820 MB. The final measured run completed in about 247 seconds and peaked
-at 229.8 MB.
+### Filtered Double_Company JOIN + VIEW smoke
+
+On the same release host, the two statements reported in the 1.3.0 JOIN
+regression were run against 250,000-row `Double_Company` and
+`Double_Company_Status` tables immediately after import. The filtered
+qualified JOIN returned its 20 rows and the following analysis-view query
+returned its 20 rows. The maintainer's panel run measured **83–89 ms** for
+view creation, **122–138 ms** for the filtered JOIN, and **320–353 ms** for
+the analysis-view SELECT. A cold direct rerun measured **91 ms** and **852 ms**
+for the two SELECTs. The old path materialized the paged source before
+filtering and could terminate through the generic Asa error response.
+
+Import observations on this profile were **04:01.87 / 00:31.60** in the
+maintainer's interactive run and **06:58.32 / 01:03.45** in a clean direct
+rerun for the company/status files respectively. Both runs completed with
+zero errors and 250,000 rows per table; the spread is retained as an honest
+disk/cache and panel-vs-direct-stream variance note.
+
+## Environment
+
+- 4MLinux 6.12.94, x86_64
+- Intel Core i5-6300U, 2 cores / 4 threads
+- 8,022,200 kB RAM visible to the host
+- SWI-Prolog 10.0.2, x86_64
+- `page_size = 4096`
+- `buffer_pool_pages = 64`
+- `import_batch_size = 256`
+- `max_result_rows = 500`
+
+The generated storage workload uses a three-column table and 100-row
+multi-value INSERT statements. Every run verifies exact COUNT, indexed lookup,
+indexed range/order behavior, UPDATE, DELETE, bounded retrieval, shutdown,
+reopen, and persisted row count.
+
+## Final 1.3.0 Stress Results
+
+| Rows | Wall time | Import | Indexed lookup | ORDER/LIMIT | UPDATE | DELETE | Limited result | Peak RSS | Result |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|
+| 10,000 | 4.59 s | 2.02 s | 1.60 s | 43 ms | 54 ms | 50 ms | 254 ms | 166.1 MiB | PASS |
+| 50,000 | 33.00 s | 11.93 s | 19.15 s | 48 ms | 346 ms | 330 ms | 622 ms | 387.7 MiB | PASS |
+| 100,000 | 59.21 s | 32.20 s | 24.31 s | 22 ms | 617 ms | 572 ms | 576 ms | 387.6 MiB | PASS |
+
+The logical buffer pool remained bounded at 64 pages. Peak RSS is reported
+as an operational measurement, not a claim of memory reduction: the native
+4MLinux 100,000-row process measured about 387.6 MiB, while the historical
+v1.2.1 reference was 229.8 MB on a different Windows host.
+
+The 5,500-row `public_safety_archive` component audit also passed: 303 ms
+parse, 819 ms execute, 16 ms commit, and 957 ms indexed lookup, with zero
+errors and rollback-safe storage.
+
+## v1.2.1 Comparison
+
+The published GitHub v1.2.1 reference for the complete 100,000-row scenario
+was about 247 seconds and 229.8 MB on a different Windows host. The 1.3.0
+4MLinux run is about **76% lower wall-clock time**. Peak RSS is reported rather
+than marketed as a memory reduction: this native run measured about 387.6 MiB.
+Individual operations vary with disk state and CPU temperature.
+
+## Panel And Metadata Checks
+
+A warm local AsAPanel backend containing 100,000 persisted rows was restarted
+before these API checks:
+
+| Check | Measured result |
+|---|---:|
+| Empty `SELECT *` through `/api/query` | 8 ms |
+| Exact `COUNT(*)` through `/api/query` | 4 ms |
+| Count after restart | 100,000 rows |
+| Metadata COUNT plan | 0 sequential scans |
+
+The `COUNT(*)` fast path uses the persisted catalog row count only for the safe
+case of an unfiltered `COUNT(*)`. Filtered counts and other aggregates continue
+to evaluate records normally.
+
+A separate browser-to-backend stream test sent a 3.12 MB SQL file containing
+1,003 statements and 100,000 rows as one request. It completed in 40.886
+seconds wall time in that run; the server reported 35.507 seconds of stream
+execution plus 121 ms commit time and stayed below 193 MB working set. This is
+a separate panel-path observation, not substituted into the storage table.
+
+## Reproduction
 
 Run all sizes:
 
@@ -32,5 +109,8 @@ Run one size directly:
 swipl -q -s tests\stress_100k.pl -- 100000
 ```
 
+Per-run logs are generated by `tests/stress_100k.pl`; runtime databases and
+benchmark logs are intentionally excluded from the clean source archive.
+
 These numbers are project measurements, not a claim of performance parity with
-CouchDB, PostgreSQL, MySQL, or another production database.
+SQLite, CouchDB, PostgreSQL, MySQL, or another production database.

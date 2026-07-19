@@ -18,6 +18,7 @@ Install SWI-Prolog and ensure `swipl` is available on `PATH`.
 
 ```powershell
 swipl -q -s tests\run_tests.pl
+node tests\ui_regression.js
 ```
 
 Run the panel from source:
@@ -25,6 +26,17 @@ Run the panel from source:
 ```powershell
 swipl -q -s src\asadb_web.pl -- data.asa 8088
 ```
+
+When changing `web/assets/app.js`, also rebuild and commit the checked-in
+browser-compatible runtime bundle before testing or opening a pull request:
+
+```sh
+./scripts/build_legacy_frontend.sh
+node tests/ui_regression.js
+```
+
+`app.js` remains the readable source; `app.legacy.js` is the generated
+Firefox-38-compatible runtime served by AsAPanel.
 
 For storage-related changes, also run:
 
@@ -40,7 +52,9 @@ reproducible measurements.
 
 - Add regression coverage for bug fixes.
 - Document user-visible behavior and storage-format changes.
-- Keep generated files and unrelated formatting changes out of the commit.
+- Keep generated files and unrelated formatting changes out of the commit,
+  except the required `web/assets/app.legacy.js` update that accompanies a
+  change to `web/assets/app.js`.
 - Update `THIRD_PARTY_NOTICES.md` when adding a dependency or media asset.
 - Confirm that all tests pass before requesting review.
 - Use clear commits that can be reviewed independently.

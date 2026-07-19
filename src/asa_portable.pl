@@ -57,6 +57,7 @@ start_panel(DbFile, PreferredPort, OpenBrowser) :-
     init_panel_token,
     asadb_boot(DbFile),
     asadb_warmup,
+    asadb_init_reservoir(DbFile),
     asadb_start_http_on_available_port(PreferredPort, Port),
     asadb_write_panel_port_file(Port),
     format(atom(URL), 'http://127.0.0.1:~w/', [Port]),

@@ -27,6 +27,17 @@ publishing a GPL binary release.
 ## Validation
 
 - [ ] Run `swipl -q -s tests/run_tests.pl`.
+- [ ] Run `swipl -q -s tests/reservoir_tests.pl`.
+- [ ] Run `swipl -q -s tests/join_15000_regression.pl`.
+- [ ] When `web/assets/app.js` changes, run
+      `./scripts/build_legacy_frontend.sh` and verify the generated
+      `web/assets/app.legacy.js` is included.
+- [ ] Run `node tests/ui_regression.js`.
+- [ ] Run `scripts/check_linux_runtime.sh` on the target Linux system.
+- [ ] Run `make test-package` and verify
+      `AsaDB-1.3.0-linux-x86_64.tar.Z.sha256` before publishing both files.
+- [ ] Run the runtime and regression checks on an actual 4MLinux x86_64 host
+      before changing its compatibility status from conditional.
 - [ ] Run the storage benchmark for changes touching pages, records, indexes,
       imports, transactions, or recovery.
 - [ ] Build the Windows package from a clean checkout.

@@ -8,10 +8,14 @@
 :- use_module(library(http/http_parameters)).
 :- use_module(library(http/http_client)).
 :- use_module(library(http/http_multipart_plugin)).
+:- use_module(library(http/json)).
+:- use_module(library(http/http_stream)).
 :- use_module(library(random)).
 :- use_module(library(readutil)).
+:- use_module(library(utf8)).
 :- use_module('asadb_core.pl').
 :- use_module('asadb_config.pl').
+:- use_module('bridge/reservoir.pl').
 :- initialization(main, main).
 
 :- dynamic asadb_panel_token/1.
@@ -19,8 +23,13 @@
 :- dynamic asadb_import_pending/2.
 
 :- http_handler(root(.), serve_index, []).
+:- http_handler(root('assets/app-loader.js'), serve_asset('web/assets/app-loader.js', 'application/javascript'), []).
 :- http_handler(root('assets/app.js'), serve_asset('web/assets/app.js', 'application/javascript'), []).
+:- http_handler(root('assets/app.legacy.js'), serve_asset('web/assets/app.legacy.js', 'application/javascript'), []).
 :- http_handler(root('assets/style.css'), serve_asset('web/assets/style.css', 'text/css'), []).
+:- http_handler(root('favicon.ico'), serve_binary_asset('web/assets/asadb-logo.png', 'image/png'), []).
+:- http_handler(root('assets/fonts/noto-sans-jp-japanese-400-normal.woff2'), serve_binary_asset('web/assets/fonts/noto-sans-jp-japanese-400-normal.woff2', 'font/woff2'), []).
+:- http_handler(root('assets/fonts/noto-sans-jp-japanese-400-normal.woff'), serve_binary_asset('web/assets/fonts/noto-sans-jp-japanese-400-normal.woff', 'font/woff'), []).
 :- http_handler(root('assets/asadb-logo.png'), serve_binary_asset('web/assets/asadb-logo.png', 'image/png'), []).
 :- http_handler(root('assets/Icon/save.png'), serve_binary_asset('web/assets/Icon/save.png', 'image/png'), []).
 :- http_handler(root('assets/Icon/tong_sampah.png'), serve_binary_asset('web/assets/Icon/tong_sampah.png', 'image/png'), []).
@@ -34,17 +43,23 @@
 :- http_handler(root('assets/Effect/Gagal/4g.mp3'), serve_binary_asset('web/assets/Effect/Gagal/4g.mp3', 'audio/mpeg'), []).
 :- http_handler(root('samples/demo.sql'), serve_asset('web/samples/demo.sql', 'application/sql'), []).
 :- http_handler(root('samples/feature-tour.sql'), serve_asset('web/samples/feature-tour.sql', 'application/sql'), []).
-:- http_handler(root('Test/public_safety_archive_1275080.sql'), serve_binary_asset('Test/public_safety_archive_1275080.sql', 'application/sql'), []).
-:- http_handler(root('test/public_safety_archive_1275080.sql'), serve_binary_asset('Test/public_safety_archive_1275080.sql', 'application/sql'), []).
 :- http_handler(root('api/query'), api_query, []).
+:- http_handler(root('api/execute_stream'), api_execute_stream, []).
 :- http_handler(root('api/warmup'), api_warmup, []).
 :- http_handler(root('api/save'), api_save, []).
 :- http_handler(root('api/analyze'), api_analyze, []).
 :- http_handler(root('api/state'), api_state, []).
 :- http_handler(root('api/catalog'), api_catalog, []).
+:- http_handler(root('api/metadata'), api_metadata, []).
 :- http_handler(root('api/import_file'), api_import_file, []).
 :- http_handler(root('api/import_upload'), api_import_upload, []).
 :- http_handler(root('api/import_progress'), api_import_progress, []).
+:- http_handler(root('api/reservoir/jobs'), api_reservoir_jobs, []).
+:- http_handler(root('api/reservoir/file'), api_reservoir_file, []).
+:- http_handler(root('api/reservoir/job'), api_reservoir_job, []).
+:- http_handler(root('api/reservoir/result'), api_reservoir_result, []).
+:- http_handler(root('api/reservoir/cancel'), api_reservoir_cancel, []).
+:- http_handler(root('api/reservoir/stats'), api_reservoir_stats, []).
 
 main :-
     current_prolog_flag(argv, Argv),
@@ -52,6 +67,7 @@ main :-
     init_panel_token,
     asadb_boot(DbFile),
     asadb_warmup,
+    asadb_init_reservoir(DbFile),
     asadb_start_http_on_available_port(Port, ActualPort),
     asadb_write_panel_port_file(ActualPort),
     format('AsAPanel running at http://127.0.0.1:~w/ using ~w~n', [ActualPort, DbFile]),
@@ -91,6 +107,31 @@ init_panel_token :-
     format(atom(Token), '~w-~w-~w', [A, B, C]),
     assertz(asadb_panel_token(Token)).
 
+asadb_init_reservoir(DbFile) :-
+    reservoir_init(DbFile, user:reservoir_execute_job).
+
+reservoir_execute_job(JobId, SpoolPath, StopOnError, Result) :-
+    with_mutex(asadb_execution,
+        reservoir_execute_spooled_sql(JobId, SpoolPath, StopOnError, Result)).
+
+reservoir_execute_spooled_sql(JobId, SpoolPath, _, Result) :-
+    size_file(SpoolPath, Size),
+    Size =< 250000, !,
+    ensure_import_not_cancelled(JobId),
+    read_file_to_codes(SpoolPath, SQL, []),
+    web_query_fetch_size(FetchRows),
+    asadb_exec_sql_limited(SQL, FetchRows, Result0),
+    web_query_result(Result0, Result),
+    result_error_count(Result, Errors),
+    result_statement_count(Result, Statements),
+    reservoir_update_progress(JobId, Size, Statements, Errors, completed,
+                              'Backend completed the spooled SQL command.', true).
+reservoir_execute_spooled_sql(JobId, SpoolPath, StopOnError, Result) :-
+    import_sql_file_backend(SpoolPath, StopOnError, JobId, Result).
+
+result_statement_count(multi(Results), Count) :- !, length(Results, Count).
+result_statement_count(_, 1).
+
 serve_index(_Request) :-
     asadb_panel_token(Token),
     security_headers,
@@ -104,9 +145,15 @@ serve_file(Path, Type) :-
     serve_file_body(Path, Type).
 
 serve_file_body(Path, Type) :-
-    format('Content-type: ~w~n~n', [Type]),
-    read_file_to_codes(Path, Codes, []),
-    format('~s', [Codes]).
+    % Static UI files include Japanese translations.  Read them as UTF-8 text
+    % so SWI-Prolog transcodes characters once for the HTTP text stream.
+    % Copying binary bytes to that stream double-encodes non-ASCII text.
+    format('Content-type: ~w; charset=utf-8~n~n', [Type]),
+    setup_call_cleanup(
+        open(Path, read, In, [encoding(utf8)]),
+        copy_stream_data(In, current_output),
+        close(In)
+    ).
 
 serve_binary_file(Path, Type) :-
     security_headers,
@@ -122,10 +169,14 @@ serve_binary_file(Path, Type) :-
 api_query(Request) :-
     member(method(post), Request), !,
     (   authorized_api(Request)
-    ->  (   read_sql_body(Request, SQL)
+    ->  (   read_sql_page_body(Request, SQL, Offset)
         ->  web_query_fetch_size(FetchRows),
-            asadb_exec_sql_limited(SQL, FetchRows, Result0),
-            web_query_result(Result0, Result),
+            with_mutex(asadb_execution,
+                       query_page_execution(SQL, Offset, FetchRows, Result0, OffsetApplied)),
+            ( OffsetApplied == true ->
+                web_query_result(Result0, Result)
+            ;   web_query_result_offset(Result0, Offset, Result)
+            ),
             asadb_result_json(Result, JSON),
             json_response(JSON)
         ;   json_error('400 Bad Request', 'Missing or oversized SQL payload')
@@ -134,6 +185,70 @@ api_query(Request) :-
     ).
 api_query(_) :-
     json_error('405 Method Not Allowed', 'POST only').
+
+read_sql_page_body(Request, SQL, Offset) :-
+    http_read_data(Request, Data, []),
+    member(sql=SQL, Data),
+    atom_length(SQL, Len),
+    Len =< 250000,
+    query_page_offset(Data, Offset).
+
+query_page_offset(Data, Offset) :-
+    member(offset=Raw, Data),
+    !,
+    page_number_value(Raw, Offset).
+query_page_offset(_, 0).
+
+page_number_value(Value, Number) :-
+    integer(Value),
+    Value >= 0,
+    Value =< 1000000000,
+    Number = Value, !.
+page_number_value(Value, Number) :-
+    atom(Value),
+    catch(atom_number(Value, Number), _, fail),
+    integer(Number),
+    Number >= 0,
+    Number =< 1000000000.
+
+query_page_execution(SQL, Offset, FetchRows, Result, true) :-
+    Offset > 0,
+    catch(asadb_parse_sql(SQL, [select(_, _, _, _, _, _)]), _, fail), !,
+    asadb_exec_sql_page(SQL, Offset, FetchRows, Result).
+query_page_execution(SQL, _Offset, FetchRows, Result, false) :-
+    asadb_exec_sql_limited(SQL, FetchRows, Result).
+
+api_execute_stream(Request) :-
+    member(method(post), Request), !,
+    ( authorized_api(Request) ->
+        ( request_stream_payload(Request, In, Size) ->
+            request_stop_on_error(Request, StopOnError),
+            request_idempotency_key(Request, IdempotencyKey),
+            setup_call_cleanup(
+                true,
+                catch(
+                    ( reservoir_submit_stream(In, 'SQL command stream', Size, IdempotencyKey,
+                                              StopOnError, JobId, _),
+                      reservoir_wait(JobId, 3600, WaitOutcome),
+                      reservoir_wait_result(WaitOutcome, Result)
+                    ),
+                    Error,
+                    Result = error(stream_execution_failed, Error)
+                ),
+                close(In)
+            ),
+            asadb_result_json(Result, JSON),
+            json_response(JSON)
+        ; json_error('400 Bad Request', 'Missing or oversized SQL stream')
+        )
+    ; json_error('403 Forbidden', 'Forbidden')
+    ).
+api_execute_stream(_) :-
+    json_error('405 Method Not Allowed', 'POST only').
+
+reservoir_wait_result(result(Result), Result) :- !.
+reservoir_wait_result(error(Status, Message), error(Status, Message)) :- !.
+reservoir_wait_result(timeout, error(reservoir_timeout, 'Reservoir job timed out while waiting for compatibility response.')).
 
 web_query_row_limit(Limit) :- asadb_config_get(max_result_rows, Limit).
 web_query_fetch_size(FetchRows) :-
@@ -146,6 +261,23 @@ web_query_result(table(Columns, Rows0), table_page(Columns, Rows, HasMore)) :- !
     web_query_row_limit(Limit),
     take_web_rows(Limit, Rows0, Rows, HasMore).
 web_query_result(Result, Result).
+
+web_query_result_offset(multi(Results0), Offset, multi(Results)) :- !,
+    maplist(web_query_result_offset_at(Offset), Results0, Results).
+web_query_result_offset(table(Columns, Rows0), Offset, table_page(Columns, Rows, HasMore)) :- !,
+    web_query_row_limit(Limit),
+    drop_web_rows(Offset, Rows0, Remaining),
+    take_web_rows(Limit, Remaining, Rows, HasMore).
+web_query_result_offset(Result, _, Result).
+
+web_query_result_offset_at(Offset, Result0, Result) :-
+    web_query_result_offset(Result0, Offset, Result).
+
+drop_web_rows(0, Rows, Rows) :- !.
+drop_web_rows(_, [], []) :- !.
+drop_web_rows(N, [_|Rows], Remaining) :-
+    N1 is max(0, N - 1),
+    drop_web_rows(N1, Rows, Remaining).
 
 take_web_rows(0, Rows, [], HasMore) :- !,
     ( Rows == [] -> HasMore = false ; HasMore = true ).
@@ -165,8 +297,10 @@ api_warmup(Request) :-
 api_save(Request) :-
     member(method(post), Request), !,
     (   authorized_api(Request)
-    ->  asadb_save,
-        asadb_current_database(CurrentDb),
+    ->  with_mutex(asadb_execution,
+            ( asadb_save,
+              asadb_current_database(CurrentDb)
+            )),
         asadb_result_json(ok(saved_database(CurrentDb)), JSON),
         json_response(JSON)
     ;   json_error('403 Forbidden', 'Forbidden')
@@ -207,6 +341,147 @@ api_catalog(Request) :-
     ;   json_error('403 Forbidden', 'Forbidden')
     ).
 
+api_metadata(Request) :-
+    ( authorized_api(Request) ->
+        asadb_database_metadata(CoreMetadata),
+        reservoir_stats(Reservoir),
+        Metadata = CoreMetadata.put(reservoir, Reservoir),
+        json_dict_response(Metadata)
+    ; json_error('403 Forbidden', 'Forbidden')
+    ).
+
+api_reservoir_jobs(Request) :-
+    member(method(get), Request), !,
+    ( authorized_api(Request) ->
+        reservoir_job_snapshots(Snapshots),
+        length(Snapshots, Count),
+        json_dict_response(reservoir_jobs{count:Count,jobs:Snapshots})
+    ; json_error('403 Forbidden', 'Forbidden')
+    ).
+api_reservoir_jobs(Request) :-
+    member(method(post), Request), !,
+    ( authorized_api(Request) ->
+        ( request_stream_payload(Request, In, Size) ->
+            request_stop_on_error(Request, StopOnError),
+            request_idempotency_key(Request, IdempotencyKey),
+            request_job_label(Request, Label),
+            setup_call_cleanup(
+                true,
+                catch(
+                    ( reservoir_submit_stream(In, Label, Size, IdempotencyKey, StopOnError,
+                                              JobId, Admission),
+                      reservoir_job_snapshot(JobId, Snapshot),
+                      Response = reservoir_admission{
+                          status:accepted,
+                          admission:Admission,
+                          job_id:JobId,
+                          job:Snapshot
+                      },
+                      json_dict_response('202 Accepted', Response)
+                    ),
+                    Error,
+                    reservoir_api_error(Error)
+                ),
+                close(In)
+            )
+        ; json_error('400 Bad Request', 'Missing or oversized Reservoir payload')
+        )
+    ; json_error('403 Forbidden', 'Forbidden')
+    ).
+api_reservoir_jobs(_) :-
+    json_error('405 Method Not Allowed', 'GET or POST only').
+
+api_reservoir_file(Request) :-
+    member(method(post), Request), !,
+    ( authorized_api(Request) ->
+        http_read_data(Request, Data, []),
+        ( member(path=RawPath, Data),
+          allowed_import_path(RawPath, File),
+          exists_file(File) ->
+            catch(
+                ( import_stop_on_error(Data, StopOnError),
+                  form_idempotency_key(Data, IdempotencyKey),
+                  reservoir_submit_file(File, File, IdempotencyKey, StopOnError,
+                                        JobId, Admission, Size),
+                  reservoir_job_snapshot(JobId, Snapshot),
+                  Response = reservoir_admission{
+                      status:accepted,
+                      admission:Admission,
+                      job_id:JobId,
+                      size_bytes:Size,
+                      job:Snapshot
+                  },
+                  json_dict_response('202 Accepted', Response)
+                ),
+                Error,
+                reservoir_api_error(Error)
+            )
+        ; json_error('400 Bad Request', 'Import file path is not allowed or not found')
+        )
+    ; json_error('403 Forbidden', 'Forbidden')
+    ).
+api_reservoir_file(_) :-
+    json_error('405 Method Not Allowed', 'POST only').
+
+api_reservoir_job(Request) :-
+    member(method(get), Request), !,
+    ( authorized_api(Request) ->
+        catch(
+            ( reservoir_http_job_id(Request, JobId),
+              reservoir_job_snapshot(JobId, Snapshot),
+              json_dict_response(Snapshot)
+            ),
+            Error,
+            reservoir_api_error(Error)
+        )
+    ; json_error('403 Forbidden', 'Forbidden')
+    ).
+api_reservoir_job(_) :-
+    json_error('405 Method Not Allowed', 'GET only').
+
+api_reservoir_result(Request) :-
+    member(method(get), Request), !,
+    ( authorized_api(Request) ->
+        catch(
+            ( reservoir_http_result_parameters(Request, JobId, Offset, Limit),
+              reservoir_job_result_page(JobId, Offset, Limit, Result),
+              asadb_result_json(Result, JSON),
+              json_response(JSON)
+            ),
+            Error,
+            reservoir_api_error(Error)
+        )
+    ; json_error('403 Forbidden', 'Forbidden')
+    ).
+api_reservoir_result(_) :-
+    json_error('405 Method Not Allowed', 'GET only').
+
+api_reservoir_cancel(Request) :-
+    member(method(post), Request), !,
+    ( authorized_api(Request) ->
+        catch(
+            ( reservoir_http_job_id(Request, JobId),
+              reservoir_cancel(JobId, Snapshot),
+              json_dict_response(Snapshot)
+            ),
+            Error,
+            reservoir_api_error(Error)
+        )
+    ; json_error('403 Forbidden', 'Forbidden')
+    ).
+api_reservoir_cancel(_) :-
+    json_error('405 Method Not Allowed', 'POST only').
+
+api_reservoir_stats(Request) :-
+    member(method(get), Request), !,
+    ( authorized_api(Request) ->
+        reservoir_stats(Stats),
+        json_dict_response(Stats)
+    ; json_error('403 Forbidden', 'Forbidden')
+    ).
+api_reservoir_stats(_) :-
+    json_error('405 Method Not Allowed', 'GET only').
+
 api_import_file(Request) :-
     member(method(post), Request), !,
     (   authorized_api(Request)
@@ -216,7 +491,8 @@ api_import_file(Request) :-
             exists_file(File)
         ->  import_stop_on_error(Data, StopOnError),
             import_id(Data, ImportId),
-            catch(import_sql_file_backend(File, StopOnError, ImportId, Result),
+            catch(with_mutex(asadb_execution,
+                             import_sql_file_backend(File, StopOnError, ImportId, Result)),
                   Error,
                   Result = error(import_failed, Error)),
             asadb_result_json(Result, JSON),
@@ -246,7 +522,8 @@ api_import_upload_authorized(Request) :-
         import_id(Data, ImportId),
         setup_call_cleanup(
             true,
-            catch(import_sql_file_backend(TempFile, StopOnError, ImportId, Result0),
+            catch(with_mutex(asadb_execution,
+                             import_sql_file_backend(TempFile, StopOnError, ImportId, Result0)),
                   Error,
                   Result0 = error(import_failed, Error)),
             cleanup_uploaded_import_file(TempFile)
@@ -320,19 +597,23 @@ allowed_import_path(RawPath, File) :-
 allowed_import_path_clean(Clean, File) :-
     atomic_list_concat(['test', Name], '/', Clean),
     safe_import_file_name(Name), !,
-    atom_concat('Test/', Name, File).
+    stress_import_file(Name, File).
 allowed_import_path_clean(Clean, File) :-
     atomic_list_concat(['stress test', Name], '/', Clean),
     safe_import_file_name(Name), !,
-    atom_concat('Stress Test/', Name, File).
+    stress_import_file(Name, File).
 allowed_import_path_clean(Clean, File) :-
     atomic_list_concat(['stress-test', Name], '/', Clean),
     safe_import_file_name(Name), !,
-    atom_concat('Stress Test/', Name, File).
+    stress_import_file(Name, File).
 allowed_import_path_clean(Clean, File) :-
     atomic_list_concat(['stress_test', Name], '/', Clean),
     safe_import_file_name(Name), !,
-    atom_concat('Stress Test/', Name, File).
+    stress_import_file(Name, File).
+allowed_import_path_clean(Clean, File) :-
+    atomic_list_concat(['stress tests', Name], '/', Clean),
+    safe_import_file_name(Name), !,
+    stress_import_file(Name, File).
 allowed_import_path_clean(Clean, File) :-
     atomic_list_concat(['samples', Name], '/', Clean),
     safe_import_file_name(Name), !,
@@ -346,6 +627,21 @@ safe_import_file_name(Name) :-
     \+ sub_atom(Name, _, _, _, '/'),
     file_name_extension(_, Ext, Name),
     member(Ext, [sql,mysql,pgsql,psql,postgres]).
+
+stress_import_file(Name, File) :-
+    directory_file_path('stress tests', Name, Candidate),
+    ( exists_file(Candidate) ->
+        File = Candidate
+    ; stress_import_file_casefold(Name, File)
+    ).
+
+stress_import_file_casefold(Name, File) :-
+    directory_files('stress tests', Entries),
+    member(Entry, Entries),
+    downcase_atom(Entry, Name),
+    safe_import_file_name(Entry),
+    directory_file_path('stress tests', Entry, File),
+    exists_file(File), !.
 
 normalize_import_path(RawPath, Clean) :-
     atom_codes(RawPath, Codes0),
@@ -376,24 +672,27 @@ import_id(_, Id) :-
 
 import_sql_file_backend(File, StopOnError, ImportId, Result) :-
     size_file(File, Size),
+    setup_call_cleanup(
+        open(File, read, In, [type(binary)]),
+        import_sql_stream_backend(In, File, Size, StopOnError, ImportId, Result),
+        close(In)
+    ).
+
+import_sql_stream_backend(In, Label, Size, StopOnError, ImportId, Result) :-
     flag(asadb_import_batches, _, 0),
-    set_import_progress(ImportId, File, Size, 0, 0, 0, running, 'starting', false),
+    ensure_import_not_cancelled(ImportId),
+    set_import_progress(ImportId, Label, Size, 0, 0, 0, running, 'starting', false),
     asadb_exec_sql('BEGIN;', _),
     statistics(walltime, [StreamStart|_]),
     catch(
         setup_call_cleanup(
-            ( retractall(asadb_import_pending(ImportId, _)),
-              open(File, read, In, [encoding(utf8)])
-            ),
-            import_sql_stream(In, StopOnError, File, Size, ImportId, 0, 0, 0, none, [], none, '', Stats),
-            ( close(In),
-              retractall(asadb_import_pending(ImportId, _))
-            )
+            retractall(asadb_import_pending(ImportId, _)),
+            import_sql_stream(In, StopOnError, Label, Size, ImportId, 0, 0, 0, none, [], [], none, '', Stats),
+            retractall(asadb_import_pending(ImportId, _))
         ),
         Error,
         ( asadb_exec_sql('ROLLBACK;', _),
-          term_atom_safe(Error, ErrorMessage),
-          set_import_progress(ImportId, File, Size, 0, 0, 1, error, ErrorMessage, true),
+          record_import_failure(ImportId, Label, Size, Error),
           throw(Error)
         )
     ),
@@ -402,6 +701,7 @@ import_sql_file_backend(File, StopOnError, ImportId, Result) :-
     trim_stacks,
     Stats = import_stats(Statements, Errors, LastStatus, LastMessage, BytesRead),
     ( Errors =:= 0 ->
+        ensure_import_not_cancelled(ImportId),
         statistics(walltime, [CommitStart|_]),
         asadb_exec_sql('COMMIT;', _),
         statistics(walltime, [CommitEnd|_]),
@@ -410,26 +710,35 @@ import_sql_file_backend(File, StopOnError, ImportId, Result) :-
         format(user_error,
                'AsA import timing: stream=~w ms, commit=~w ms, statements=~w~n',
                [StreamMs, CommitMs, Statements]),
-        set_import_progress(ImportId, File, Size, BytesRead, Statements, Errors, committed, LastMessage, true),
+        set_import_progress(ImportId, Label, Size, BytesRead, Statements, Errors, committed, LastMessage, true),
         Result = table([status,path,statements,errors,last_status,last_message,size_bytes],
-                       [[ok,File,Statements,Errors,LastStatus,LastMessage,Size]])
+                       [[ok,Label,Statements,Errors,LastStatus,LastMessage,Size]])
     ;   asadb_exec_sql('ROLLBACK;', _),
-        set_import_progress(ImportId, File, Size, BytesRead, Statements, Errors, rolled_back, LastMessage, true),
+        set_import_progress(ImportId, Label, Size, BytesRead, Statements, Errors, rolled_back, LastMessage, true),
         Result = table([status,path,statements,errors,last_status,last_message,size_bytes],
-                       [[rolled_back,File,Statements,Errors,LastStatus,LastMessage,Size]])
+                       [[rolled_back,Label,Statements,Errors,LastStatus,LastMessage,Size]])
     ).
 
-import_sql_stream(In, StopOnError, File, Size, ImportId, Bytes0, Statements0, Errors0, Mode0, RevAcc0, LastStatus0, LastMessage0, Stats) :-
-    import_read_block_size(BlockSize),
-    read_string(In, BlockSize, BlockString),
+import_sql_stream(In, StopOnError, File, Size, ImportId, Bytes0, Statements0, Errors0, Mode0, RevAcc0, Utf8Carry0, LastStatus0, LastMessage0, Stats) :-
+    ensure_import_not_cancelled(ImportId),
+    import_read_block(In, Size, Bytes0, BlockString),
     string_length(BlockString, BlockLength),
     ( BlockLength =:= 0 ->
+        ( Utf8Carry0 == [] -> true ; throw(error(invalid_utf8_tail(Utf8Carry0), _)) ),
         import_flush_pending(RevAcc0, StopOnError, File, Size, ImportId, Bytes0, Statements0, Errors0, LastStatus0, LastMessage0, Stats)
-    ; string_codes(BlockString, BlockCodes),
-      length(BlockCodes, BlockBytes),
+    ; string_codes(BlockString, RawBytes),
+      length(RawBytes, BlockBytes),
+      append(Utf8Carry0, RawBytes, Utf8Bytes),
+      phrase(utf8_codes(BlockCodes), Utf8Bytes, Utf8Carry),
       Bytes1 is Bytes0 + BlockBytes,
       scan_sql_line(BlockCodes, Mode0, RevAcc0, [], Mode, RevAcc, StatementCodes),
       queue_import_statements(ImportId, StatementCodes),
+      % Publish the read position before a large bounded batch is executed.
+      % Generated stress files can contain thousands of rows in one batch;
+      % reporting only after execution made a live panel look frozen.
+      maybe_set_import_progress(ImportId, File, Size, Bytes0, Bytes1,
+                                Statements0, Errors0, none,
+                                'buffered; executing batch'),
       flush_import_statements(ImportId, false, StopOnError, Statements0, Errors0,
                               Statements1, Errors1, LastStatus, LastMessage, Stop),
       merge_import_last(LastStatus0, LastMessage0, LastStatus, LastMessage, LastStatus1, LastMessage1),
@@ -437,11 +746,23 @@ import_sql_stream(In, StopOnError, File, Size, ImportId, Bytes0, Statements0, Er
                                 Statements1, Errors1, LastStatus, LastMessage1),
       ( Stop == true ->
           Stats = import_stats(Statements1, Errors1, LastStatus1, LastMessage1, Bytes1)
-      ; import_sql_stream(In, StopOnError, File, Size, ImportId, Bytes1, Statements1, Errors1, Mode, RevAcc, LastStatus1, LastMessage1, Stats)
+      ; import_sql_stream(In, StopOnError, File, Size, ImportId, Bytes1, Statements1, Errors1, Mode, RevAcc, Utf8Carry, LastStatus1, LastMessage1, Stats)
       )
     ).
 
 import_read_block_size(262144).
+
+import_read_block(_, Size, BytesRead, "") :-
+    Size > 0,
+    BytesRead >= Size, !.
+import_read_block(In, Size, BytesRead, BlockString) :-
+    import_read_block_size(BlockSize),
+    ( Size > 0 ->
+        Remaining is Size - BytesRead,
+        ReadSize is min(BlockSize, Remaining)
+    ; ReadSize = BlockSize
+    ),
+    read_string(In, ReadSize, BlockString).
 
 import_flush_pending(RevAcc, StopOnError, File, Size, ImportId, BytesRead, Statements0, Errors0, LastStatus0, LastMessage0, Stats) :-
     reverse(RevAcc, Codes),
@@ -516,13 +837,59 @@ result_error_count(multi(Results), Count) :- !,
 result_error_count(_, 0).
 
 set_import_progress(Id, Path, Size, Bytes, Statements, Errors, Status, Message, Done) :-
-    retractall(asadb_import_progress(Id, _, _, _, _, _, _, _, _)),
-    assertz(asadb_import_progress(Id, Path, Size, Bytes, Statements, Errors, Status, Message, Done)).
+    with_mutex(asadb_import_progress_state,
+        ( retractall(asadb_import_progress(Id, _, _, _, _, _, _, _, _)),
+          assertz(asadb_import_progress(Id, Path, Size, Bytes, Statements, Errors,
+                                       Status, Message, Done))
+        )),
+    catch(reservoir_update_progress(Id, Bytes, Statements, Errors, Status, Message, Done), _, true).
+
+record_import_failure(ImportId, DefaultPath, DefaultSize, Error) :-
+    import_cancelled_error(ImportId, Error), !,
+    current_import_progress(ImportId, DefaultPath, DefaultSize,
+                            Path, Size, Bytes, Statements, Errors),
+    set_import_progress(ImportId, Path, Size, Bytes, Statements, Errors,
+                        cancelled, 'Cancellation requested; transaction rolled back.', true).
+record_import_failure(ImportId, DefaultPath, DefaultSize, Error) :-
+    term_atom_safe(Error, ErrorMessage),
+    current_import_progress(ImportId, DefaultPath, DefaultSize,
+                            Path, Size, Bytes, Statements, Errors0),
+    Errors is Errors0 + 1,
+    set_import_progress(ImportId, Path, Size, Bytes, Statements, Errors,
+                        error, ErrorMessage, true).
+
+import_cancelled_error(ImportId, error(reservoir_cancelled(ImportId), _)).
+import_cancelled_error(ImportId, reservoir_cancelled(ImportId)).
+
+current_import_progress(Id, DefaultPath, DefaultSize,
+                        Path, Size, Bytes, Statements, Errors) :-
+    with_mutex(asadb_import_progress_state,
+        ( asadb_import_progress(Id, Path0, Size0, Bytes0, Statements0, Errors0,
+                                _, _, _) ->
+            Path = Path0,
+            Size = Size0,
+            Bytes = Bytes0,
+            Statements = Statements0,
+            Errors = Errors0
+        ; Path = DefaultPath,
+          Size = DefaultSize,
+          Bytes = 0,
+          Statements = 0,
+          Errors = 0
+        )).
+
+ensure_import_not_cancelled(ImportId) :-
+    ( catch(reservoir_cancel_requested(ImportId), _, fail) ->
+        throw(error(reservoir_cancelled(ImportId), _))
+    ; true
+    ).
 
 import_progress_result(Id, table([id,path,size_bytes,bytes_read,statements,errors,status,message,done], Rows)) :-
-    findall([Id,Path,Size,Bytes,Statements,Errors,Status,Message,Done],
-            asadb_import_progress(Id, Path, Size, Bytes, Statements, Errors, Status, Message, Done),
-            Found),
+    with_mutex(asadb_import_progress_state,
+        findall([Id,Path,Size,Bytes,Statements,Errors,Status,Message,Done],
+                asadb_import_progress(Id, Path, Size, Bytes, Statements, Errors,
+                                      Status, Message, Done),
+                Found)),
     ( Found = [] -> Rows = [[Id,'',0,0,0,0,waiting,'',false]]
     ; Rows = Found
     ).
@@ -653,6 +1020,88 @@ read_sql_body(Request, SQL) :-
     atom_length(SQL, Len),
     Len =< 250000.
 
+request_stream_payload(Request, In, Size) :-
+    member(input(RawIn), Request),
+    request_content_size(Request, Size),
+    asadb_config_get(reservoir_max_spool_bytes, MaxSpoolBytes),
+    Size > 0,
+    Size =< MaxSpoolBytes,
+    stream_range_open(RawIn, In, [size(Size)]),
+    set_stream(In, encoding(octet)).
+
+request_content_size(Request, Size) :-
+    member(content_length(Size0), Request),
+    content_size_number(Size0, Number), !,
+    Size is max(0, Number).
+request_content_size(_, 0).
+
+content_size_number(Value, Value) :- number(Value), !.
+content_size_number(Value, Number) :- atom(Value), atom_number(Value, Number).
+
+request_import_id(Request, Id) :-
+    request_header(x_asadb_import_id, Request, Raw),
+    atom(Raw),
+    Raw \= '', !,
+    Id = Raw.
+request_import_id(_, Id) :-
+    random_between(100000000, 999999999, N),
+    format(atom(Id), 'stream-~w', [N]).
+
+request_stop_on_error(Request, true) :-
+    request_header(x_asadb_stop_on_error, Request, Value),
+    member(Value, [true, 'true', yes, 'yes', '1', 1]), !.
+request_stop_on_error(_, false).
+
+request_idempotency_key(Request, Key) :-
+    request_header(x_asadb_idempotency_key, Request, Raw),
+    atom(Raw),
+    Raw \= '', !,
+    Key = Raw.
+request_idempotency_key(Request, Key) :-
+    request_header(x_asadb_import_id, Request, Raw),
+    atom(Raw),
+    Raw \= '', !,
+    Key = Raw.
+request_idempotency_key(_, '').
+
+request_job_label(Request, Label) :-
+    request_header(x_asadb_job_label, Request, Raw),
+    atom(Raw),
+    Raw \= '', !,
+    Label = Raw.
+request_job_label(_, 'SQL command').
+
+form_idempotency_key(Data, Key) :-
+    member(idempotency_key=Raw, Data),
+    atom(Raw),
+    Raw \= '', !,
+    Key = Raw.
+form_idempotency_key(Data, Key) :-
+    import_id(Data, Key).
+
+reservoir_http_job_id(Request, JobId) :-
+    http_parameters(Request, [id(JobId, [atom])]).
+
+reservoir_http_result_parameters(Request, JobId, Offset, Limit) :-
+    asadb_config_get(reservoir_result_page_rows, DefaultLimit),
+    http_parameters(Request, [
+        id(JobId, [atom]),
+        offset(Offset0, [integer, default(0)]),
+        limit(Limit0, [integer, default(DefaultLimit)])
+    ]),
+    Offset is max(0, Offset0),
+    Limit is max(1, min(DefaultLimit, Limit0)).
+
+reservoir_api_error(error(resource_error(reservoir_job_slots), _)) :- !,
+    json_error('429 Too Many Requests', 'Reservoir queue is full; retry after an active job finishes.').
+reservoir_api_error(error(resource_error(reservoir_spool_capacity), _)) :- !,
+    json_error('507 Insufficient Storage', 'Reservoir spool capacity would be exceeded.').
+reservoir_api_error(error(existence_error(reservoir_job, _), _)) :- !,
+    json_error('404 Not Found', 'Reservoir job was not found or has expired.').
+reservoir_api_error(Error) :-
+    term_atom_safe(Error, Message),
+    json_error('400 Bad Request', Message).
+
 authorized_api(Request) :-
     request_token(Request, Token),
     asadb_panel_token(Token), !.
@@ -690,8 +1139,17 @@ json_response(JSON) :-
     format('Content-type: application/json~n~n'),
     format('~w', [JSON]).
 
+json_dict_response(Dict) :-
+    security_headers,
+    format('Content-type: application/json~n~n'),
+    json_write_dict(current_output, Dict, [width(0)]).
+
+json_dict_response(Status, Dict) :-
+    format('Status: ~w~n', [Status]),
+    json_dict_response(Dict).
+
 json_error(Status, Message) :-
     format('Status: ~w~n', [Status]),
     security_headers,
     format('Content-type: application/json~n~n'),
-    format('{"status":"error","message":"~w"}', [Message]).
+    json_write_dict(current_output, _{status:error,message:Message}, [width(0)]).

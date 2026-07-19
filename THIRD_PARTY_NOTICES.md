@@ -17,6 +17,29 @@ runtime and libraries included in that build and reproduce all required notices.
 Official license information:
 https://www.swi-prolog.org/license.html
 
+## Babel Helpers and Regenerator Runtime
+
+`web/assets/app.legacy.js` is generated with `@babel/core` and
+`@babel/preset-env` version 7.26.0. Its checked-in output includes Babel helper
+and regenerator-runtime code, which is available under the MIT License. The
+runtime retains its license marker in the generated file. Babel is a build-time
+dependency only; no Node.js or Babel installation is required to run AsaDB.
+
+Official license information:
+https://github.com/babel/babel/blob/main/LICENSE
+
+## Noto Sans JP
+
+AsAPanel includes the regular Japanese subset of Noto Sans JP version 5.3.0 in
+WOFF2 and WOFF form at `web/assets/fonts/`. It is loaded only when the JP
+interface is selected, so minimal Linux systems can render Japanese without a
+system font package. Noto Sans JP is copyright Google Inc. and distributed
+under the SIL Open Font License 1.1. The complete license is included at
+`licenses/Noto-Sans-JP-OFL-1.1.txt`.
+
+Source package:
+https://www.npmjs.com/package/@fontsource/noto-sans-jp
+
 ## AsaDB Media
 
 The following project-owned media are distributed with AsaDB under

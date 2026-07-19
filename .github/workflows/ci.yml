@@ -1,0 +1,25 @@
+name: AsaDB CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SWI-Prolog and portable shell
+        run: sudo apt-get update && sudo apt-get install -y swi-prolog-nox busybox
+      - name: Check POSIX and BusyBox shell syntax
+        run: |
+          dash -n bin/asadb scripts/*.sh tests/*.sh
+          busybox sh -n bin/asadb scripts/*.sh tests/*.sh
+      - name: Check Linux runtime
+        run: ./scripts/check_linux_runtime.sh
+      - name: Run engine, UI, Reservoir, and 15k JOIN regressions
+        run: make test-all

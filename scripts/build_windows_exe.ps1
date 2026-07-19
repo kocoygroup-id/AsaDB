@@ -15,6 +15,8 @@ $Icon = Join-Path $Dist "$Name.ico"
 $Emulator = Join-Path $Build "$Name-emulator.exe"
 $Logo = Join-Path $Root "web\assets\asadb-logo.png"
 
+& (Join-Path $Root "scripts\check_realtime_release.ps1")
+
 function To-PrologPath([string]$Path) {
   return ($Path -replace "\\", "/") -replace "'", "''"
 }
@@ -193,16 +195,21 @@ try {
 }
 
 Copy-Item -Path (Join-Path $Root "web") -Destination (Join-Path $Dist "web") -Recurse -Force
+Copy-Item -Path (Join-Path $Root "docs") -Destination (Join-Path $Dist "docs") -Recurse -Force
 Copy-Item -Path (Join-Path $Root "asadb.conf") -Destination $Dist -Force
 Copy-Item -Path (Join-Path $Root "LICENSE") -Destination $Dist -Force
 Copy-Item -Path (Join-Path $Root "README.md") -Destination $Dist -Force
+Copy-Item -Path (Join-Path $Root "INSTALL.md") -Destination $Dist -Force
+Copy-Item -Path (Join-Path $Root "RELEASE_NOTES.md") -Destination $Dist -Force
+Copy-Item -Path (Join-Path $Root "BENCHMARK_RESULTS.md") -Destination $Dist -Force
+Copy-Item -Path (Join-Path $Root "VERSION") -Destination $Dist -Force
 Copy-Item -Path (Join-Path $Root "SOURCE_CODE.md") -Destination $Dist -Force
 Copy-Item -Path (Join-Path $Root "THIRD_PARTY_NOTICES.md") -Destination $Dist -Force
 Copy-Item -Path (Join-Path $Root "TRADEMARKS.md") -Destination $Dist -Force
 
-$StressDir = Join-Path $Root "Stress Test"
+$StressDir = Join-Path $Root "stress tests"
 if (Test-Path $StressDir) {
-  Copy-Item -Path $StressDir -Destination (Join-Path $Dist "Stress Test") -Recurse -Force
+  Copy-Item -Path $StressDir -Destination (Join-Path $Dist "stress tests") -Recurse -Force
 }
 
 if (-not $SkipRuntime) {

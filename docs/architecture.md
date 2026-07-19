@@ -8,6 +8,7 @@ from disk-backed user rows.
 
 ```text
 SQL text / uploaded SQL stream
+  -> Reservoir admission, durable spool, and single-writer queue
   -> lexer and parser
   -> Prolog AST
   -> planner and executor
@@ -17,6 +18,18 @@ SQL text / uploaded SQL stream
 ```
 
 ## Modules
+
+### Reservoir bridge
+
+`src/bridge/reservoir.pl` owns the bounded JavaScript-to-Prolog handoff for
+write commands and large payloads. It receives input in 256 KB chunks, enforces
+job and byte capacity while receiving, writes a durable spool, assigns an
+idempotency fingerprint, and lets one worker feed the existing SQL executor.
+
+The bridge is pressure control, not a second storage engine. Once admitted,
+SQL still passes through the normal parser, transaction, record manager,
+B+Tree, buffer pool, pager, and recovery path. See
+[`reservoir.md`](reservoir.md) for lifecycle and failure semantics.
 
 ### SQL parser and executor
 
@@ -80,6 +93,10 @@ backward from the end of the page.
 4,096 bytes for compatibility. Buffer pages, import batch size, flush interval,
 result cap, and cache policy are configurable.
 
+Reservoir job count, spool capacity, retention, progress persistence quantum,
+and result page size are configurable independently of the database buffer
+pool.
+
 ## Storage Files
 
 ```text
@@ -87,6 +104,7 @@ example.asa                 versioned catalog and metadata
 example.asa.store/*.heap    table heap pages
 example.asa.store/*.btree   persistent index pages
 example.asa.journal         logical compatibility journal
+example.asa.reservoir/      transient durable bridge jobs, spool, and results
 *.undo / *.mutbak / *.txbak temporary recovery artifacts
 ```
 

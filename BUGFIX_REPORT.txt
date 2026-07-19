@@ -1,0 +1,196 @@
+AsaDB 1.3.0 - Bugfix and Upgrade Report
+Released: 2026-07-19
+License: GPL-3.0-only
+
+FIXED
+=====
+
+1. Qualified JOIN aliases returned zero rows
+   Symptom:
+     SELECT m.No, z.Zone_Name
+     FROM field m JOIN zone z ON m.No = z.No;
+   Root cause:
+     Generic row lookup returned the value null when q(alias,column) was not
+     found. The evaluator treated that as a successful lookup, so the dotted
+     alias fallback was never reached.
+   Fix:
+     Added lookup_qualified_value/4, which distinguishes a missing qualified
+     key from a real SQL NULL and matches qualifiers/columns case-insensitively.
+
+2. 15,000 by 15,000 equality JOIN was extremely slow
+   Root cause:
+     The executor used a nested loop for every JOIN. Two 15,000-row inputs
+     produced up to 225,000,000 candidate row comparisons before WHERE/LIMIT.
+   Fix:
+     Simple qualified equality predicates now build an AVL lookup index for
+     one side and probe it from the other side. INNER, LEFT, and RIGHT JOIN use
+     the optimized path. Complex ON expressions retain the compatibility
+     nested-loop path.
+
+3. JOIN strategy was invisible to diagnostics
+   Fix:
+     Planner metadata now includes indexed_joins and nested_loop_joins.
+
+4. Windows/Linux stress-test path mismatch
+   Root cause:
+     Code referenced "Stress Test" while the source folder was "stress tests".
+     Windows tolerated the case mismatch; case-sensitive Linux did not.
+   Fix:
+     Normalized benchmark, browser import, Windows packaging, docs, and source
+     packaging references to "stress tests". The historical test/... import
+     alias now resolves to that canonical directory instead of a missing Test
+     directory.
+
+5. Linux launchers required Bash
+   Root cause:
+     Shell scripts used /usr/bin/env bash, pipefail, and [[ ... ]].
+   Fix:
+     CLI/panel/release launchers now use POSIX /bin/sh and portable syntax.
+     Missing SWI-Prolog now produces a direct diagnostic instead of a cryptic
+     command-not-found failure.
+
+6. Source archive could include runtime/build residue
+   Fix:
+     The source packager uses an explicit manifest and removes databases,
+     page stores, Reservoir spools, generated SQL, benchmark logs, executables,
+     and build output. Git ignore/attributes and Linux CI are included.
+
+7. AsAPanel language was fixed to one mixed-language interface
+   Fix:
+     Added persistent ID/JP/EN switching for static pages, dynamic metadata,
+     counters, confirmations, SQL results, diagnostics, logs, and all relevant
+     Asa personality messages including "Asa Tidak Suka!".
+
+8. Large SQL paste could jump back to the first line
+   Root cause:
+     Highlight and virtual gutter rerenders could let browser scroll anchoring
+     replace the textarea viewport after a large paste.
+   Fix:
+     Paste input now preserves and restores the caret viewport across animation
+     frames. CSS disables scroll anchoring, contains overscroll, and reserves a
+     stable scrollbar gutter.
+
+9. Failed DROP TABLE could disappear only from the browser sidebar
+   Root cause:
+     The panel deleted its local relation record even when the backend returned
+     an SQL error or the backend request failed.
+   Fix:
+     The panel keeps local state on SQL errors, verifies backend deletion with
+     SHOW TABLES, and only then updates the sidebar. DROP DATABASE uses the same
+     verification rule. Core coverage also checks restart persistence and
+     physical heap/B+Tree file removal.
+
+10. AsAPanel warmup overlay stayed visible too long
+    Root cause:
+      Every page refresh enforced a fixed 3.5-second delay even though the
+      Prolog process had already warmed the engine before opening its HTTP
+      port. The browser also issued a redundant second warmup request.
+   Fix:
+      Startup now uses only a 650 ms visual cue and does not repeat backend
+      warmup. The overlay is explicitly non-interactive, so it cannot capture
+      clicks or keyboard focus.
+
+11. AsAPanel could look loaded while every button had no action on older Firefox
+    Root cause:
+      The panel was served directly as modern JavaScript. Firefox builds that
+      could not parse optional chaining, nullish coalescing, or logical
+      assignment stopped before attaching any event listeners. The visual
+      fallback then hid the loader, which made the failure look like dead UI.
+    Fix:
+      Added an ES5-safe loader plus a checked-in Firefox-38-compatible build
+      of the UI. The loader installs small API polyfills before loading the
+      bundle and shows a visible diagnostic if boot still fails.
+
+12. Firefox 4MLinux could still stop the panel at first render
+    Root cause:
+      Older Firefox releases do not implement `NodeList.forEach`; some also
+      lack `Element.append`. AsAPanel calls both while translating and drawing
+      its first screen, so the UI stopped before event handlers were attached.
+    Fix:
+      The loader now polyfills both DOM APIs before loading the compiled panel
+      bundle. A regression removes both APIs, then verifies language and
+      database buttons still work.
+
+13. Legacy JavaScript bundle returned HTTP 500 under an ASCII/C locale
+    Root cause:
+      The bundle includes Japanese translations. The web server read it as
+      text and reformatted it through its output encoding, which can raise an
+      encoding exception before Firefox receives any JavaScript.
+    Fix:
+      Text assets are opened explicitly as UTF-8 and streamed once to the HTTP
+      text stream. This preserves all translations and keeps
+      /assets/app.legacy.js available on 4MLinux without double-encoding.
+
+14. Browser requested /favicon.ico and received a harmless but noisy 404
+    Fix:
+      AsAPanel declares its PNG logo as a favicon and also maps the legacy
+      /favicon.ico path to that logo for older Firefox releases.
+
+15. Japanese UI rendered as square fallback glyphs on minimal 4MLinux
+    Root cause:
+      The browser received valid Japanese text but the base OS had no Japanese
+      font installed, so Firefox had no glyphs to draw.
+    Fix:
+      AsaDB now bundles Noto Sans JP (SIL OFL-1.1) in WOFF2 plus old-Firefox
+      WOFF format and selects it automatically whenever JP is active.
+
+VALIDATION
+==========
+
+- Core module load: PASS on SWI-Prolog WASM 8.0.4.
+- Core assertion groups: 15/15 PASS, including persistent DROP TABLE cleanup.
+- DROP TABLE catalog removal, restart persistence, idempotent IF EXISTS, heap
+  removal, and B+Tree file removal: PASS.
+- UI static audit: 165 translation/runtime keys across ID/JP/EN, duplicate-ID
+  check, paste safeguards, and verified-drop ordering: PASS.
+- Interactive DOM audit: language switching, localized Asa error output, 6,000
+  line paste viewport retention, offline DROP, rejected backend DROP, and
+  verified backend DROP: PASS.
+- Startup overlay timing: fast and deliberately stalled backend probes keep
+  only the 650 ms visual cue: PASS.
+- Legacy-loader interaction: the compiled Firefox-compatible bundle attached
+  language and database button handlers while the backend request was stalled:
+  PASS.
+- Old-DOM interaction: absent `NodeList.forEach` and `Element.append` are
+  polyfilled before boot; database-button interaction: PASS.
+- Existing JOIN alias/INNER/LEFT/RIGHT assertions: PASS.
+- Physical SQL fixture: field=15,000 rows, zone=15,000 rows, alias m/z: PASS.
+- Fixture result count: 15,000; indexed_joins=2; nested_loop_joins=0.
+- Measured fixture JOIN query on the available WASM runtime: about 1.6-2.6
+  seconds across validation runs.
+- In-memory 15,000 by 15,000 engine probe on the same runtime: about 0.16 seconds.
+- POSIX shell syntax check with dash: PASS.
+- Clean Linux x86_64 archive extraction, SHA-256 verification, gzip integrity,
+  single-root layout, executable modes, GPL/source manifest, and residue scan:
+  PASS.
+
+GitHub Actions reruns the native Linux engine, Reservoir, JOIN regression, dash,
+and BusyBox shell checks after the source is uploaded to GitHub.
+
+KNOWN LIMITS / FOLLOW-UP
+========================
+
+- Complex ON predicates that are not a simple qualified equality still use a
+  nested loop and may be expensive on large inputs.
+- WHERE and LIMIT are evaluated after source JOIN construction; the indexed
+  equality path fixes the reported 15k case, but large many-to-many output can
+  still consume substantial memory before LIMIT.
+- 4MLinux has no general package manager. AsaDB launch/path compatibility is
+  prepared for its minimal shell, but a compatible SWI-Prolog runtime with the
+  HTTP, crypto, UUID, and threading libraries must be supplied separately.
+- Native execution on an actual 4MLinux installation must be confirmed on the
+  target machine using scripts/check_linux_runtime.sh and make test-all.
+- AsaDB-1.3.0-linux-x86_64.tar.Z is a complete source package and does not
+  bundle SWI-Prolog. It is a gzip-compressed tar stream using the requested
+  .tar.Z name. Verify the adjacent .sha256 file, then extract it with:
+  tar -xzf AsaDB-1.3.0-linux-x86_64.tar.Z
+
+PRIMARY REGRESSION QUERY
+========================
+
+SELECT m.No, m.Depth, m.Water_Cut, z.Zone_Name
+FROM field m
+INNER JOIN zone z ON m.No = z.No
+WHERE m.No <= 100
+ORDER BY m.No
+LIMIT 100;

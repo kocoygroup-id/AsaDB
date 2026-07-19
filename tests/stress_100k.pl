@@ -140,10 +140,16 @@ cleanup_stress(SqlFile, DbFile) :-
     atom_concat(DbFile, '.journal', Journal),
     atom_concat(DbFile, '.current_db', CurrentDb),
     atom_concat(DbFile, '.wal', Wal),
+    atom_concat(DbFile, '.meta', Metadata),
+    atom_concat(Metadata, '.tmp', MetadataTemp),
+    atom_concat(Metadata, '.bak', MetadataBackup),
     atom_concat(DbFile, '.store', StoreDir),
     delete_if_exists(Journal),
     delete_if_exists(CurrentDb),
     delete_if_exists(Wal),
+    delete_if_exists(Metadata),
+    delete_if_exists(MetadataTemp),
+    delete_if_exists(MetadataBackup),
     ( exists_directory(StoreDir) -> delete_directory_and_contents(StoreDir) ; true ).
 
 delete_if_exists(File) :-

@@ -11,6 +11,7 @@
     asadb_record_create/1,
     asadb_record_drop/1,
     asadb_record_truncate/1,
+    asadb_record_insert_batch/2,
     asadb_record_insert_batch/3,
     asadb_record_scan/3,
     asadb_record_read/3,
@@ -54,6 +55,8 @@ asadb_record_tx_begin :-
 
 asadb_record_tx_commit :-
     record_tx_active, !,
+    % The transaction snapshot remains available until every dirty page is durable.
+    asadb_pager_flush,
     forall(record_tx_snapshot(_, _, Backup), delete_if_exists(Backup)),
     retractall(record_tx_snapshot(_, _, _)),
     retractall(record_tx_active),
@@ -123,12 +126,45 @@ asadb_record_truncate(StoreId) :-
 
 asadb_record_insert_batch(_, [], []) :- !.
 asadb_record_insert_batch(StoreId, Rows, Rids) :-
+    record_tx_active, !,
+    store_file(StoreId, File),
+    ensure_tx_snapshot(StoreId),
+    ensure_record_file(File),
+    append_rows(File, Rows, Rids),
+    retractall(record_page_checked(File, _)).
+asadb_record_insert_batch(StoreId, Rows, Rids) :-
     store_file(StoreId, File),
     ensure_tx_snapshot(StoreId),
     ensure_record_file(File),
     begin_append_undo(File),
     catch(
         ( append_rows(File, Rows, Rids),
+          asadb_pager_flush,
+          retractall(record_page_checked(File, _)),
+          finish_append_undo(File)
+        ),
+        Error,
+        ( asadb_pager_flush,
+          recover_append_undo(File),
+          throw(Error)
+        )
+    ).
+
+asadb_record_insert_batch(_, []) :- !.
+asadb_record_insert_batch(StoreId, Rows) :-
+    record_tx_active, !,
+    store_file(StoreId, File),
+    ensure_tx_snapshot(StoreId),
+    ensure_record_file(File),
+    append_rows_without_rids_for_batch(File, Rows),
+    retractall(record_page_checked(File, _)).
+asadb_record_insert_batch(StoreId, Rows) :-
+    store_file(StoreId, File),
+    ensure_tx_snapshot(StoreId),
+    ensure_record_file(File),
+    begin_append_undo(File),
+    catch(
+        ( append_rows_without_rids_for_batch(File, Rows),
           asadb_pager_flush,
           retractall(record_page_checked(File, _)),
           finish_append_undo(File)
@@ -156,6 +192,121 @@ append_rows(File, Rows, Rids) :-
                       ExistingRecords, Rids, FinalNo, FinalPage),
     asadb_pager_write_page(File, FinalNo, FinalPage).
 
+record_append_chunk_size(8192).
+
+% The buffered path is faster for ordinary DML and indexed JOIN fixtures.
+% Switch to the streaming writer only for the very large generated batches
+% that otherwise approach the Prolog stack limit.
+record_direct_append_threshold(16000).
+
+append_rows_without_rids_for_batch(File, Rows) :-
+    length(Rows, Count),
+    record_direct_append_threshold(Threshold),
+    ( Count >= Threshold ->
+        append_rows_without_rids_chunked(File, Rows)
+    ; append_rows_without_rids_buffered(File, Rows)
+    ).
+
+append_rows_without_rids_buffered(File, Rows) :-
+    rows_bytes(Rows, EncodedRows),
+    asadb_pager_page_count(File, PageCount),
+    ( PageCount =:= 0 ->
+        PageNo = 0,
+        asadb_page_new(PageNo, heap, none, none, Page0)
+    ; PageNo is PageCount - 1,
+      asadb_pager_read_page(File, PageNo, Page0)
+    ),
+    asadb_page_header(Page0, Meta0),
+    asadb_page_records(Page0, ExistingPairs),
+    record_pair_values(ExistingPairs, ExistingRecords),
+    append_rows_pages_without_rids(EncodedRows, File, PageNo,
+                                   Meta0.previous_page, ExistingRecords,
+                                   FinalNo, FinalPage),
+    asadb_pager_write_page(File, FinalNo, FinalPage).
+
+append_rows_without_rids_chunked(File, Rows) :-
+    record_append_chunk_size(ChunkSize),
+    append_rows_without_rids_chunked(File, Rows, ChunkSize).
+
+append_rows_without_rids_chunked(_, [], _) :- !.
+append_rows_without_rids_chunked(File, Rows0, ChunkSize) :-
+    take_record_chunk(Rows0, ChunkSize, Rows, Rest),
+    append_rows_without_rids_file(File, Rows),
+    append_rows_without_rids_chunked(File, Rest, ChunkSize).
+
+take_record_chunk([], _, [], []).
+take_record_chunk(Rows, 0, [], Rows) :- !.
+take_record_chunk([Row|Rows0], Count, [Row|Chunk], Rest) :-
+    Count > 0,
+    Next is Count - 1,
+    take_record_chunk(Rows0, Next, Chunk, Rest).
+
+append_rows_without_rids_file(File, Rows) :-
+    % Import batches are append-only.  Build the bounded page run first and
+    % write it through one open stream; putting every completed page through
+    % the small buffer pool made generated stress imports spend most of their
+    % time opening, evicting, and flushing the same heap file.
+    asadb_pager_invalidate_file(File),
+    rows_bytes(Rows, EncodedRows),
+    asadb_pager_page_count(File, PageCount),
+    ( PageCount =:= 0 ->
+        PageNo = 0,
+        asadb_page_new(PageNo, heap, none, none, Page0)
+    ; PageNo is PageCount - 1,
+      asadb_pager_read_page(File, PageNo, Page0),
+      asadb_pager_invalidate_file(File)
+    ),
+    asadb_page_header(Page0, Meta0),
+    asadb_page_records(Page0, ExistingPairs),
+    record_pair_values(ExistingPairs, ExistingRecords),
+    append_rows_pages_collected(EncodedRows, PageNo, Meta0.previous_page,
+                                ExistingRecords, Pages),
+    write_record_pages(File, Pages).
+
+append_rows_pages_collected([], PageNo, Prev, Records, [PageNo-Page]) :- !,
+    asadb_page_build(PageNo, heap, Prev, none, Records, Page).
+append_rows_pages_collected(EncodedRows, PageNo, Prev, ExistingRecords,
+                            [PageNo-Page|Pages]) :-
+    fill_page_records(EncodedRows, ExistingRecords, PageRecords, RestRows, _),
+    ( RestRows == [] ->
+        asadb_page_build(PageNo, heap, Prev, none, PageRecords, Page),
+        Pages = []
+    ; NextNo is PageNo + 1,
+      asadb_page_build(PageNo, heap, Prev, NextNo, PageRecords, Page),
+      append_rows_pages_collected(RestRows, NextNo, PageNo, [], Pages)
+    ).
+
+write_record_pages(_, []) :- !.
+write_record_pages(File, Pages) :-
+    setup_call_cleanup(
+        open(File, update, Stream, [type(binary)]),
+        write_record_pages_stream(Stream, Pages),
+        close(Stream)
+    ).
+
+write_record_pages_stream(_, []) :- !.
+write_record_pages_stream(Stream, [PageNo-Page|Pages]) :-
+    asadb_pager_page_size(PageSize),
+    Offset is PageNo * PageSize,
+    seek(Stream, Offset, bof, _),
+    format(Stream, '~s', [Page]),
+    write_record_pages_stream(Stream, Pages).
+
+append_rows_pages_without_rids([], _, PageNo, Prev, Records, PageNo, Page) :-
+    asadb_page_build(PageNo, heap, Prev, none, Records, Page).
+append_rows_pages_without_rids(EncodedRows, File, PageNo, Prev, ExistingRecords,
+                               FinalNo, FinalPage) :-
+    fill_page_records(EncodedRows, ExistingRecords, PageRecords, RestRows, _),
+    ( RestRows == [] ->
+        asadb_page_build(PageNo, heap, Prev, none, PageRecords, FinalPage),
+        FinalNo = PageNo
+    ; NextNo is PageNo + 1,
+      asadb_page_build(PageNo, heap, Prev, NextNo, PageRecords, FullPage),
+      asadb_pager_write_page(File, PageNo, FullPage),
+      append_rows_pages_without_rids(RestRows, File, NextNo, PageNo, [],
+                                     FinalNo, FinalPage)
+    ).
+
 append_rows_pages([], _, PageNo, Prev, Records, [], PageNo, Page) :-
     asadb_page_build(PageNo, heap, Prev, none, Records, Page).
 append_rows_pages(EncodedRows, File, PageNo, Prev, ExistingRecords,
@@ -174,20 +325,22 @@ append_rows_pages(EncodedRows, File, PageNo, Prev, ExistingRecords,
       append(PageRids, RestRids, Rids)
     ).
 
-fill_page_records([], Existing, Existing, [], 0) :- !.
-fill_page_records([Bytes|Rows], Existing0, Existing, Rest, Added) :-
-    append(Existing0, [Bytes], Candidate),
-    records_fit_page(Candidate), !,
-    fill_page_records(Rows, Candidate, Existing, Rest, Added0),
-    Added is Added0 + 1.
-fill_page_records(Rows, Existing, Existing, Rows, 0).
-
-records_fit_page(Records) :-
-    length(Records, Count),
-    records_total_bytes(Records, Payload),
-    Used is 32 + Count * 4 + Payload,
+fill_page_records(Rows, Existing, Records, Rest, AddedCount) :-
+    length(Existing, ExistingCount),
+    records_total_bytes(Existing, ExistingPayload),
+    Used0 is 32 + ExistingCount * 4 + ExistingPayload,
     asadb_pager_page_size(PageSize),
-    Used =< PageSize.
+    take_fitting_records(Rows, Used0, PageSize, Added, Rest, AddedCount),
+    append(Existing, Added, Records).
+
+take_fitting_records([], _, _, [], [], 0) :- !.
+take_fitting_records([Bytes|Rows], Used0, PageSize, [Bytes|Added], Rest, Count) :-
+    length(Bytes, Length),
+    Used is Used0 + 4 + Length,
+    Used =< PageSize, !,
+    take_fitting_records(Rows, Used, PageSize, Added, Rest, Count0),
+    Count is Count0 + 1.
+take_fitting_records(Rows, _, _, [], Rows, 0).
 
 records_total_bytes([], 0).
 records_total_bytes([Bytes|Records], Total) :-
@@ -305,8 +458,7 @@ delete_page_slots([Slot|Slots], Page0, Page) :-
     delete_page_slots(Slots, Page1, Page).
 
 with_mutation_backup(_, Goal) :- record_tx_active, !,
-    call(Goal),
-    asadb_pager_flush.
+    call(Goal).
 with_mutation_backup(File, Goal) :-
     mutation_backup_file(File, Backup),
     asadb_pager_invalidate_file(File),

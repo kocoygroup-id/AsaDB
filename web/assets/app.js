@@ -10,7 +10,676 @@ const DEFAULT_TABLES = [];
 const BACKEND_FULL_SYNC_ROW_LIMIT = 5000;
 const BROWSER_SQL_IMPORT_LIMIT_BYTES = 512 * 1024;
 const BACKEND_UPLOAD_IMPORT_MIN_BYTES = 128 * 1024;
-const STARTUP_WARMUP_MS = 3500;
+const STARTUP_WARMUP_MS = 650;
+const LARGE_SQL_EDITOR_CHAR_LIMIT = 180000;
+const LARGE_SQL_EDITOR_LINE_LIMIT = 4000;
+const SQL_EDITOR_LINE_HEIGHT = 20.15;
+const RESERVOIR_POLL_INTERVAL_MS = 120;
+const METADATA_ACTIVE_POLL_INTERVAL_MS = 500;
+const METADATA_OPEN_POLL_INTERVAL_MS = 1500;
+const METADATA_IDLE_POLL_INTERVAL_MS = 5000;
+const RESULT_PAGE_SIZE = 500;
+const TABLE_LIST_PAGE_SIZE = 120;
+const ACTIVE_RESERVOIR_STORAGE_KEY = 'asadb-active-reservoir-job-v1';
+const LANGUAGE_STORAGE_KEY = 'asadb-language';
+
+const LANGUAGE_LOCALES = { id: 'id-ID', ja: 'ja-JP', en: 'en-US' };
+const LANGUAGE_HTML = { id: 'id', ja: 'ja', en: 'en' };
+
+const I18N = {
+  id: {
+    'document.title': 'AsAPanel - Panel Lokal AsaDB',
+    'startup.title': 'Asa lagi pemanasan',
+    'startup.copy': 'Nyambungin panel ke engine dan katalog lokal.',
+    'brand.admin': 'Admin AsaDB',
+    'brand.support': 'Traktir Mi',
+    'aria.databaseSelector': 'Pemilih database',
+    'aria.databaseTools': 'Alat database',
+    'aria.databaseQuickActions': 'Aksi cepat database',
+    'aria.tableActions': 'Aksi tabel',
+    'language.aria': 'Bahasa antarmuka',
+    'database.namePlaceholder': 'nama_database',
+    'database.create': 'Buat DB',
+    'database.select': 'Pilih DB',
+    'database.selectAria': 'Pilih database',
+    'database.save': 'Simpan database',
+    'database.drop': 'Hapus database',
+    'nav.sql': 'Perintah SQL',
+    'nav.import': 'Impor',
+    'nav.export': 'Ekspor',
+    'table.create': 'Buat tabel',
+    'table.filterAria': 'Filter tabel',
+    'table.filterPlaceholder': 'Cari tabel...',
+    'table.listAria': 'Tabel',
+    'metadata.title': 'Metadata database',
+    'metadata.engine': 'Engine',
+    'metadata.identity': 'Identitas',
+    'metadata.objects': 'Objek',
+    'metadata.rows': 'Baris',
+    'metadata.storage': 'Penyimpanan',
+    'metadata.cache': 'Cache halaman',
+    'metadata.checkpoint': 'Checkpoint',
+    'state.waiting': 'Menunggu',
+    'top.local': 'AsaDB Lokal',
+    'engine.check': 'Cek Engine',
+    'sql.command': 'Perintah SQL',
+    'sql.run': 'Jalankan SQL',
+    'sql.running': 'Menjalankan...',
+    'sql.sample': 'Contoh',
+    'sql.placeholder': 'Tulis SQL di sini...',
+    'sql.result': 'Hasil',
+    'sql.noQuery': 'Belum ada query.',
+    'common.clear': 'Bersihkan',
+    'common.file': 'File',
+    'common.format': 'Format',
+    'common.summary': 'Ringkasan',
+    'common.preview': 'Pratinjau',
+    'common.database': 'Database',
+    'common.table': 'Tabel',
+    'common.tables': 'Tabel',
+    'common.data': 'Data',
+    'common.none': 'Tidak ada',
+    'common.save': 'Simpan',
+    'import.fileUpload': 'Unggah file',
+    'import.execute': 'Eksekusi',
+    'import.fromServer': 'Dari server',
+    'import.serverFile': 'File server',
+    'import.runFile': 'Jalankan file',
+    'import.stopOnError': 'Berhenti saat error',
+    'import.onlyErrors': 'Tampilkan hanya error',
+    'import.progressTitle': 'Progres Reservoir',
+    'import.noActiveJob': 'Tidak ada impor aktif.',
+    'import.cancel': 'Batalkan',
+    'import.cancelling': 'Membatalkan...',
+    'import.cancelRequested': 'Permintaan pembatalan dikirim. Reservoir akan rollback di batas batch berikutnya.',
+    'import.cancelled': 'Impor dibatalkan dan perubahan yang belum commit di-rollback.',
+    'import.resumed': 'Pemantauan {name} dilanjutkan setelah panel dimuat ulang.',
+    'import.resumedComplete': '{name} selesai setelah panel dimuat ulang ({count} statement).',
+    'import.jobStatus': '{status} · {count} statement · {message}',
+    'import.autoDetect': 'Deteksi otomatis',
+    'import.target': 'Target',
+    'import.csvTable': 'Tabel CSV',
+    'export.output': 'Keluaran',
+    'export.download': 'Unduh',
+    'export.openPreview': 'Buka pratinjau',
+    'export.noTables': 'Belum ada tabel dipilih.',
+    'table.selectData': 'Pilih data',
+    'table.showStructure': 'Lihat struktur',
+    'table.alter': 'Ubah tabel',
+    'table.newItem': 'Item baru',
+    'table.drop': 'Hapus tabel',
+    'table.column': 'Kolom',
+    'table.columnName': 'Nama kolom',
+    'table.type': 'Tipe',
+    'table.comment': 'Komentar',
+    'table.indexes': 'Indeks',
+    'table.name': 'Nama tabel:',
+    'table.collation': '(collation)',
+    'table.length': 'Panjang',
+    'table.options': 'Opsi',
+    'table.autoIncShort': 'Auto inc.',
+    'table.autoIncHelp': 'Bantuan auto increment',
+    'table.autoIncDescription': 'Auto increment untuk kolom angka. Biasanya dipakai di primary key seperti id INT; nilainya naik otomatis saat baris baru dibuat.',
+    'table.autoIncrement': 'Auto Increment',
+    'table.defaultValues': 'Nilai default',
+    'table.partitionBy': 'Partisi berdasarkan',
+    'table.addColumn': 'Tambah kolom',
+    'table.moveUp': 'Naikkan kolom',
+    'table.moveDown': 'Turunkan kolom',
+    'table.deleteColumn': 'Hapus kolom',
+    'table.virtualResult': 'hasil virtual',
+    'table.viewDescription': 'view berbasis SELECT',
+    'log.title': 'Log Eksekusi',
+    'log.resetSandbox': 'Reset sandbox',
+    'log.clear': 'Bersihkan log',
+    'page.sql': 'Ruang Kerja SQL',
+    'page.import': 'Impor',
+    'page.export': 'Ekspor',
+    'page.table': 'Tabel',
+    'page.tableDetail': 'Detail Tabel',
+    'page.create': 'Buat tabel',
+    'page.transfer': 'Transfer Data',
+    'mode.detecting': 'Mode: mendeteksi...',
+    'mode.backend': 'Mode: backend Prolog online',
+    'mode.sandbox': 'Mode: sandbox browser',
+    'state.unavailable': 'Tidak tersedia',
+    'state.offline': 'Offline',
+    'state.pending': 'Tertunda',
+    'state.durable': 'Durable',
+    'state.never': 'belum pernah',
+    'state.receiving': 'menerima unggahan',
+    'state.queued': 'mengantre',
+    'state.processing': 'memproses',
+    'state.cancelling': 'membatalkan',
+    'state.completed': 'selesai',
+    'state.delivered': 'hasil tersimpan',
+    'state.failed': 'gagal',
+    'state.cancelled': 'dibatalkan',
+    'state.interrupted': 'terinterupsi',
+    'state.reconnecting': 'menyambungkan ulang',
+    'database.noneSelected': 'Belum ada database dipilih',
+    'database.selectFirst': 'Pilih atau buat database dulu sebelum melanjutkan.',
+    'table.noneSelected': 'Belum ada tabel dipilih',
+    'table.count': '{count} tabel',
+    'table.countViews': '{tables} tabel, {views} view',
+    'table.countFiltered': '{visible} dari {total} objek',
+    'table.dropNamed': 'Hapus {kind} {name}',
+    'table.view': 'view',
+    'table.loadingView': 'Memuat view...',
+    'table.viewNeedsBackend': 'Data view memerlukan backend Prolog.',
+    'table.loadingPreview': 'Memuat pratinjau backend...',
+    'table.showingRows': 'Menampilkan {shown} dari {total} baris backend.',
+    'result.line': 'Baris',
+    'result.rowsShown': '{count} baris ditampilkan. Masih ada baris lainnya.',
+    'result.executed': 'Menjalankan {count} statement.',
+    'result.completed': 'Eksekusi SQL selesai.',
+    'progress.importing': 'Mengimpor {percent}% / {count} statement',
+    'progress.reservoir': 'Reservoir {percent}% / {count} statement',
+    'progress.backendSteps': '{count} langkah backend',
+    'confirm.dropDatabase': 'Hapus database "{name}" permanen? Semua tabel dan view di dalamnya akan dihapus.',
+    'confirm.dropTable': 'Hapus {kind} "{name}" dari database "{db}"?',
+    'import.noFile': 'Belum ada file dipilih.',
+    'import.conversion': '{name}: {format} -> AsaDB',
+    'import.tablesLoaded': '{count} tabel dimuat',
+    'import.tableRows': 'tabel {table}, {count} baris',
+    'import.sheetsLoaded': '{count} sheet dimuat',
+    'import.statements': '{count} statement',
+    'import.databaseRequired': 'Buat atau pilih database sebelum mengimpor {format}.',
+    'import.largeBackendRequired': 'Backend Prolog belum online. Impor SQL besar wajib lewat engine Prolog.',
+    'import.unsupportedFormat': 'Format tidak didukung: {format}',
+    'sandbox.resetDone': 'Sandbox direset ke kondisi kosong.',
+    'metadata.objectsValue': '{databases} DB, {tables} tabel, {views} view',
+    'metadata.storageValue': '{size} di disk',
+    'metadata.cacheValue': '{pages}/{limit} halaman, {hits} hit',
+    'metadata.reservoirValue': '{active} aktif, {queued} antre, {size} spool',
+    'metadata.checkpointValue': '{count} pada {time}',
+    'result.showMore': 'Tampilkan lebih banyak baris',
+    'result.loadingMore': 'Memuat baris berikutnya...',
+    'result.allRows': '{count} baris ditampilkan',
+    'result.viewMissing': 'View tidak menghasilkan tabel.',
+    'result.previewMissing': 'Pratinjau tabel tidak menghasilkan baris.',
+    'table.showMore': 'Tampilkan lebih banyak tabel',
+    'table.loadingMore': 'Memuat tabel berikutnya...',
+    'table.tablesShown': '{shown} dari {total} tabel ditampilkan',
+    'log.connected': 'Terhubung ke engine Prolog AsaDB lokal.',
+    'log.sandbox': 'Backend tidak terdeteksi; memakai sandbox browser lokal.',
+    'log.dropFailed': 'Penghapusan {kind} {name} gagal. Daftar lokal tidak diubah.',
+    'log.dropVerifyFailed': 'Backend belum bisa memastikan {kind} {name} terhapus. Daftar lokal dipertahankan.',
+    'log.dropped': '{kind} {name} berhasil dihapus.',
+    'log.analyzerFallback': 'Analyzer beralih ke sandbox: {error}',
+    'log.stateSyncSkipped': 'Sinkronisasi state dilewati: {error}',
+    'log.backendFailed': 'Backend Prolog gagal: {error}',
+    'log.postSyncSkipped': 'Sinkronisasi setelah eksekusi dilewati: {error}',
+    'log.postSyncUnavailable': 'Penyegaran katalog setelah eksekusi tidak tersedia.',
+    'log.databaseNameEmpty': 'Gagal membuat DB: nama database kosong.',
+    'log.databaseCreated': 'Database {name} dibuat dan dipilih.',
+    'log.databaseCreateFallback': 'Pembuatan DB di backend gagal; beralih ke sandbox: {error}',
+    'log.databaseSelectFallback': 'Pemilihan DB di backend gagal; memakai state browser: {error}',
+    'log.databaseSelected': 'Database {name} dipilih.',
+    'log.databaseSaveFallback': 'Penyimpanan backend gagal; hanya state browser yang tersimpan: {error}',
+    'log.databaseSaved': 'Database {name} disimpan.',
+    'log.dropBackendFallback': 'Penghapusan backend gagal; beralih ke sandbox: {error}',
+    'log.tableNameEmpty': 'Gagal membuat tabel: nama tabel kosong.',
+    'log.tableColumnsEmpty': 'Gagal membuat tabel: tambahkan minimal satu kolom.',
+    'log.tableCreateFallback': 'Pembuatan tabel di backend gagal; state browser dipertahankan: {error}',
+    'log.tableCreated': 'Tabel {name} dibuat.',
+    'log.importRejected': 'Backend menolak {name}; mencoba stream unggahan: {error}',
+    'log.importFailed': 'Impor {name} gagal: {error}',
+    'log.serverImportFailed': 'Impor server gagal: {error}',
+    'log.reservoirFileStart': 'Impor file Reservoir dimulai: {name}',
+    'log.reservoirUploadStart': 'Impor unggahan Reservoir dimulai: {name}',
+    'log.reservoirResumed': 'Melanjutkan pemantauan job Reservoir: {name}',
+    'log.reservoirCancelFailed': 'Pembatalan Reservoir gagal: {error}',
+    'log.reservoirMonitorFailed': 'Pemantauan Reservoir berhenti: {error}',
+    'log.fileOpened': 'Membuka {name}.',
+    'log.fileDownloaded': 'Mengunduh {name}.',
+    'log.exportFailed': 'Ekspor gagal: {error}',
+    'import.backendSummary': '{name}: impor backend Prolog, {statements} statement, {errors} error',
+    'import.uploadSummary': '{name}: impor unggahan backend Prolog, {statements} statement, {errors} error',
+    'common.tableKind': 'tabel',
+    'common.viewKind': 'view',
+  },
+  en: {
+    'document.title': 'AsAPanel - AsaDB Local Panel',
+    'startup.title': 'Asa is warming up',
+    'startup.copy': 'Connecting the panel to the local engine and catalog.',
+    'brand.admin': 'AsaDB Admin',
+    'brand.support': 'Buy Me Noodles',
+    'aria.databaseSelector': 'Database selector',
+    'aria.databaseTools': 'Database tools',
+    'aria.databaseQuickActions': 'Database quick actions',
+    'aria.tableActions': 'Table actions',
+    'language.aria': 'Interface language',
+    'database.namePlaceholder': 'database_name',
+    'database.create': 'Create DB',
+    'database.select': 'Select DB',
+    'database.selectAria': 'Select database',
+    'database.save': 'Save database',
+    'database.drop': 'Drop database',
+    'nav.sql': 'SQL command',
+    'nav.import': 'Import',
+    'nav.export': 'Export',
+    'table.create': 'Create table',
+    'table.filterAria': 'Filter tables',
+    'table.filterPlaceholder': 'Search tables...',
+    'table.listAria': 'Tables',
+    'metadata.title': 'Database metadata',
+    'metadata.engine': 'Engine',
+    'metadata.identity': 'Identity',
+    'metadata.objects': 'Objects',
+    'metadata.rows': 'Rows',
+    'metadata.storage': 'Storage',
+    'metadata.cache': 'Page cache',
+    'metadata.checkpoint': 'Checkpoint',
+    'state.waiting': 'Waiting',
+    'top.local': 'Local AsaDB',
+    'engine.check': 'Check Engine',
+    'sql.command': 'SQL command',
+    'sql.run': 'Run SQL',
+    'sql.running': 'Running...',
+    'sql.sample': 'Sample',
+    'sql.placeholder': 'Write SQL here...',
+    'sql.result': 'Result',
+    'sql.noQuery': 'No query yet.',
+    'common.clear': 'Clear',
+    'common.file': 'File',
+    'common.format': 'Format',
+    'common.summary': 'Summary',
+    'common.preview': 'Preview',
+    'common.database': 'Database',
+    'common.table': 'Table',
+    'common.tables': 'Tables',
+    'common.data': 'Data',
+    'common.none': 'None',
+    'common.save': 'Save',
+    'import.fileUpload': 'File upload',
+    'import.execute': 'Execute',
+    'import.fromServer': 'From server',
+    'import.serverFile': 'Server file',
+    'import.runFile': 'Run file',
+    'import.stopOnError': 'Stop on error',
+    'import.onlyErrors': 'Show only errors',
+    'import.progressTitle': 'Reservoir progress',
+    'import.noActiveJob': 'No active import.',
+    'import.cancel': 'Cancel',
+    'import.cancelling': 'Cancelling...',
+    'import.cancelRequested': 'Cancellation requested. Reservoir will roll back at the next batch boundary.',
+    'import.cancelled': 'The import was cancelled and uncommitted changes were rolled back.',
+    'import.resumed': 'Monitoring {name} resumed after the panel reloaded.',
+    'import.resumedComplete': '{name} completed after the panel reloaded ({count} statements).',
+    'import.jobStatus': '{status} · {count} statements · {message}',
+    'import.autoDetect': 'Auto detect',
+    'import.target': 'Target',
+    'import.csvTable': 'CSV table',
+    'export.output': 'Output',
+    'export.download': 'Download',
+    'export.openPreview': 'Open preview',
+    'export.noTables': 'No tables selected.',
+    'table.selectData': 'Select data',
+    'table.showStructure': 'Show structure',
+    'table.alter': 'Alter table',
+    'table.newItem': 'New item',
+    'table.drop': 'Drop table',
+    'table.column': 'Column',
+    'table.columnName': 'Column name',
+    'table.type': 'Type',
+    'table.comment': 'Comment',
+    'table.indexes': 'Indexes',
+    'table.name': 'Table name:',
+    'table.collation': '(collation)',
+    'table.length': 'Length',
+    'table.options': 'Options',
+    'table.autoIncShort': 'Auto inc.',
+    'table.autoIncHelp': 'Auto increment help',
+    'table.autoIncDescription': 'Auto increment is for numeric columns. It is commonly used on a primary key such as id INT and increases automatically for each new row.',
+    'table.autoIncrement': 'Auto Increment',
+    'table.defaultValues': 'Default values',
+    'table.partitionBy': 'Partition by',
+    'table.addColumn': 'Add column',
+    'table.moveUp': 'Move column up',
+    'table.moveDown': 'Move column down',
+    'table.deleteColumn': 'Delete column',
+    'table.virtualResult': 'virtual result',
+    'table.viewDescription': 'SELECT-backed view',
+    'log.title': 'Execution Log',
+    'log.resetSandbox': 'Reset sandbox',
+    'log.clear': 'Clear log',
+    'page.sql': 'SQL Workspace',
+    'page.import': 'Import',
+    'page.export': 'Export',
+    'page.table': 'Table',
+    'page.tableDetail': 'Table Detail',
+    'page.create': 'Create table',
+    'page.transfer': 'Data Transfer',
+    'mode.detecting': 'Mode: detecting...',
+    'mode.backend': 'Mode: Prolog backend online',
+    'mode.sandbox': 'Mode: browser sandbox',
+    'state.unavailable': 'Unavailable',
+    'state.offline': 'Offline',
+    'state.pending': 'Pending',
+    'state.durable': 'Durable',
+    'state.never': 'never',
+    'state.receiving': 'receiving upload',
+    'state.queued': 'queued',
+    'state.processing': 'processing',
+    'state.cancelling': 'cancelling',
+    'state.completed': 'completed',
+    'state.delivered': 'result retained',
+    'state.failed': 'failed',
+    'state.cancelled': 'cancelled',
+    'state.interrupted': 'interrupted',
+    'state.reconnecting': 'reconnecting',
+    'database.noneSelected': 'No database selected',
+    'database.selectFirst': 'Select or create a database before continuing.',
+    'table.noneSelected': 'No table selected',
+    'table.count': '{count} tables',
+    'table.countViews': '{tables} tables, {views} views',
+    'table.countFiltered': '{visible} of {total} objects',
+    'table.dropNamed': 'Drop {kind} {name}',
+    'table.view': 'view',
+    'table.loadingView': 'Loading view...',
+    'table.viewNeedsBackend': 'View data requires the Prolog backend.',
+    'table.loadingPreview': 'Loading backend preview...',
+    'table.showingRows': 'Showing {shown} of {total} backend rows.',
+    'result.line': 'Line',
+    'result.rowsShown': '{count} rows shown. More rows are available.',
+    'result.executed': 'Executed {count} statements.',
+    'result.completed': 'SQL execution completed.',
+    'progress.importing': 'Importing {percent}% / {count} statements',
+    'progress.reservoir': 'Reservoir {percent}% / {count} statements',
+    'progress.backendSteps': '{count} backend steps',
+    'confirm.dropDatabase': 'Permanently drop database "{name}"? All tables and views inside it will be deleted.',
+    'confirm.dropTable': 'Drop {kind} "{name}" from database "{db}"?',
+    'import.noFile': 'No file selected.',
+    'import.conversion': '{name}: {format} -> AsaDB',
+    'import.tablesLoaded': '{count} tables loaded',
+    'import.tableRows': 'table {table}, {count} rows',
+    'import.sheetsLoaded': '{count} sheets loaded',
+    'import.statements': '{count} statements',
+    'import.databaseRequired': 'Create or select a database before importing {format}.',
+    'import.largeBackendRequired': 'The Prolog backend is offline. Large SQL imports require the Prolog engine.',
+    'import.unsupportedFormat': 'Unsupported format: {format}',
+    'sandbox.resetDone': 'Sandbox reset to an empty state.',
+    'metadata.objectsValue': '{databases} DB, {tables} tables, {views} views',
+    'metadata.storageValue': '{size} on disk',
+    'metadata.cacheValue': '{pages}/{limit} pages, {hits} hits',
+    'metadata.reservoirValue': '{active} active, {queued} queued, {size} spool',
+    'metadata.checkpointValue': '{count} at {time}',
+    'result.showMore': 'Show more rows',
+    'result.loadingMore': 'Loading next rows...',
+    'result.allRows': '{count} rows shown',
+    'result.viewMissing': 'The view did not return a table.',
+    'result.previewMissing': 'The table preview did not return rows.',
+    'table.showMore': 'Show more tables',
+    'table.loadingMore': 'Loading next tables...',
+    'table.tablesShown': '{shown} of {total} tables shown',
+    'log.connected': 'Connected to the local Prolog AsaDB engine.',
+    'log.sandbox': 'No backend detected; using the local browser sandbox.',
+    'log.dropFailed': 'Failed to drop {kind} {name}. The local list was not changed.',
+    'log.dropVerifyFailed': 'The backend could not confirm that {kind} {name} was dropped. The local list was preserved.',
+    'log.dropped': 'Dropped {kind} {name}.',
+    'log.analyzerFallback': 'Analyzer switched to sandbox: {error}',
+    'log.stateSyncSkipped': 'State synchronization was skipped: {error}',
+    'log.backendFailed': 'Prolog backend failed: {error}',
+    'log.postSyncSkipped': 'Post-run synchronization was skipped: {error}',
+    'log.postSyncUnavailable': 'The post-run catalog refresh was unavailable.',
+    'log.databaseNameEmpty': 'Create DB failed: the database name is empty.',
+    'log.databaseCreated': 'Database {name} was created and selected.',
+    'log.databaseCreateFallback': 'Backend DB creation failed; switched to sandbox: {error}',
+    'log.databaseSelectFallback': 'Backend DB selection failed; using browser state: {error}',
+    'log.databaseSelected': 'Selected database {name}.',
+    'log.databaseSaveFallback': 'Backend save failed; only browser state was saved: {error}',
+    'log.databaseSaved': 'Saved database {name}.',
+    'log.dropBackendFallback': 'Backend drop failed; switched to sandbox: {error}',
+    'log.tableNameEmpty': 'Create table failed: the table name is empty.',
+    'log.tableColumnsEmpty': 'Create table failed: add at least one column.',
+    'log.tableCreateFallback': 'Backend table creation failed; browser state was preserved: {error}',
+    'log.tableCreated': 'Created table {name}.',
+    'log.importRejected': 'The backend rejected {name}; trying the upload stream: {error}',
+    'log.importFailed': 'Import failed for {name}: {error}',
+    'log.serverImportFailed': 'Server import failed: {error}',
+    'log.reservoirFileStart': 'Reservoir file import started: {name}',
+    'log.reservoirUploadStart': 'Reservoir upload import started: {name}',
+    'log.reservoirResumed': 'Resuming Reservoir job monitoring: {name}',
+    'log.reservoirCancelFailed': 'Reservoir cancellation failed: {error}',
+    'log.reservoirMonitorFailed': 'Reservoir monitoring stopped: {error}',
+    'log.fileOpened': 'Opened {name}.',
+    'log.fileDownloaded': 'Downloaded {name}.',
+    'log.exportFailed': 'Export failed: {error}',
+    'import.backendSummary': '{name}: Prolog backend import, {statements} statements, {errors} errors',
+    'import.uploadSummary': '{name}: Prolog backend upload import, {statements} statements, {errors} errors',
+    'common.tableKind': 'table',
+    'common.viewKind': 'view',
+  },
+  ja: {
+    'document.title': 'AsAPanel - AsaDB ローカルパネル',
+    'startup.title': 'アサは準備中です',
+    'startup.copy': 'パネルをローカルエンジンとカタログに接続しています。',
+    'brand.admin': 'AsaDB 管理',
+    'brand.support': '麺をごちそうする',
+    'aria.databaseSelector': 'データベース選択',
+    'aria.databaseTools': 'データベースツール',
+    'aria.databaseQuickActions': 'データベースのクイック操作',
+    'aria.tableActions': 'テーブル操作',
+    'language.aria': '表示言語',
+    'database.namePlaceholder': 'データベース名',
+    'database.create': 'DB 作成',
+    'database.select': 'DB 選択',
+    'database.selectAria': 'データベースを選択',
+    'database.save': 'データベースを保存',
+    'database.drop': 'データベースを削除',
+    'nav.sql': 'SQL コマンド',
+    'nav.import': 'インポート',
+    'nav.export': 'エクスポート',
+    'table.create': 'テーブル作成',
+    'table.filterAria': 'テーブルを絞り込む',
+    'table.filterPlaceholder': 'テーブルを検索...',
+    'table.listAria': 'テーブル',
+    'metadata.title': 'データベースメタデータ',
+    'metadata.engine': 'エンジン',
+    'metadata.identity': '識別子',
+    'metadata.objects': 'オブジェクト',
+    'metadata.rows': '行',
+    'metadata.storage': 'ストレージ',
+    'metadata.cache': 'ページキャッシュ',
+    'metadata.checkpoint': 'チェックポイント',
+    'state.waiting': '待機中',
+    'top.local': 'ローカル AsaDB',
+    'engine.check': 'エンジン確認',
+    'sql.command': 'SQL コマンド',
+    'sql.run': 'SQL 実行',
+    'sql.running': '実行中...',
+    'sql.sample': 'サンプル',
+    'sql.placeholder': 'ここに SQL を入力...',
+    'sql.result': '結果',
+    'sql.noQuery': 'クエリはまだありません。',
+    'common.clear': 'クリア',
+    'common.file': 'ファイル',
+    'common.format': '形式',
+    'common.summary': '概要',
+    'common.preview': 'プレビュー',
+    'common.database': 'データベース',
+    'common.table': 'テーブル',
+    'common.tables': 'テーブル',
+    'common.data': 'データ',
+    'common.none': 'なし',
+    'common.save': '保存',
+    'import.fileUpload': 'ファイルをアップロード',
+    'import.execute': '実行',
+    'import.fromServer': 'サーバーから',
+    'import.serverFile': 'サーバーファイル',
+    'import.runFile': 'ファイル実行',
+    'import.stopOnError': 'エラー時に停止',
+    'import.onlyErrors': 'エラーのみ表示',
+    'import.progressTitle': 'Reservoir の進捗',
+    'import.noActiveJob': '実行中のインポートはありません。',
+    'import.cancel': 'キャンセル',
+    'import.cancelling': 'キャンセル中...',
+    'import.cancelRequested': 'キャンセルを要求しました。次のバッチ境界で Reservoir がロールバックします。',
+    'import.cancelled': 'インポートをキャンセルし、未コミットの変更をロールバックしました。',
+    'import.resumed': 'パネルの再読み込み後に {name} の監視を再開しました。',
+    'import.resumedComplete': 'パネルの再読み込み後に {name} が完了しました（{count} ステートメント）。',
+    'import.jobStatus': '{status}・{count} ステートメント・{message}',
+    'import.autoDetect': '自動検出',
+    'import.target': '対象',
+    'import.csvTable': 'CSV テーブル',
+    'export.output': '出力',
+    'export.download': 'ダウンロード',
+    'export.openPreview': 'プレビューを開く',
+    'export.noTables': 'テーブルが選択されていません。',
+    'table.selectData': 'データを表示',
+    'table.showStructure': '構造を表示',
+    'table.alter': 'テーブル変更',
+    'table.newItem': '新規項目',
+    'table.drop': 'テーブル削除',
+    'table.column': 'カラム',
+    'table.columnName': 'カラム名',
+    'table.type': '型',
+    'table.comment': 'コメント',
+    'table.indexes': 'インデックス',
+    'table.name': 'テーブル名:',
+    'table.collation': '（照合順序）',
+    'table.length': '長さ',
+    'table.options': 'オプション',
+    'table.autoIncShort': '自動採番',
+    'table.autoIncHelp': '自動採番のヘルプ',
+    'table.autoIncDescription': '自動採番は数値カラム向けです。通常は id INT のような主キーに使用し、新しい行ごとに値が自動で増えます。',
+    'table.autoIncrement': '自動採番',
+    'table.defaultValues': 'デフォルト値',
+    'table.partitionBy': 'パーティション',
+    'table.addColumn': 'カラム追加',
+    'table.moveUp': 'カラムを上へ',
+    'table.moveDown': 'カラムを下へ',
+    'table.deleteColumn': 'カラム削除',
+    'table.virtualResult': '仮想結果',
+    'table.viewDescription': 'SELECT ベースのビュー',
+    'log.title': '実行ログ',
+    'log.resetSandbox': 'サンドボックスをリセット',
+    'log.clear': 'ログをクリア',
+    'page.sql': 'SQL ワークスペース',
+    'page.import': 'インポート',
+    'page.export': 'エクスポート',
+    'page.table': 'テーブル',
+    'page.tableDetail': 'テーブル詳細',
+    'page.create': 'テーブル作成',
+    'page.transfer': 'データ転送',
+    'mode.detecting': 'モード: 検出中...',
+    'mode.backend': 'モード: Prolog バックエンド接続中',
+    'mode.sandbox': 'モード: ブラウザーサンドボックス',
+    'state.unavailable': '利用不可',
+    'state.offline': 'オフライン',
+    'state.pending': '保留中',
+    'state.durable': '永続化済み',
+    'state.never': '未実行',
+    'state.receiving': 'アップロード受信中',
+    'state.queued': '待機中',
+    'state.processing': '処理中',
+    'state.cancelling': 'キャンセル中',
+    'state.completed': '完了',
+    'state.delivered': '結果を保持中',
+    'state.failed': '失敗',
+    'state.cancelled': 'キャンセル済み',
+    'state.interrupted': '中断',
+    'state.reconnecting': '再接続中',
+    'database.noneSelected': 'データベースが選択されていません',
+    'database.selectFirst': '続ける前にデータベースを選択または作成してください。',
+    'table.noneSelected': 'テーブルが選択されていません',
+    'table.count': '{count} テーブル',
+    'table.countViews': '{tables} テーブル、{views} ビュー',
+    'table.countFiltered': '{total} 件中 {visible} 件',
+    'table.dropNamed': '{kind} {name} を削除',
+    'table.view': 'ビュー',
+    'table.loadingView': 'ビューを読み込み中...',
+    'table.viewNeedsBackend': 'ビューのデータには Prolog バックエンドが必要です。',
+    'table.loadingPreview': 'バックエンドのプレビューを読み込み中...',
+    'table.showingRows': 'バックエンド全 {total} 行中 {shown} 行を表示しています。',
+    'result.line': '行',
+    'result.rowsShown': '{count} 行を表示しました。ほかの行もあります。',
+    'result.executed': '{count} 個のステートメントを実行しました。',
+    'result.completed': 'SQL の実行が完了しました。',
+    'progress.importing': 'インポート {percent}% / {count} ステートメント',
+    'progress.reservoir': 'Reservoir {percent}% / {count} ステートメント',
+    'progress.backendSteps': 'バックエンド {count} ステップ',
+    'confirm.dropDatabase': 'データベース「{name}」を完全に削除しますか？中のテーブルとビューもすべて削除されます。',
+    'confirm.dropTable': 'データベース「{db}」から {kind}「{name}」を削除しますか？',
+    'import.noFile': 'ファイルが選択されていません。',
+    'import.conversion': '{name}: {format} -> AsaDB',
+    'import.tablesLoaded': '{count} テーブルを読み込みました',
+    'import.tableRows': 'テーブル {table}、{count} 行',
+    'import.sheetsLoaded': '{count} シートを読み込みました',
+    'import.statements': '{count} ステートメント',
+    'import.databaseRequired': '{format} をインポートする前にデータベースを作成または選択してください。',
+    'import.largeBackendRequired': 'Prolog バックエンドがオフラインです。大きな SQL のインポートには Prolog エンジンが必要です。',
+    'import.unsupportedFormat': '未対応の形式: {format}',
+    'sandbox.resetDone': 'サンドボックスを空の状態にリセットしました。',
+    'metadata.objectsValue': '{databases} DB、{tables} テーブル、{views} ビュー',
+    'metadata.storageValue': 'ディスク上 {size}',
+    'metadata.cacheValue': '{pages}/{limit} ページ、{hits} ヒット',
+    'metadata.reservoirValue': '{active} 実行中、{queued} 待機、{size} スプール',
+    'metadata.checkpointValue': '{time} に {count} 回',
+    'result.showMore': 'さらに行を表示',
+    'result.loadingMore': '次の行を読み込み中...',
+    'result.allRows': '{count} 行を表示しました',
+    'result.viewMissing': 'ビューからテーブル結果が返されませんでした。',
+    'result.previewMissing': 'テーブルのプレビュー行が返されませんでした。',
+    'table.showMore': 'さらにテーブルを表示',
+    'table.loadingMore': '次のテーブルを読み込み中...',
+    'table.tablesShown': '{total} テーブル中 {shown} テーブルを表示',
+    'log.connected': 'ローカル Prolog AsaDB エンジンに接続しました。',
+    'log.sandbox': 'バックエンドが見つからないため、ローカルのブラウザーサンドボックスを使用します。',
+    'log.dropFailed': '{kind} {name} を削除できませんでした。ローカル一覧は変更していません。',
+    'log.dropVerifyFailed': '{kind} {name} の削除をバックエンドで確認できませんでした。ローカル一覧を保持しました。',
+    'log.dropped': '{kind} {name} を削除しました。',
+    'log.analyzerFallback': 'アナライザーをサンドボックスへ切り替えました: {error}',
+    'log.stateSyncSkipped': '状態の同期を省略しました: {error}',
+    'log.backendFailed': 'Prolog バックエンドで失敗しました: {error}',
+    'log.postSyncSkipped': '実行後の同期を省略しました: {error}',
+    'log.postSyncUnavailable': '実行後のカタログ更新を利用できません。',
+    'log.databaseNameEmpty': 'DB を作成できません: データベース名が空です。',
+    'log.databaseCreated': 'データベース {name} を作成して選択しました。',
+    'log.databaseCreateFallback': 'バックエンドでの DB 作成に失敗し、サンドボックスへ切り替えました: {error}',
+    'log.databaseSelectFallback': 'バックエンドでの DB 選択に失敗し、ブラウザー状態を使用します: {error}',
+    'log.databaseSelected': 'データベース {name} を選択しました。',
+    'log.databaseSaveFallback': 'バックエンド保存に失敗し、ブラウザー状態のみ保存しました: {error}',
+    'log.databaseSaved': 'データベース {name} を保存しました。',
+    'log.dropBackendFallback': 'バックエンドでの削除に失敗し、サンドボックスへ切り替えました: {error}',
+    'log.tableNameEmpty': 'テーブルを作成できません: テーブル名が空です。',
+    'log.tableColumnsEmpty': 'テーブルを作成できません: カラムを一つ以上追加してください。',
+    'log.tableCreateFallback': 'バックエンドでのテーブル作成に失敗し、ブラウザー状態を保持しました: {error}',
+    'log.tableCreated': 'テーブル {name} を作成しました。',
+    'log.importRejected': 'バックエンドが {name} を拒否したため、アップロードストリームを試します: {error}',
+    'log.importFailed': '{name} のインポートに失敗しました: {error}',
+    'log.serverImportFailed': 'サーバーインポートに失敗しました: {error}',
+    'log.reservoirFileStart': 'Reservoir ファイルインポートを開始しました: {name}',
+    'log.reservoirUploadStart': 'Reservoir アップロードインポートを開始しました: {name}',
+    'log.reservoirResumed': 'Reservoir ジョブの監視を再開します: {name}',
+    'log.reservoirCancelFailed': 'Reservoir のキャンセルに失敗しました: {error}',
+    'log.reservoirMonitorFailed': 'Reservoir の監視を停止しました: {error}',
+    'log.fileOpened': '{name} を開きました。',
+    'log.fileDownloaded': '{name} をダウンロードしました。',
+    'log.exportFailed': 'エクスポートに失敗しました: {error}',
+    'import.backendSummary': '{name}: Prolog バックエンドインポート、{statements} ステートメント、{errors} エラー',
+    'import.uploadSummary': '{name}: Prolog バックエンドアップロード、{statements} ステートメント、{errors} エラー',
+    'common.tableKind': 'テーブル',
+    'common.viewKind': 'ビュー',
+  },
+};
+
+function loadLanguage() {
+  try {
+    const saved = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    return Object.prototype.hasOwnProperty.call(I18N, saved) ? saved : 'id';
+  } catch (_) {
+    return 'id';
+  }
+}
+
+let currentLanguage = loadLanguage();
+
+function t(key, values = {}) {
+  const template = I18N[currentLanguage]?.[key] ?? I18N.id[key] ?? key;
+  return String(template).replace(/\{([A-Za-z0-9_]+)\}/g, (_, name) => String(values[name] ?? `{${name}}`));
+}
 
 const FORMAT_LABELS = {
   asadb: 'AsaDB',
@@ -22,9 +691,9 @@ const FORMAT_LABELS = {
 
 const startupLoader = $('startupLoader');
 
-const ASA_OK_LABEL = 'Asa Terima \uD83D\uDE33';
-const ASA_ERROR_LABEL = 'Asa Tidak Suka! \uD83D\uDE21';
-const ASA_CORRECTION_LABEL = 'Asa Mau Koreksi \uD83E\uDD14';
+let ASA_OK_LABEL = 'Asa Terima \uD83D\uDE33';
+let ASA_ERROR_LABEL = 'Asa Tidak Suka! \uD83D\uDE21';
+let ASA_CORRECTION_LABEL = 'Asa Mau Koreksi \uD83E\uDD14';
 const ASA_RUN_SOUNDS = {
   ok: [
     'assets/Effect/Berhasil/1.mp3',
@@ -44,13 +713,10 @@ const asaRunSoundState = {
   ok: -1,
   error: -1,
 };
-const asaRunAudioCache = {
-  ok: [],
-  error: [],
-};
-let asaRunPrimeAudio = null;
+let asaRunAudioChannel = null;
+let asaRunAudioGeneration = 0;
 
-const ASA_ERROR_OPENERS = [
+let ASA_ERROR_OPENERS = [
   'Asa berhenti dulu, ada bagian yang belum nyambung.',
   'Asa nyangkut di sini, tapi masih bisa dibenerin.',
   'Asa belum bisa nerima bentuk ini.',
@@ -85,7 +751,7 @@ const ASA_ERROR_OPENERS = [
   'Asa bilang ini belum jadi kalimat SQL yang utuh.',
 ];
 
-const ASA_CORRECTION_OPENERS = [
+let ASA_CORRECTION_OPENERS = [
   'Asa punya tebakan kecil.',
   'Asa mau rapihin sedikit.',
   'Asa lihat ini hampir benar.',
@@ -108,7 +774,7 @@ const ASA_CORRECTION_OPENERS = [
   'Asa kasih bisikan kecil dulu.',
 ];
 
-const ASA_SUCCESS_OPENERS = [
+let ASA_SUCCESS_OPENERS = [
   'Asa nerima ini dengan manis.',
   'Asa sudah jalanin dan hasilnya aman.',
   'Asa setuju, perintahnya masuk.',
@@ -127,10 +793,94 @@ const ASA_SUCCESS_OPENERS = [
   'Asa bilang ini boleh lewat.',
 ];
 
+const ASA_LANGUAGE_COPY = {
+  id: {
+    okLabel: 'Asa Terima \uD83D\uDE33',
+    errorLabel: 'Asa Tidak Suka! \uD83D\uDE21',
+    correctionLabel: 'Asa Mau Koreksi \uD83E\uDD14',
+    errors: [...ASA_ERROR_OPENERS],
+    corrections: [...ASA_CORRECTION_OPENERS],
+    successes: [...ASA_SUCCESS_OPENERS],
+  },
+  en: {
+    okLabel: 'Asa Approves \uD83D\uDE33',
+    errorLabel: "Asa Doesn't Like That! \uD83D\uDE21",
+    correctionLabel: 'Asa Suggests a Fix \uD83E\uDD14',
+    errors: [
+      'Asa stopped here because one part does not connect yet.',
+      'Asa got stuck here, but this can still be fixed.',
+      'Asa cannot safely accept this form yet.',
+      'Asa found a break in the execution path.',
+      'Asa suspects that one piece is missing.',
+      'Asa paused before the data could change incorrectly.',
+      'Asa needs a clearer SQL sentence first.',
+      'Asa found a token that interrupts the command.',
+    ],
+    corrections: [
+      'Asa has a small suggestion.',
+      'Asa wants to tidy this up a little.',
+      'Asa thinks this is almost right.',
+      'Asa suspects this is only a typo.',
+      'Asa can straighten this out.',
+      'Asa found one part that can be polished.',
+    ],
+    successes: [
+      'Asa accepted this happily.',
+      'Asa ran it and the result is safe.',
+      'Asa agrees; the command went through.',
+      'Asa completed this part successfully.',
+      'Asa accepted this SQL form.',
+      'Asa has the result ready.',
+    ],
+  },
+  ja: {
+    okLabel: 'アサは受け入れました \uD83D\uDE33',
+    errorLabel: 'アサは気に入りません！ \uD83D\uDE21',
+    correctionLabel: 'アサから修正案 \uD83E\uDD14',
+    errors: [
+      'まだつながっていない部分があるため、アサはここで止まりました。',
+      'アサはここで詰まりましたが、まだ修正できます。',
+      'アサはこの形を安全に受け入れられません。',
+      'アサは実行経路が切れている箇所を見つけました。',
+      'アサは何か一つ足りないと考えています。',
+      'データを誤って変更しないよう、アサは実行を止めました。',
+      'アサには、もう少し明確な SQL が必要です。',
+      'アサはコマンドを中断するトークンを見つけました。',
+    ],
+    corrections: [
+      'アサから小さな提案があります。',
+      'アサが少し整えます。',
+      'アサには、ほぼ正しく見えます。',
+      'アサは単純な入力ミスだと考えています。',
+      'アサが正しい形に直せます。',
+      'アサは改善できる箇所を見つけました。',
+    ],
+    successes: [
+      'アサは喜んで受け入れました。',
+      'アサが実行し、結果の安全を確認しました。',
+      'アサは同意しました。コマンドは正常です。',
+      'アサはこの処理を完了しました。',
+      'アサはこの SQL を受け入れました。',
+      'アサが結果を用意しました。',
+    ],
+  },
+};
+
+function syncAsaLanguageCopy() {
+  const copy = ASA_LANGUAGE_COPY[currentLanguage] || ASA_LANGUAGE_COPY.id;
+  ASA_OK_LABEL = copy.okLabel;
+  ASA_ERROR_LABEL = copy.errorLabel;
+  ASA_CORRECTION_LABEL = copy.correctionLabel;
+  ASA_ERROR_OPENERS = [...copy.errors];
+  ASA_CORRECTION_OPENERS = [...copy.corrections];
+  ASA_SUCCESS_OPENERS = [...copy.successes];
+}
+
 const sqlInput = $('sqlInput');
 const sqlEditor = $('sqlEditor');
 const sqlHighlight = $('sqlHighlight');
 const sqlLineNumbers = $('sqlLineNumbers');
+const sqlLineNumbersContent = $('sqlLineNumbersContent');
 const sqlDiagnostics = $('sqlDiagnostics');
 const resultBox = $('resultBox');
 const runBtn = $('runBtn');
@@ -145,6 +895,17 @@ const tableList = $('tableList');
 const tableSearch = $('tableSearch');
 const tableCount = $('tableCount');
 const pageTitle = $('pageTitle');
+const dbMetadataPanel = $('dbMetadataPanel');
+const metadataState = $('metadataState');
+const metadataEngine = $('metadataEngine');
+const metadataIdentity = $('metadataIdentity');
+const metadataObjects = $('metadataObjects');
+const metadataRows = $('metadataRows');
+const metadataStorage = $('metadataStorage');
+const metadataCache = $('metadataCache');
+const metadataCheckpoint = $('metadataCheckpoint');
+const metadataReservoir = $('metadataReservoir');
+const languageSwitcher = $('languageSwitcher');
 
 const views = {
   sql: $('sqlView'),
@@ -170,6 +931,12 @@ const importShowOnlyErrors = $('importShowOnlyErrors');
 const importWriteMode = $('importWriteMode');
 const importTargetTable = $('importTargetTable');
 const importSummary = $('importSummary');
+const importProgressPanel = $('importProgressPanel');
+const importProgressLabel = $('importProgressLabel');
+const importProgressPercent = $('importProgressPercent');
+const importProgressBar = $('importProgressBar');
+const importProgressStatus = $('importProgressStatus');
+const importCancelBtn = $('importCancelBtn');
 
 const exportDbName = $('exportDbName');
 const exportDatabaseMode = $('exportDatabaseMode');
@@ -207,14 +974,39 @@ const createAutoIncrementHelpBtn = $('createAutoIncrementHelpBtn');
 const autoIncrementHelpPopover = $('autoIncrementHelpPopover');
 
 let backendOnline = false;
+let engineCheckCompleted = false;
 let selectedTable = '';
+let currentViewName = 'sql';
+let currentTableDetailMode = 'structure';
+let lastDatabaseMetadata = null;
+let lastRenderedResults = [];
+let lastRunState = { key: 'sql.noQuery', values: {}, raw: '' };
 let sandbox = loadSandbox();
 let sqlDiagnosticsState = [];
 let sqlAnalyzeTimer = 0;
 let sqlAnalyzeRequest = 0;
 let sqlRunPromise = null;
-let activeRunAudio = null;
+let activeReservoirJobId = '';
+let activeReservoirDescriptor = null;
+let lastReservoirSnapshot = null;
+let reservoirResumePromise = null;
+let reservoirCancelPromise = null;
+let importOperationPromise = null;
+let metadataRefreshPromise = null;
+let metadataPollTimer = 0;
+let lastMetadataRefreshAt = 0;
+let tableListVisibleLimit = TABLE_LIST_PAGE_SIZE;
+let tableListObserver = null;
+let resultPageContext = null;
+let resultPagePromises = new Map();
+let tableDataPageState = null;
+let tableDetailRequestId = 0;
 let asaRunPrimePromise = null;
+let sqlLineRenderFrame = 0;
+let sqlScrollRestoreFrame = 0;
+let sqlPasteInProgress = false;
+let sqlPasteAnchor = { top: 0, left: 0 };
+let sqlEditorMetrics = { lineCount: 1, large: false, textLength: 0 };
 let archiveRefreshTimer = 0;
 let archiveSnapshot = {
   kind: 'idle',
@@ -226,6 +1018,89 @@ let archiveSnapshot = {
   progress: 0,
   updatedAt: 0,
 };
+
+function applyStaticTranslations() {
+  document.documentElement.lang = LANGUAGE_HTML[currentLanguage] || LANGUAGE_HTML.id;
+  document.title = t('document.title');
+  document.querySelectorAll('[data-i18n]').forEach((node) => {
+    node.textContent = t(node.dataset.i18n);
+  });
+  for (const [attribute, dataName] of [
+    ['placeholder', 'i18nPlaceholder'],
+    ['title', 'i18nTitle'],
+    ['aria-label', 'i18nAriaLabel'],
+  ]) {
+    document.querySelectorAll(`[data-${dataName.replace(/[A-Z]/g, value => `-${value.toLowerCase()}`)}]`).forEach((node) => {
+      node.setAttribute(attribute, t(node.dataset[dataName]));
+    });
+  }
+  languageSwitcher?.querySelectorAll('[data-language]').forEach((button) => {
+    const active = button.dataset.language === currentLanguage;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
+
+function updatePageTitle() {
+  const key = currentViewName === 'table' ? 'page.tableDetail' :
+    currentViewName === 'create' ? 'page.create' :
+    currentViewName === 'import' ? 'page.import' :
+    currentViewName === 'export' ? 'page.export' :
+    'page.sql';
+  pageTitle.textContent = t(key);
+}
+
+function updateEngineStatus() {
+  const key = !engineCheckCompleted ? 'mode.detecting' : backendOnline ? 'mode.backend' : 'mode.sandbox';
+  engineStatus.textContent = t(key);
+  engineStatus.className = !engineCheckCompleted ? 'status muted' : backendOnline ? 'status ok' : 'status warn';
+}
+
+function localizedRelationKind(kind) {
+  return t(kind === 'view' ? 'common.viewKind' : 'common.tableKind');
+}
+
+function renderLastRunState() {
+  const values = { ...lastRunState.values };
+  if (typeof values.count === 'number') values.count = formatNumber(values.count);
+  lastRun.textContent = lastRunState.key ? t(lastRunState.key, values) : lastRunState.raw;
+}
+
+function setLastRunKey(key, values = {}) {
+  lastRunState = { key, values, raw: '' };
+  renderLastRunState();
+}
+
+function setLastRunRaw(raw) {
+  lastRunState = { key: '', values: {}, raw: String(raw) };
+  renderLastRunState();
+}
+
+function setLanguage(language, persist = true) {
+  if (!Object.prototype.hasOwnProperty.call(I18N, language)) return;
+  currentLanguage = language;
+  if (persist) {
+    try {
+      localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+    } catch (_) {
+      // The interface can still switch when browser storage is unavailable.
+    }
+  }
+  syncAsaLanguageCopy();
+  applyStaticTranslations();
+  renderLastRunState();
+  updatePageTitle();
+  updateEngineStatus();
+  renderSqlDiagnostics();
+  setSqlRunBusy(Boolean(sqlRunPromise));
+  renderReservoirJob(lastReservoirSnapshot);
+  renderTableBrowser();
+  renderDatabaseMetadata(lastDatabaseMetadata);
+  if (lastRenderedResults.length) renderResults(lastRenderedResults, { remember: false, archive: false });
+  if (currentViewName === 'table' && selectedTable && currentRelation(selectedTable)) {
+    renderTableDetail(selectedTable, currentTableDetailMode);
+  }
+}
 
 function backendToken() {
   const match = document.cookie.match(/(?:^|;\s*)asadb_token=([^;]+)/);
@@ -419,7 +1294,7 @@ function isGenericDefaultTable(table) {
 }
 
 function log(message) {
-  const time = new Date().toLocaleTimeString();
+  const time = new Date().toLocaleTimeString(LANGUAGE_LOCALES[currentLanguage] || LANGUAGE_LOCALES.id);
   logBox.textContent += `[${time}] ${message}\n`;
   logBox.scrollTop = logBox.scrollHeight;
 }
@@ -556,7 +1431,7 @@ function noteArchiveSqlProgress(sql, completed, total, label = '') {
     columns: ['step', 'statement', 'status'],
     rows: [[completed, verb.toUpperCase(), `${completed}/${total}`]],
     rowCount: completed,
-    sizeBytes: new TextEncoder().encode(String(sql || '')).length,
+    sizeBytes: String(sql || '').length,
     progress: total ? completed / total : 0,
     updatedAt: Date.now(),
   };
@@ -564,9 +1439,12 @@ function noteArchiveSqlProgress(sql, completed, total, label = '') {
 }
 
 function inferArchiveDatasetFromSql(sql) {
-  const text = String(sql || '').replace(/`/g, '').trim();
-  const matches = [...text.matchAll(/\b(?:from|into|table|view)\s+([A-Za-z_][\w$]*)/gi)];
-  const last = matches[matches.length - 1]?.[1];
+  const source = String(sql || '');
+  const text = source.slice(Math.max(0, source.length - (512 * 1024))).replace(/`/g, '').trim();
+  const pattern = /\b(?:from|into|table|view)\s+([A-Za-z_][\w$]*)/gi;
+  let match;
+  let last = '';
+  while ((match = pattern.exec(text))) last = match[1];
   const db = currentDbName();
   if (!last) return db ? `${db}.query.sql` : 'query_result.sql';
   return db ? `${db}.${last}.sql` : `${last}.sql`;
@@ -619,7 +1497,7 @@ function formatBytes(bytes) {
 }
 
 function formatNumber(value) {
-  return new Intl.NumberFormat('en-US').format(Number(value) || 0);
+  return new Intl.NumberFormat(LANGUAGE_LOCALES[currentLanguage] || LANGUAGE_LOCALES.id).format(Number(value) || 0);
 }
 
 function loadSandbox() {
@@ -650,7 +1528,7 @@ function currentDbName() {
 function ensureCurrentDb(action = 'melakukan aksi ini') {
   const current = currentDbName();
   if (current) return current;
-  log(`Pilih atau buat database dulu sebelum ${action}.`);
+  log(t('database.selectFirst'));
   return '';
 }
 
@@ -728,6 +1606,7 @@ function correctSqlText(sql) {
 
 function applySqlAutoCorrection(force = false) {
   const value = sqlInput.value;
+  if (value.length >= LARGE_SQL_EDITOR_CHAR_LIMIT) return false;
   const cursor = sqlInput.selectionStart ?? value.length;
   const previous = value[cursor - 1] || '';
   if (!force && previous && !/[\s;(),]/.test(previous)) return false;
@@ -841,7 +1720,7 @@ function asaReadableRaw(message) {
 
 function asaCode(value) {
   const text = String(value || '').replace(/[`'"]/g, '').trim();
-  return text ? `\`${text}\`` : 'itu';
+  return text ? `\`${text}\`` : '`?`';
 }
 
 function asaFeatureName(message) {
@@ -859,6 +1738,8 @@ function asaCorrectionPair(message) {
 
 function asaErrorDetail(message) {
   const text = asaCleanMessage(message);
+  if (currentLanguage === 'en') return asaErrorDetailEnglish(text);
+  if (currentLanguage === 'ja') return asaErrorDetailJapanese(text);
   let match;
 
   if (!text) return 'Asa tidak dapat pesan lengkapnya. Coba ulangi dari baris yang baru kamu ubah.';
@@ -891,7 +1772,7 @@ function asaErrorDetail(message) {
     return 'Isinya terlalu besar untuk jalur tempel biasa. Pakai menu Import file supaya Asa membaca pelan-pelan, bukan sekali telan.';
   }
   if (/Import file path is not allowed|not found|file.*not/i.test(text)) {
-    return 'File import belum ketemu di tempat yang Asa izinkan. Taruh di folder Stress Test, Test, atau web/samples, atau pilih file langsung dari tombol upload.';
+    return 'File import belum ketemu di tempat yang Asa izinkan. Taruh di folder stress tests atau web/samples, atau pilih file langsung dari tombol upload.';
   }
   if (/Kurung buka belum ditutup|opening parenthesis/i.test(text)) {
     return 'Ada tanda kurung buka yang belum punya pasangan. Tambahkan ) di bagian yang menutup daftar kolom, VALUES, atau kondisi.';
@@ -936,9 +1817,85 @@ function asaErrorDetail(message) {
     : 'Asa belum bisa menerima bagian ini. Cek nama tabel, nama kolom, tanda baca, dan urutan katanya.';
 }
 
+function asaErrorDetailEnglish(text) {
+  let match;
+  if (!text) return 'The complete error was unavailable. Retry from the line you most recently changed.';
+  if (/select or create a database first|no database|database.*not selected|pilih atau buat database/i.test(text)) {
+    return 'Select or create a database first so Asa knows where the table belongs.';
+  }
+  if ((match = /table not found:?\s*([A-Za-z_][\w$]*)/i.exec(text)) || (match = /unknown table\s+([A-Za-z_][\w$]*)/i.exec(text)) || (match = /table_ref\('([^']+)'/i.exec(text))) {
+    return `Table ${asaCode(match[1])} is not in the active database. Check the selected DB or create the table first.`;
+  }
+  if ((match = /column not found:?\s*([A-Za-z_][\w$]*)/i.exec(text)) || (match = /unknown column\s+([A-Za-z_][\w$]*)/i.exec(text))) {
+    return `Column ${asaCode(match[1])} is not in that table. Check its spelling or inspect the table structure.`;
+  }
+  if (/belum dikenali|unknown statement|unrecognized/i.test(text)) return 'The opening command is not recognized. Start with a supported SQL keyword such as SELECT, CREATE, INSERT, UPDATE, DELETE, ALTER, DROP, SHOW, or DESCRIBE.';
+  if ((match = /sandbox belum support:\s*(.+)$/i.exec(text))) return `Browser sandbox cannot run this form. Use the online Prolog backend for full support. Asa saw: ${match[1].slice(0, 90)}`;
+  if (/belum support|belum aktif|not implemented|feature\(/i.test(text)) return 'The feature was recognized, but this execution path is not available here. Use a simpler form or the latest Prolog backend.';
+  if (/Missing or oversized|oversized|payload|too large|terlalu besar/i.test(text)) return 'This input is too large for regular paste execution. Use file import so Reservoir can process it incrementally.';
+  if (/Import file path is not allowed|not found|file.*not/i.test(text)) return 'The import file was not found in an allowed location. Choose it with Upload or place it in stress tests or web/samples.';
+  if (/Kurung buka belum ditutup|opening parenthesis/i.test(text)) return 'An opening parenthesis has no closing partner. Add ) after the relevant columns, VALUES, or condition.';
+  if (/Kurung tutup berlebih|closing parenthesis/i.test(text)) return 'There is an extra closing parenthesis. Remove one ) or check the previous pair.';
+  if (/titik koma|semicolon|terminated/i.test(text)) return 'The SQL statement is not terminated. Add ; so Asa can identify its end.';
+  if (/INSERT.*VALUES|butuh VALUES|missing values/i.test(text)) return 'INSERT needs a VALUES clause after the table and column names.';
+  if (/UPDATE\b.*SET|missing set/i.test(text)) return 'UPDATE needs a SET clause describing which column values should change.';
+  if (/DELETE\b.*FROM|missing from/i.test(text)) return 'DELETE needs FROM before the table name.';
+  if (/duplicate|already exists|sudah ada/i.test(text)) return 'That name already exists. Choose another name or drop the old object first.';
+  if (/permission|forbidden|403|denied/i.test(text)) return 'Access was denied. Check the panel token, active user, and database permissions.';
+  if (/rollback|rolled back/i.test(text)) return 'Asa rolled the change back to keep the data safe. Fix the first error and retry.';
+  if (/HTTP|Failed to fetch|NetworkError|backend/i.test(text)) return 'The panel did not receive a valid backend response. Check that the AsaDB server is running and the Prolog backend is online.';
+  if (/syntax|parse|unexpected|invalid|token|near/i.test(text)) return 'The SQL structure is invalid. Check commas, quotes, parentheses, and keyword order on that line.';
+  const raw = asaReadableRaw(text);
+  return raw ? `Asa could not accept this part. Check table names, columns, punctuation, and keyword order. Asa saw: ${raw}` : 'Asa could not accept this part. Check table names, columns, punctuation, and keyword order.';
+}
+
+function asaErrorDetailJapanese(text) {
+  let match;
+  if (!text) return '完全なエラー内容を取得できませんでした。最後に変更した行からもう一度確認してください。';
+  if (/select or create a database first|no database|database.*not selected|pilih atau buat database/i.test(text)) return '先にデータベースを選択または作成してください。アサにはテーブルの保存先が必要です。';
+  if ((match = /table not found:?\s*([A-Za-z_][\w$]*)/i.exec(text)) || (match = /unknown table\s+([A-Za-z_][\w$]*)/i.exec(text)) || (match = /table_ref\('([^']+)'/i.exec(text))) return `テーブル ${asaCode(match[1])} は現在のデータベースにありません。DB の選択を確認するか、先にテーブルを作成してください。`;
+  if ((match = /column not found:?\s*([A-Za-z_][\w$]*)/i.exec(text)) || (match = /unknown column\s+([A-Za-z_][\w$]*)/i.exec(text))) return `カラム ${asaCode(match[1])} はそのテーブルにありません。名前の綴りまたはテーブル構造を確認してください。`;
+  if (/belum dikenali|unknown statement|unrecognized/i.test(text)) return '先頭のコマンドを認識できません。SELECT、CREATE、INSERT、UPDATE、DELETE、ALTER、DROP、SHOW、DESCRIBE などの対応キーワードから始めてください。';
+  if ((match = /sandbox belum support:\s*(.+)$/i.exec(text))) return `ブラウザーサンドボックスではこの形式を実行できません。全機能にはオンラインの Prolog バックエンドを使用してください。先頭部分: ${match[1].slice(0, 90)}`;
+  if (/belum support|belum aktif|not implemented|feature\(/i.test(text)) return '機能は認識されましたが、この実行経路ではまだ利用できません。より単純な形式か最新の Prolog バックエンドを使用してください。';
+  if (/Missing or oversized|oversized|payload|too large|terlalu besar/i.test(text)) return '通常の貼り付け実行には大きすぎます。Reservoir が分割処理できるよう、ファイルインポートを使用してください。';
+  if (/Import file path is not allowed|not found|file.*not/i.test(text)) return '許可された場所にインポートファイルが見つかりません。アップロードで選択するか、stress tests または web/samples に配置してください。';
+  if (/Kurung buka belum ditutup|opening parenthesis/i.test(text)) return '開き括弧に対応する閉じ括弧がありません。カラム、VALUES、条件の末尾に ) を追加してください。';
+  if (/Kurung tutup berlebih|closing parenthesis/i.test(text)) return '閉じ括弧が一つ多いようです。) を一つ削除し、括弧の組を確認してください。';
+  if (/titik koma|semicolon|terminated/i.test(text)) return 'SQL 文が終了していません。末尾に ; を追加してください。';
+  if (/INSERT.*VALUES|butuh VALUES|missing values/i.test(text)) return 'INSERT には、テーブル名とカラム名の後に VALUES 句が必要です。';
+  if (/UPDATE\b.*SET|missing set/i.test(text)) return 'UPDATE には、変更する値を指定する SET 句が必要です。';
+  if (/DELETE\b.*FROM|missing from/i.test(text)) return 'DELETE ではテーブル名の前に FROM が必要です。';
+  if (/duplicate|already exists|sudah ada/i.test(text)) return '同じ名前がすでに存在します。別の名前を選ぶか、古いオブジェクトを先に削除してください。';
+  if (/permission|forbidden|403|denied/i.test(text)) return 'アクセスが拒否されました。パネルトークン、現在のユーザー、データベース権限を確認してください。';
+  if (/rollback|rolled back/i.test(text)) return 'データを守るため、アサが変更をロールバックしました。最初のエラーを修正して再実行してください。';
+  if (/HTTP|Failed to fetch|NetworkError|backend/i.test(text)) return 'バックエンドから正しい応答を受け取れませんでした。AsaDB サーバーと Prolog バックエンドの状態を確認してください。';
+  if (/syntax|parse|unexpected|invalid|token|near/i.test(text)) return 'SQL の構造が正しくありません。その行のカンマ、引用符、括弧、キーワード順を確認してください。';
+  const raw = asaReadableRaw(text);
+  return raw ? `この部分を受け入れられません。テーブル名、カラム名、記号、キーワード順を確認してください。内容: ${raw}` : 'この部分を受け入れられません。テーブル名、カラム名、記号、キーワード順を確認してください。';
+}
+
 function asaCorrectionDetail(item) {
   const text = asaCleanMessage(item?.message);
   const pair = asaCorrectionPair(text);
+  if (currentLanguage === 'en') {
+    if (pair) return `Did you mean ${asaCode(pair.to)} instead of ${asaCode(pair.from)}? Asa can correct it automatically before execution.`;
+    if (/titik koma|semicolon|terminated/i.test(text)) return 'Add ; at the end so Asa knows where the SQL statement finishes.';
+    if (/Kurung buka belum ditutup|opening parenthesis/i.test(text)) return 'An opening parenthesis is missing its closing ).';
+    if (/Kurung tutup berlebih|closing parenthesis/i.test(text)) return 'There is one extra closing parenthesis on this line.';
+    if (/INSERT.*VALUES|butuh VALUES|missing values/i.test(text)) return 'Add VALUES and the data after the INSERT table name.';
+    if (item?.correction) return `Try this form: ${item.correction}`;
+    return asaErrorDetailEnglish(text);
+  }
+  if (currentLanguage === 'ja') {
+    if (pair) return `${asaCode(pair.from)} ではなく ${asaCode(pair.to)} の意味でしょうか。実行前にアサが自動修正できます。`;
+    if (/titik koma|semicolon|terminated/i.test(text)) return 'SQL 文の終わりが分かるよう、末尾に ; を追加してください。';
+    if (/Kurung buka belum ditutup|opening parenthesis/i.test(text)) return '開き括弧に対応する閉じ括弧 ) がありません。';
+    if (/Kurung tutup berlebih|closing parenthesis/i.test(text)) return 'この行には閉じ括弧が一つ多くあります。';
+    if (/INSERT.*VALUES|butuh VALUES|missing values/i.test(text)) return 'INSERT のテーブル名の後に VALUES とデータを追加してください。';
+    if (item?.correction) return `この形式を試してください: ${item.correction}`;
+    return asaErrorDetailJapanese(text);
+  }
   if (pair) return `Kata ${asaCode(pair.from)} kayaknya maksudmu ${asaCode(pair.to)}. Asa bisa rapihin itu otomatis sebelum dijalankan.`;
   if (/titik koma|semicolon|terminated/i.test(text)) return 'Tambahkan ; di ujung perintah. Itu tanda buat Asa bahwa satu kalimat SQL sudah selesai.';
   if (/Kurung buka belum ditutup|opening parenthesis/i.test(text)) return 'Ada kurung buka yang belum ditutup. Cari daftar kolom, VALUES, atau kondisi yang belum punya pasangan ).';
@@ -950,6 +1907,8 @@ function asaCorrectionDetail(item) {
 
 function asaSuccessDetail(message) {
   const text = asaCleanMessage(message);
+  if (currentLanguage === 'en') return asaSuccessDetailEnglish(text);
+  if (currentLanguage === 'ja') return asaSuccessDetailJapanese(text);
   let match;
 
   if ((match = /^created_database\(([^)]+)\)/i.exec(text))) return `Database ${asaCode(match[1])} sudah dibuat dan siap dipakai.`;
@@ -974,6 +1933,48 @@ function asaSuccessDetail(message) {
   if ((match = /^batch_completed\(([^)]+)\)/i.exec(text))) return `Batch selesai. ${match[1]} berhasil dilewati.`;
   if (/^ok$/i.test(text) || /^done$/i.test(text)) return 'Perintah selesai dan tidak ada yang protes.';
   return text ? `Perintah selesai. Catatan Asa: ${text}` : 'Perintah selesai dan database tetap tenang.';
+}
+
+function asaSuccessDetailEnglish(text) {
+  let match;
+  if ((match = /^created_database\(([^)]+)\)/i.exec(text))) return `Database ${asaCode(match[1])} was created and is ready.`;
+  if ((match = /^using_database\(([^)]+)\)/i.exec(text))) return `Asa is now working in database ${asaCode(match[1])}.`;
+  if ((match = /^dropped_database\(([^)]+)\)/i.exec(text))) return `Database ${asaCode(match[1])} was dropped.`;
+  if ((match = /^created_table\(([^)]+)\)/i.exec(text))) return `Table ${asaCode(match[1])} was created.`;
+  if ((match = /^altered_table\(([^)]+)\)/i.exec(text))) return `Table ${asaCode(match[1])} was updated.`;
+  if ((match = /^dropped_table\(([^)]+)\)/i.exec(text))) return `Table ${asaCode(match[1])} was removed from the active database.`;
+  if ((match = /^truncated_table\(([^)]+)\)/i.exec(text))) return `Rows in ${asaCode(match[1])} were cleared while its structure was kept.`;
+  if ((match = /^(inserted|updated|deleted)\(([^,]+),\s*([^)]+)\)/i.exec(text))) return `${match[3]} row(s) were ${match[1]} in ${asaCode(match[2])}.`;
+  if ((match = /^created_index\(([^,]+),\s*([^)]+)\)/i.exec(text))) return `Index ${asaCode(match[1])} was created for ${asaCode(match[2])}.`;
+  if ((match = /^created_view\(([^)]+)\)/i.exec(text))) return `View ${asaCode(match[1])} was created.`;
+  if ((match = /^dropped_view\(([^)]+)\)/i.exec(text))) return `View ${asaCode(match[1])} was dropped.`;
+  if (/^committed|commit$/i.test(text)) return 'The transaction was committed and its changes are durable.';
+  if (/^rolled_back|rollback$/i.test(text)) return 'The transaction was rolled back safely.';
+  if (/^started_transaction|begin|start_transaction$/i.test(text)) return 'The transaction started. Asa is waiting for COMMIT or ROLLBACK.';
+  if ((match = /^batch_completed\(([^)]+)\)/i.exec(text))) return `The batch completed with ${match[1]} successful step(s).`;
+  if (/^ok$|^done$/i.test(text)) return 'The command completed successfully.';
+  return text ? `The command completed. Asa note: ${text}` : 'The command completed and the database is calm.';
+}
+
+function asaSuccessDetailJapanese(text) {
+  let match;
+  if ((match = /^created_database\(([^)]+)\)/i.exec(text))) return `データベース ${asaCode(match[1])} を作成し、使用できる状態になりました。`;
+  if ((match = /^using_database\(([^)]+)\)/i.exec(text))) return `現在、アサはデータベース ${asaCode(match[1])} を使用しています。`;
+  if ((match = /^dropped_database\(([^)]+)\)/i.exec(text))) return `データベース ${asaCode(match[1])} を削除しました。`;
+  if ((match = /^created_table\(([^)]+)\)/i.exec(text))) return `テーブル ${asaCode(match[1])} を作成しました。`;
+  if ((match = /^altered_table\(([^)]+)\)/i.exec(text))) return `テーブル ${asaCode(match[1])} を更新しました。`;
+  if ((match = /^dropped_table\(([^)]+)\)/i.exec(text))) return `現在のデータベースからテーブル ${asaCode(match[1])} を削除しました。`;
+  if ((match = /^truncated_table\(([^)]+)\)/i.exec(text))) return `${asaCode(match[1])} の構造を残し、全行を削除しました。`;
+  if ((match = /^(inserted|updated|deleted)\(([^,]+),\s*([^)]+)\)/i.exec(text))) return `${asaCode(match[2])} で ${match[3]} 行の処理が完了しました。`;
+  if ((match = /^created_index\(([^,]+),\s*([^)]+)\)/i.exec(text))) return `${asaCode(match[2])} にインデックス ${asaCode(match[1])} を作成しました。`;
+  if ((match = /^created_view\(([^)]+)\)/i.exec(text))) return `ビュー ${asaCode(match[1])} を作成しました。`;
+  if ((match = /^dropped_view\(([^)]+)\)/i.exec(text))) return `ビュー ${asaCode(match[1])} を削除しました。`;
+  if (/^committed|commit$/i.test(text)) return 'トランザクションをコミットし、変更を永続化しました。';
+  if (/^rolled_back|rollback$/i.test(text)) return 'トランザクションを安全にロールバックしました。';
+  if (/^started_transaction|begin|start_transaction$/i.test(text)) return 'トランザクションを開始しました。COMMIT または ROLLBACK を待っています。';
+  if ((match = /^batch_completed\(([^)]+)\)/i.exec(text))) return `バッチが完了し、${match[1]} ステップ成功しました。`;
+  if (/^ok$|^done$/i.test(text)) return 'コマンドは正常に完了しました。';
+  return text ? `コマンドが完了しました。アサからのメモ: ${text}` : 'コマンドが完了し、データベースは正常です。';
 }
 
 function asaDiagnosticCopy(item) {
@@ -1077,6 +2078,22 @@ function setSqlDiagnostics(items) {
   renderSqlLineNumbers(sqlInput.value);
 }
 
+function countSqlLines(sql) {
+  let count = 1;
+  let index = -1;
+  while ((index = sql.indexOf('\n', index + 1)) !== -1) count += 1;
+  return count;
+}
+
+function measureSqlEditor(sql) {
+  const textLength = sql.length;
+  if (textLength >= LARGE_SQL_EDITOR_CHAR_LIMIT) {
+    return { lineCount: countSqlLines(sql), large: true, textLength };
+  }
+  const lineCount = countSqlLines(sql);
+  return { lineCount, large: lineCount >= LARGE_SQL_EDITOR_LINE_LIMIT, textLength };
+}
+
 function renderSqlDiagnostics() {
   const items = sqlDiagnosticsState.filter(item => item.severity === 'error' || item.severity === 'warning');
   sqlEditor.classList.toggle('has-error', items.some(item => item.severity === 'error'));
@@ -1087,7 +2104,7 @@ function renderSqlDiagnostics() {
   sqlDiagnostics.innerHTML = items.slice(0, 6).map(item => `
     <div class="sql-diagnostic ${item.severity}">
       <strong>${escapeHtml(item.severity === 'error' ? ASA_ERROR_LABEL : ASA_CORRECTION_LABEL)}</strong>
-      <span><span class="diagnostic-line">Line ${item.line}</span> ${escapeHtml(asaDiagnosticCopy(item))}</span>
+      <span><span class="diagnostic-line">${escapeHtml(t('result.line'))} ${item.line}</span> ${escapeHtml(asaDiagnosticCopy(item))}</span>
     </div>
   `).join('');
 }
@@ -1098,24 +2115,73 @@ function renderSqlLineNumbers(sql) {
     if (item.severity === 'error') severityByLine[item.line] = 'error';
     else if (!severityByLine[item.line]) severityByLine[item.line] = 'warning';
   }
-  const lines = Math.max(1, sql.split('\n').length);
-  sqlLineNumbers.innerHTML = Array.from({ length: lines }, (_, index) => {
-    const line = index + 1;
+  const lines = sqlEditorMetrics.textLength === sql.length
+    ? sqlEditorMetrics.lineCount
+    : countSqlLines(sql);
+  let firstLine = 1;
+  let lastLine = lines;
+  if (sqlEditorMetrics.large) {
+    const visibleLines = Math.ceil((sqlInput.clientHeight || 420) / SQL_EDITOR_LINE_HEIGHT) + 16;
+    firstLine = Math.max(1, Math.floor(sqlInput.scrollTop / SQL_EDITOR_LINE_HEIGHT) - 7);
+    lastLine = Math.min(lines, firstLine + visibleLines);
+    sqlLineNumbersContent.style.paddingTop = `${12 + ((firstLine - 1) * SQL_EDITOR_LINE_HEIGHT)}px`;
+    sqlLineNumbersContent.style.paddingBottom = `${12 + ((lines - lastLine) * SQL_EDITOR_LINE_HEIGHT)}px`;
+  } else {
+    sqlLineNumbersContent.style.paddingTop = '';
+    sqlLineNumbersContent.style.paddingBottom = '';
+  }
+  const numbers = [];
+  for (let line = firstLine; line <= lastLine; line += 1) {
     const severity = severityByLine[line] || '';
-    return `<span class="${severity}">${line}</span>`;
-  }).join('');
+    numbers.push(`<span class="${severity}">${line}</span>`);
+  }
+  sqlLineNumbersContent.innerHTML = numbers.join('');
 }
 
 function syncSqlScroll() {
   sqlHighlight.scrollTop = sqlInput.scrollTop;
   sqlHighlight.scrollLeft = sqlInput.scrollLeft;
+  if (sqlEditorMetrics.large) {
+    cancelAnimationFrame(sqlLineRenderFrame);
+    sqlLineRenderFrame = requestAnimationFrame(() => renderSqlLineNumbers(sqlInput.value));
+  }
   sqlLineNumbers.scrollTop = sqlInput.scrollTop;
 }
 
-function updateSqlEditor() {
-  sqlHighlight.innerHTML = highlightSql(sqlInput.value);
-  renderSqlLineNumbers(sqlInput.value);
+function sqlCaretScrollTarget() {
+  const caret = sqlInput.selectionStart ?? sqlInput.value.length;
+  const line = lineNumberAtIndex(sqlInput.value, caret);
+  const viewport = sqlInput.clientHeight || 420;
+  const target = ((line - 1) * SQL_EDITOR_LINE_HEIGHT) - (viewport * 0.45);
+  const max = Math.max(0, sqlInput.scrollHeight - viewport);
+  return Math.max(0, Math.min(max, target));
+}
+
+function restoreSqlViewport(top, left, frames = 2) {
+  cancelAnimationFrame(sqlScrollRestoreFrame);
+  const apply = (remaining) => {
+    sqlInput.scrollTop = Math.max(0, Number(top) || 0);
+    sqlInput.scrollLeft = Math.max(0, Number(left) || 0);
+    syncSqlScroll();
+    if (remaining > 0) sqlScrollRestoreFrame = requestAnimationFrame(() => apply(remaining - 1));
+  };
+  apply(frames);
+}
+
+function updateSqlEditor(options = {}) {
+  const requestedTop = Number.isFinite(options.scrollTop) ? options.scrollTop : sqlInput.scrollTop;
+  const requestedLeft = Number.isFinite(options.scrollLeft) ? options.scrollLeft : sqlInput.scrollLeft;
+  const sql = sqlInput.value;
+  sqlEditorMetrics = measureSqlEditor(sql);
+  sqlEditor.classList.toggle('large-script', sqlEditorMetrics.large);
+  if (sqlEditorMetrics.large) sqlHighlight.textContent = '';
+  else sqlHighlight.innerHTML = highlightSql(sql);
+  renderSqlLineNumbers(sql);
+  sqlInput.scrollTop = requestedTop;
+  sqlInput.scrollLeft = requestedLeft;
   syncSqlScroll();
+  if (options.persistScroll) restoreSqlViewport(requestedTop, requestedLeft);
+  return sqlEditorMetrics;
 }
 
 function setSqlText(text, analyze = true) {
@@ -1126,11 +2192,20 @@ function setSqlText(text, analyze = true) {
 
 function scheduleSqlAnalysis() {
   clearTimeout(sqlAnalyzeTimer);
+  if (sqlEditorMetrics.large) {
+    sqlAnalyzeRequest += 1;
+    setSqlDiagnostics([]);
+    return;
+  }
   sqlAnalyzeTimer = setTimeout(() => refreshSqlDiagnostics(true), 420);
 }
 
 async function refreshSqlDiagnostics(useBackend = true) {
   const sql = sqlInput.value;
+  if (sqlEditorMetrics.large || sql.length >= LARGE_SQL_EDITOR_CHAR_LIMIT) {
+    setSqlDiagnostics([]);
+    return [];
+  }
   const requestId = ++sqlAnalyzeRequest;
   let diagnostics = analyzeSqlClient(sql);
 
@@ -1148,10 +2223,7 @@ async function refreshSqlDiagnostics(useBackend = true) {
         diagnostics = dedupeDiagnostics([...diagnostics, ...(data.diagnostics || [])]);
       }
     } catch (err) {
-      backendOnline = false;
-      engineStatus.textContent = 'Mode: browser sandbox';
-      engineStatus.className = 'status warn';
-      log(`Analyzer fallback: ${err.message}`);
+      log(t('log.analyzerFallback', { error: err.message }));
     }
   }
 
@@ -1180,6 +2252,450 @@ async function executeBackendSql(sql, options = {}) {
   if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
   if (options.sync !== false) await syncBackendStateSmart();
   return data;
+}
+
+async function executeBackendSqlPage(sql, offset = 0) {
+  const body = new URLSearchParams({
+    sql,
+    offset: String(Math.max(0, Number(offset) || 0)),
+  });
+  const res = await fetch('/api/query', {
+    method: 'POST',
+    headers: apiHeaders({ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }),
+    body,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+  return data;
+}
+
+function createSqlExecutionPlan(sql) {
+  const text = String(sql || '');
+  const containsWrite = /\b(?:create|drop|alter|truncate|insert|update|delete|replace|grant|revoke)\b/i.test(text);
+  const statements = containsWrite ? null : splitStatementsDetailed(text);
+  return {
+    mode: containsWrite || text.length > 250000 ? 'reservoir' : 'direct',
+    statements,
+    statementCount: statements?.length ?? null,
+  };
+}
+
+async function executeBackendSqlStreamed(sql, options = {}) {
+  const body = new Blob([sql], { type: 'application/sql;charset=UTF-8' });
+  return submitReservoirPayload(body, {
+    ...options,
+    label: options.label || 'SQL command',
+    kind: options.kind || 'sql',
+  });
+}
+
+function makeReservoirIdempotencyKey(prefix = 'job') {
+  const browserCrypto = window.crypto || window.msCrypto;
+  const suffix = browserCrypto && typeof browserCrypto.randomUUID === 'function'
+    ? browserCrypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${suffix}`;
+}
+
+function reservoirStatusText(status) {
+  switch (String(status || '').toLowerCase()) {
+    case 'receiving': return t('state.receiving');
+    case 'queued': return t('state.queued');
+    case 'processing': return t('state.processing');
+    case 'cancelling': return t('state.cancelling');
+    case 'completed': return t('state.completed');
+    case 'delivered': return t('state.delivered');
+    case 'failed': return t('state.failed');
+    case 'cancelled': return t('state.cancelled');
+    case 'interrupted': return t('state.interrupted');
+    case 'reconnecting': return t('state.reconnecting');
+    default: return String(status || t('state.waiting'));
+  }
+}
+
+function reservoirJobIsTerminal(job) {
+  if (!job) return false;
+  return job.done === true || ['completed', 'delivered', 'failed', 'cancelled', 'interrupted'].includes(String(job.status || '').toLowerCase());
+}
+
+function reservoirJobPercent(job) {
+  if (!job) return 0;
+  if (job.result_available || ['completed', 'delivered'].includes(String(job.status || '').toLowerCase())) return 100;
+  const reported = Number(job.progress_percent);
+  if (Number.isFinite(reported)) return Math.max(0, Math.min(100, Math.round(reported)));
+  const completed = Number(job.processed_bytes) || 0;
+  const total = Number(job.size_bytes) || 0;
+  return total ? Math.max(0, Math.min(100, Math.round((completed / total) * 100))) : 0;
+}
+
+function loadActiveReservoirDescriptor() {
+  try {
+    const descriptor = JSON.parse(localStorage.getItem(ACTIVE_RESERVOIR_STORAGE_KEY) || 'null');
+    if (!descriptor || typeof descriptor.id !== 'string' || !descriptor.id) return null;
+    return descriptor;
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveActiveReservoirDescriptor(descriptor) {
+  try {
+    localStorage.setItem(ACTIVE_RESERVOIR_STORAGE_KEY, JSON.stringify(descriptor));
+  } catch (_) {
+    // Reload recovery can still fall back to the backend active-job list.
+  }
+}
+
+function clearActiveReservoirDescriptor(jobId = '') {
+  try {
+    const stored = loadActiveReservoirDescriptor();
+    if (!jobId || !stored || stored.id === jobId) localStorage.removeItem(ACTIVE_RESERVOIR_STORAGE_KEY);
+  } catch (_) {}
+}
+
+function normalizeReservoirDescriptor(jobId, options = {}, job = null) {
+  const supplied = options.descriptor || {};
+  const stored = loadActiveReservoirDescriptor();
+  const previous = stored && stored.id === jobId ? stored : {};
+  return {
+    id: jobId,
+    label: options.label || supplied.label || job?.label || previous.label || 'Reservoir',
+    kind: options.kind || supplied.kind || previous.kind || 'reservoir',
+    sizeBytes: Number(options.sizeBytes ?? supplied.sizeBytes ?? job?.size_bytes ?? previous.sizeBytes) || 0,
+    startedAt: supplied.startedAt || previous.startedAt || new Date().toISOString(),
+  };
+}
+
+function updateImportControls() {
+  const busy = Boolean(importOperationPromise || activeReservoirJobId);
+  importExecuteBtn.disabled = busy;
+  importRunServerBtn.disabled = busy;
+  importFileInput.disabled = busy;
+}
+
+function renderReservoirJob(job = lastReservoirSnapshot) {
+  if (!importProgressPanel) return;
+  if (!job && !activeReservoirJobId) {
+    importProgressPanel.hidden = true;
+    importCancelBtn.disabled = true;
+    importCancelBtn.textContent = t('import.cancel');
+    updateImportControls();
+    return;
+  }
+
+  if (job) lastReservoirSnapshot = job;
+  const snapshot = job || lastReservoirSnapshot || {};
+  const descriptor = activeReservoirDescriptor || loadActiveReservoirDescriptor() || {};
+  const percent = reservoirJobPercent(snapshot);
+  const status = reservoirStatusText(snapshot.status);
+  const message = String(snapshot.message || '').trim() || '-';
+  const statements = Number(snapshot.statements) || 0;
+  const terminal = reservoirJobIsTerminal(snapshot);
+  const cancelPending = Boolean(activeReservoirJobId) && !terminal && Boolean(reservoirCancelPromise || snapshot.cancel_requested || snapshot.status === 'cancelling');
+  const canCancel = Boolean(activeReservoirJobId) && !terminal && !cancelPending;
+
+  importProgressPanel.hidden = false;
+  importProgressLabel.textContent = snapshot.label || descriptor.label || 'Reservoir';
+  importProgressPercent.textContent = `${percent}%`;
+  importProgressBar.value = percent;
+  importProgressBar.textContent = `${percent}%`;
+  importProgressStatus.textContent = t('import.jobStatus', {
+    status,
+    count: formatNumber(statements),
+    message,
+  });
+  importCancelBtn.disabled = !canCancel;
+  importCancelBtn.textContent = t(cancelPending ? 'import.cancelling' : 'import.cancel');
+  updateImportControls();
+}
+
+function activateReservoirJob(jobId, options = {}, job = null) {
+  if (!jobId) return null;
+  activeReservoirJobId = jobId;
+  activeReservoirDescriptor = normalizeReservoirDescriptor(jobId, options, job);
+  saveActiveReservoirDescriptor(activeReservoirDescriptor);
+  const snapshot = job || {
+    id: jobId,
+    label: activeReservoirDescriptor.label,
+    status: options.status || 'queued',
+    size_bytes: activeReservoirDescriptor.sizeBytes,
+    processed_bytes: 0,
+    statements: 0,
+    result_available: false,
+    done: false,
+    message: options.message || '',
+  };
+  renderReservoirJob(snapshot);
+  requestMetadataRefreshDuringJob();
+  return activeReservoirDescriptor;
+}
+
+function finishReservoirJob(jobId, job) {
+  if (job) renderReservoirJob(job);
+  if (activeReservoirJobId === jobId) {
+    activeReservoirJobId = '';
+    activeReservoirDescriptor = null;
+  }
+  clearActiveReservoirDescriptor(jobId);
+  updateImportControls();
+  scheduleMetadataPoll(0);
+}
+
+function reservoirHttpError(response, payload) {
+  const error = new Error(payload?.message || `HTTP ${response.status}`);
+  error.httpStatus = response.status;
+  return error;
+}
+
+async function submitReservoirPayload(payload, options = {}) {
+  const idempotencyKey = options.idempotencyKey || makeReservoirIdempotencyKey('reservoir');
+  const res = await fetch('/api/reservoir/jobs', {
+    method: 'POST',
+    headers: apiHeaders({
+      'Content-Type': options.contentType || 'application/sql;charset=UTF-8',
+      'X-AsaDB-Idempotency-Key': idempotencyKey,
+      'X-AsaDB-Job-Label': options.label || 'SQL command',
+      'X-AsaDB-Stop-On-Error': options.stopOnError === false ? 'false' : 'true',
+    }),
+    body: payload,
+  });
+  const admission = await res.json();
+  if (!res.ok) throw new Error(admission.message || `HTTP ${res.status}`);
+  activateReservoirJob(admission.job_id, {
+    ...options,
+    idempotencyKey,
+    sizeBytes: admission.job?.size_bytes || payload?.size || 0,
+  }, admission.job || null);
+  return waitForReservoirJob(admission.job_id, options);
+}
+
+async function startReservoirFile(path, options = {}) {
+  const body = new URLSearchParams({
+    path,
+    idempotency_key: options.idempotencyKey || makeReservoirIdempotencyKey('file'),
+    stop_on_error: options.stopOnError === false ? 'false' : 'true',
+  });
+  const res = await fetch('/api/reservoir/file', {
+    method: 'POST',
+    headers: apiHeaders({ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }),
+    body,
+  });
+  const admission = await res.json();
+  if (!res.ok) throw new Error(admission.message || `HTTP ${res.status}`);
+  activateReservoirJob(admission.job_id, {
+    ...options,
+    kind: options.kind || 'import-file',
+    label: options.label || path,
+    sizeBytes: admission.size_bytes || admission.job?.size_bytes || 0,
+  }, admission.job || null);
+  return waitForReservoirJob(admission.job_id, options);
+}
+
+async function waitForReservoirJob(jobId, options = {}) {
+  activateReservoirJob(jobId, options);
+  let retryCount = 0;
+  while (true) {
+    try {
+      const res = await fetch(`/api/reservoir/job?id=${encodeURIComponent(jobId)}`, {
+        cache: 'no-store',
+        headers: apiHeaders(),
+      });
+      const job = await res.json();
+      if (!res.ok) throw reservoirHttpError(res, job);
+      retryCount = 0;
+      renderReservoirJob(job);
+      options.onProgress?.({
+        completed: Number(job.processed_bytes) || 0,
+        total: Number(job.size_bytes) || 0,
+        statements: Number(job.statements) || 0,
+        label: job.message || job.status || 'Reservoir',
+        status: job.status,
+      });
+      requestMetadataRefreshDuringJob();
+      if (job.result_available) {
+        const data = await fetchReservoirResult(jobId, job);
+        finishReservoirJob(jobId, { ...job, done: true, progress_percent: 100 });
+        return data;
+      }
+      if (['failed', 'cancelled', 'interrupted'].includes(job.status)) {
+        const error = new Error(job.message || `Reservoir job ${job.status}`);
+        error.reservoirStatus = job.status;
+        finishReservoirJob(jobId, job);
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, RESERVOIR_POLL_INTERVAL_MS));
+    } catch (err) {
+      if (err.reservoirStatus) throw err;
+      if (err.httpStatus === 404 || err.httpStatus === 410) {
+        finishReservoirJob(jobId, {
+          ...(lastReservoirSnapshot || {}),
+          id: jobId,
+          status: 'interrupted',
+          done: true,
+          message: err.message,
+        });
+        throw err;
+      }
+      retryCount += 1;
+      renderReservoirJob({
+        ...(lastReservoirSnapshot || {}),
+        id: jobId,
+        label: activeReservoirDescriptor?.label || lastReservoirSnapshot?.label || 'Reservoir',
+        status: 'reconnecting',
+        done: false,
+        message: err.message,
+      });
+      await new Promise(resolve => setTimeout(resolve, Math.min(5000, 300 * (2 ** Math.min(retryCount, 4)))));
+    }
+  }
+}
+
+async function fetchReservoirResult(jobId, job) {
+  const res = await fetch(`/api/reservoir/result?id=${encodeURIComponent(jobId)}`, {
+    cache: 'no-store',
+    headers: apiHeaders(),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+  const allResults = data.results || [data];
+  return { ...data, allResults, statementCount: Number(job.statements) || allResults.length };
+}
+
+async function cancelActiveReservoirJob() {
+  if (reservoirCancelPromise) return reservoirCancelPromise;
+  const jobId = activeReservoirJobId;
+  if (!jobId) return null;
+
+  reservoirCancelPromise = (async () => {
+    const res = await fetch(`/api/reservoir/cancel?id=${encodeURIComponent(jobId)}`, {
+      method: 'POST',
+      headers: apiHeaders(),
+    });
+    const snapshot = await res.json();
+    if (!res.ok) throw reservoirHttpError(res, snapshot);
+    renderReservoirJob(snapshot);
+    importSummary.textContent = t('import.cancelRequested');
+    requestMetadataRefreshDuringJob();
+    return snapshot;
+  })();
+  renderReservoirJob(lastReservoirSnapshot);
+
+  try {
+    return await reservoirCancelPromise;
+  } catch (err) {
+    log(t('log.reservoirCancelFailed', { error: err.message }));
+    importSummary.textContent = `${ASA_ERROR_LABEL}: ${asaErrorCopy(err.message)}`;
+    return null;
+  } finally {
+    reservoirCancelPromise = null;
+    renderReservoirJob(lastReservoirSnapshot);
+  }
+}
+
+async function fetchReservoirJobSnapshot(jobId) {
+  const res = await fetch(`/api/reservoir/job?id=${encodeURIComponent(jobId)}`, {
+    cache: 'no-store',
+    headers: apiHeaders(),
+  });
+  const job = await res.json();
+  if (!res.ok) throw reservoirHttpError(res, job);
+  return job;
+}
+
+async function discoverActiveReservoirJob() {
+  const stored = loadActiveReservoirDescriptor();
+  if (stored) {
+    try {
+      const job = await fetchReservoirJobSnapshot(stored.id);
+      if (!reservoirJobIsTerminal(job) || job.result_available) return { job, descriptor: stored };
+      lastReservoirSnapshot = job;
+      renderReservoirJob(job);
+      clearActiveReservoirDescriptor(stored.id);
+    } catch (err) {
+      if (err.httpStatus !== 404 && err.httpStatus !== 410) {
+        return {
+          job: {
+            id: stored.id,
+            label: stored.label,
+            status: 'reconnecting',
+            size_bytes: stored.sizeBytes || 0,
+            done: false,
+            message: err.message,
+          },
+          descriptor: stored,
+        };
+      }
+      clearActiveReservoirDescriptor(stored.id);
+    }
+  }
+
+  try {
+    const res = await fetch('/api/reservoir/jobs', { cache: 'no-store', headers: apiHeaders() });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const jobs = Array.isArray(data.jobs) ? data.jobs : [];
+    const job = jobs.find(candidate => !reservoirJobIsTerminal(candidate));
+    if (!job) return null;
+    return { job, descriptor: normalizeReservoirDescriptor(job.id, {}, job) };
+  } catch (_) {
+    return null;
+  }
+}
+
+async function finalizeResumedReservoirJob(data, descriptor) {
+  const results = data.results || [data];
+  renderResults(results);
+  addRuntimeDiagnostics(results);
+  const statementCount = Number(data.statementCount) || 0;
+  setLastRunKey('progress.backendSteps', { count: statementCount });
+  await Promise.all([
+    syncBackendStateSmart().catch(() => syncCatalogFromBackend().catch(() => false)),
+    refreshDatabaseMetadata().catch(() => null),
+  ]);
+  renderTableBrowser();
+  const tableResult = results.find(result => result.status === 'table');
+  noteArchiveImportComplete(
+    descriptor.label,
+    descriptor.sizeBytes || 0,
+    tableResult?.columns || ['status'],
+    tableResult?.rows || [],
+    statementCount,
+  );
+  const summary = t('import.resumedComplete', {
+    name: descriptor.label,
+    count: formatNumber(statementCount),
+  });
+  importSummary.textContent = summary;
+  log(summary);
+}
+
+function resumeActiveReservoirJob() {
+  if (reservoirResumePromise) return reservoirResumePromise;
+  if (activeReservoirJobId) return Promise.resolve(null);
+  reservoirResumePromise = (async () => {
+    const recovered = await discoverActiveReservoirJob();
+    if (!recovered) return null;
+    const { job, descriptor } = recovered;
+    activateReservoirJob(job.id, { descriptor }, job);
+    importSummary.textContent = t('import.resumed', { name: descriptor.label });
+    log(t('log.reservoirResumed', { name: descriptor.label }));
+    try {
+      const data = await waitForReservoirJob(job.id, { descriptor });
+      await finalizeResumedReservoirJob(data, descriptor);
+      return data;
+    } catch (err) {
+      if (err.reservoirStatus === 'cancelled') {
+        importSummary.textContent = t('import.cancelled');
+      } else {
+        importSummary.textContent = `${ASA_ERROR_LABEL}: ${asaErrorCopy(err.message)}`;
+        log(t('log.reservoirMonitorFailed', { error: err.message }));
+      }
+      return null;
+    }
+  })().finally(() => {
+    reservoirResumePromise = null;
+  });
+  return reservoirResumePromise;
 }
 
 async function saveBackendDatabase(db = currentDbName()) {
@@ -1215,6 +2731,18 @@ function hasResultError(data) {
   return (data?.results || [data]).some(result => result?.status === 'error');
 }
 
+async function backendListContains(sql, expectedName) {
+  const data = await executeBackendSql(sql, { sync: false });
+  if (hasResultError(data)) {
+    const error = (data.results || []).find(result => result?.status === 'error');
+    throw new Error(error?.message || 'backend verification failed');
+  }
+  const table = (data.results || [data]).find(result => result?.status === 'table');
+  if (!table) throw new Error('backend verification returned no table');
+  const target = String(expectedName).toLowerCase();
+  return (table.rows || []).some(row => (row || []).some(value => String(value).toLowerCase() === target));
+}
+
 function resultSetHasError(data) {
   const results = data?.allResults || data?.results || [data];
   return results.some(result => result?.status === 'error');
@@ -1230,90 +2758,81 @@ function chooseAsaRunSound(kind) {
   return list[index];
 }
 
-function asaRunAudioList(kind) {
-  if (typeof Audio === 'undefined') return [];
-  if (!asaRunAudioCache[kind]?.length) {
-    asaRunAudioCache[kind] = (ASA_RUN_SOUNDS[kind] || []).map(src => {
-      const audio = new Audio(src);
-      audio.preload = 'auto';
-      audio.volume = 0.72;
-      return audio;
-    });
+function getAsaRunAudioChannel() {
+  if (typeof Audio === 'undefined') return null;
+  if (!asaRunAudioChannel) {
+    asaRunAudioChannel = new Audio();
+    asaRunAudioChannel.preload = 'auto';
+    asaRunAudioChannel.volume = 0.72;
   }
-  return asaRunAudioCache[kind];
+  return asaRunAudioChannel;
 }
 
 function primeAsaRunSounds() {
   if (typeof Audio === 'undefined') return Promise.resolve();
   if (asaRunPrimePromise) return asaRunPrimePromise;
-  asaRunAudioList('ok');
-  asaRunAudioList('error');
   const source = ASA_RUN_SOUNDS.ok[0] || ASA_RUN_SOUNDS.error[0];
-  const audio = source ? new Audio(source) : null;
+  const audio = source ? getAsaRunAudioChannel() : null;
   if (!audio) return Promise.resolve();
-  asaRunPrimeAudio = audio;
+  const generation = ++asaRunAudioGeneration;
   try {
+    audio.pause();
+    audio.src = source;
     audio.muted = true;
     audio.volume = 0;
     audio.currentTime = 0;
     const played = audio.play();
-    asaRunPrimePromise = Promise.resolve(played).then(() => {
+    let primePromise;
+    primePromise = Promise.resolve(played).then(() => {
+        if (asaRunAudioGeneration !== generation) return;
         audio.pause();
         audio.currentTime = 0;
       }).catch(() => {
         // Some browsers unlock media only after the first completed gesture.
       }).finally(() => {
-        asaRunPrimeAudio = null;
+        if (asaRunPrimePromise === primePromise) asaRunPrimePromise = null;
       });
+    asaRunPrimePromise = primePromise;
   } catch (_) {
-    asaRunPrimeAudio = null;
     asaRunPrimePromise = Promise.resolve();
   }
   return asaRunPrimePromise;
 }
 
 function stopAsaRunSounds() {
-  if (asaRunPrimeAudio) {
-    try {
-      asaRunPrimeAudio.pause();
-      asaRunPrimeAudio.currentTime = 0;
-    } catch (_) {}
-    asaRunPrimeAudio = null;
-  }
-  for (const list of Object.values(asaRunAudioCache)) {
-    for (const audio of list) {
-      try {
-        audio.pause();
-        audio.currentTime = 0;
-      } catch (_) {}
-    }
-  }
-  activeRunAudio = null;
+  asaRunAudioGeneration += 1;
+  if (!asaRunAudioChannel) return;
+  try {
+    asaRunAudioChannel.pause();
+    asaRunAudioChannel.currentTime = 0;
+    asaRunAudioChannel.muted = false;
+  } catch (_) {}
 }
 
 function playAsaRunSound(kind) {
   if (typeof Audio === 'undefined') return;
   const src = chooseAsaRunSound(kind);
-  const list = asaRunAudioList(kind);
-  const audio = list.find(item => item.src.endsWith(src));
+  const audio = getAsaRunAudioChannel();
   if (!audio) return;
   stopAsaRunSounds();
-  activeRunAudio = audio;
+  const generation = asaRunAudioGeneration;
   try {
+    audio.src = src;
     audio.currentTime = 0;
     audio.muted = false;
     audio.volume = 0.72;
+    audio.onended = () => {
+      if (asaRunAudioGeneration === generation) audio.currentTime = 0;
+    };
     const played = audio.play();
     if (played && typeof played.catch === 'function') {
-      played.catch(() => {
-        if (activeRunAudio === audio) activeRunAudio = null;
-      });
+      played.catch(() => {});
     }
   } catch (_) {}
 }
 
 async function executeBackendSqlBatched(sql, options = {}) {
-  const statements = splitStatementsDetailed(sql).flatMap(stmt =>
+  const statements = options.statements || splitStatementsDetailed(sql).flatMap(stmt =>
     expandOversizedStatement(stmt.text).map(text => ({ ...stmt, text }))
   );
   const chunks = buildBackendSqlChunks(statements);
@@ -1371,7 +2890,7 @@ async function executeBackendSqlBatched(sql, options = {}) {
   return { results: compactBatchResults(filtered, allResults), allResults, statementCount: statements.length };
 }
 
-function buildBackendSqlChunks(statements, limit = 60000) {
+function buildBackendSqlChunks(statements, limit = 200000) {
   const chunks = [];
   let batch = [];
   let length = 0;
@@ -1418,7 +2937,7 @@ function statementBody(text) {
     .trim();
 }
 
-function expandOversizedStatement(text, limit = 60000) {
+function expandOversizedStatement(text, limit = 200000) {
   const source = String(text || '').trim();
   if (source.length <= limit) return [source];
   const body = statementBody(source);
@@ -1466,9 +2985,103 @@ async function syncCatalogFromBackend() {
   return syncSandboxFromCatalogData(data);
 }
 
+function refreshDatabaseMetadata() {
+  if (!backendOnline) {
+    lastDatabaseMetadata = null;
+    renderDatabaseMetadata(null);
+    return Promise.resolve(null);
+  }
+  if (metadataRefreshPromise) return metadataRefreshPromise;
+  metadataRefreshPromise = (async () => {
+    const res = await fetch('/api/metadata', { cache: 'no-store', headers: apiHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const metadata = await res.json();
+    lastDatabaseMetadata = metadata;
+    lastMetadataRefreshAt = Date.now();
+    renderDatabaseMetadata(metadata);
+    return metadata;
+  })().finally(() => {
+    metadataRefreshPromise = null;
+  });
+  return metadataRefreshPromise;
+}
+
+function metadataPollInterval() {
+  if (activeReservoirJobId) return METADATA_ACTIVE_POLL_INTERVAL_MS;
+  if (dbMetadataPanel?.open) return METADATA_OPEN_POLL_INTERVAL_MS;
+  return METADATA_IDLE_POLL_INTERVAL_MS;
+}
+
+function scheduleMetadataPoll(delay = metadataPollInterval()) {
+  clearTimeout(metadataPollTimer);
+  metadataPollTimer = setTimeout(async () => {
+    if (backendOnline && document.visibilityState !== 'hidden') {
+      try {
+        await refreshDatabaseMetadata();
+      } catch (_) {
+        // Keep the last good snapshot; the next adaptive poll retries.
+      }
+    }
+    scheduleMetadataPoll(metadataPollInterval());
+  }, Math.max(0, delay));
+}
+
+function requestMetadataRefreshDuringJob() {
+  if (!backendOnline) return;
+  const elapsed = Date.now() - lastMetadataRefreshAt;
+  scheduleMetadataPoll(Math.max(0, METADATA_ACTIVE_POLL_INTERVAL_MS - elapsed));
+}
+
+function renderDatabaseMetadata(metadata) {
+  if (!dbMetadataPanel) return;
+  if (!metadata) {
+    metadataState.textContent = backendOnline ? t('state.unavailable') : t('state.offline');
+    for (const node of [metadataEngine, metadataIdentity, metadataObjects, metadataRows, metadataStorage, metadataCache, metadataReservoir, metadataCheckpoint]) {
+      node.textContent = '-';
+    }
+    return;
+  }
+  const summary = metadata.summary || {};
+  const persistence = metadata.persistence || {};
+  const pager = metadata.storage?.pager || {};
+  const pool = pager.buffer_pool || {};
+  const reservoir = metadata.reservoir || {};
+  const dirty = Boolean(persistence.checkpoint_dirty || persistence.transaction_active);
+  metadataState.textContent = dirty ? t('state.pending') : t('state.durable');
+  metadataEngine.textContent = `v${metadata.engine_version || '?'} / format ${metadata.storage_format || summary.storage_format || '?'}`;
+  metadataIdentity.textContent = metadata.database_id || '-';
+  metadataObjects.textContent = t('metadata.objectsValue', {
+    databases: formatNumber(summary.database_count || 0),
+    tables: formatNumber(summary.table_count || 0),
+    views: formatNumber(summary.view_count || 0),
+  });
+  metadataRows.textContent = formatNumber(summary.row_count || 0);
+  metadataStorage.textContent = t('metadata.storageValue', { size: formatBytes((persistence.catalog_bytes || 0) + (persistence.store_bytes || 0)) });
+  metadataCache.textContent = t('metadata.cacheValue', {
+    pages: formatNumber(pool.pages || 0),
+    limit: formatNumber(pool.limit_pages || 0),
+    hits: formatNumber(pool.hits || 0),
+  });
+  metadataReservoir.textContent = t('metadata.reservoirValue', {
+    active: formatNumber(reservoir.active ?? reservoir.processing ?? 0),
+    queued: formatNumber(reservoir.queued || 0),
+    size: formatBytes(reservoir.spool_bytes || 0),
+  });
+  metadataCheckpoint.textContent = t('metadata.checkpointValue', {
+    count: formatNumber(metadata.checkpoint_count || 0),
+    time: metadata.last_checkpoint_at || t('state.never'),
+  });
+}
+
 function syncSandboxFromCatalogData(data) {
   const rows = data?.rows || [];
-  if (!rows.length) return { totalRows: 0 };
+  if (!rows.length) {
+    sandbox = normalizeSandbox({ currentDb: '', dbs: {}, views: {} });
+    selectedTable = '';
+    saveSandbox();
+    renderTableBrowser();
+    return { totalRows: 0 };
+  }
 
   const dbs = {};
   const views = {};
@@ -1497,7 +3110,7 @@ function syncSandboxFromCatalogData(data) {
     } else if (kind === 'view' && name) {
       views[dbName][name] = {
         name,
-        query: queryTerm ? String(queryTerm) : 'SELECT-backed view',
+        query: queryTerm ? String(queryTerm) : '',
         columns: [],
         rows: [],
         isView: true,
@@ -1566,7 +3179,7 @@ function syncSandboxFromStateData(data) {
     if (selectedTable && !currentRelation(selectedTable)) selectedTable = '';
     renderTableBrowser();
   } catch (err) {
-    log(`State sync skipped: ${err.message}`);
+    log(t('log.stateSyncSkipped', { error: err.message }));
   }
 }
 
@@ -1578,12 +3191,6 @@ function startupWarmupEnabled() {
   if (!startupLoader) return false;
   if (location.protocol !== 'http:' && location.protocol !== 'https:') return false;
   return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(location.hostname);
-}
-
-async function warmupBackendRuntime() {
-  if (!startupWarmupEnabled()) return false;
-  const res = await fetch('/api/warmup', { cache: 'no-store', headers: apiHeaders() });
-  return res.ok;
 }
 
 function hideStartupLoader() {
@@ -1600,33 +3207,52 @@ function runStartupWarmup(engineWork) {
     return;
   }
   document.body.classList.add('is-warming');
-  Promise.allSettled([engineWork, warmupBackendRuntime()]);
+  // The Prolog server has already warmed its runtime before opening port 8088.
+  // Keep only a short, non-blocking visual cue; do not issue a second warmup.
+  Promise.resolve(engineWork).catch(() => {});
   startupDelay(STARTUP_WARMUP_MS).then(hideStartupLoader);
 }
 
 async function checkEngine() {
+  let reservoirOnline = false;
   try {
-    backendOnline = Boolean(await syncBackendStateSmart());
+    const res = await fetch('/api/reservoir/stats', { cache: 'no-store', headers: apiHeaders() });
+    reservoirOnline = res.ok;
   } catch (_) {
-    backendOnline = false;
+    reservoirOnline = false;
   }
-  engineStatus.textContent = backendOnline ? 'Mode: Prolog backend online' : 'Mode: browser sandbox';
-  engineStatus.className = backendOnline ? 'status ok' : 'status warn';
-  log(backendOnline ? 'Connected to local Prolog AsaDB engine.' : 'No backend detected; using local browser sandbox.');
+  if (reservoirOnline) {
+    backendOnline = true;
+    syncBackendStateSmart().catch(() => false);
+  } else {
+    try {
+      backendOnline = Boolean(await syncBackendStateSmart());
+    } catch (_) {
+      backendOnline = false;
+    }
+  }
+  engineCheckCompleted = true;
+  updateEngineStatus();
+  log(backendOnline ? t('log.connected') : t('log.sandbox'));
+  if (backendOnline) {
+    refreshDatabaseMetadata().catch(() => renderDatabaseMetadata(null));
+    resumeActiveReservoirJob().catch(() => null);
+  } else {
+    renderDatabaseMetadata(null);
+  }
+  scheduleMetadataPoll(backendOnline ? 0 : METADATA_IDLE_POLL_INTERVAL_MS);
   refreshSqlDiagnostics(backendOnline);
 }
 
 function showView(name, hashName = name) {
+  currentViewName = name;
   for (const [viewName, node] of Object.entries(views)) node.hidden = viewName !== name;
   for (const [viewName, button] of Object.entries(viewButtons)) button.classList.toggle('active', viewName === name);
-  pageTitle.textContent = name === 'sql' ? 'SQL Workspace' :
-    name === 'table' ? 'Table Detail' :
-    name === 'create' ? 'Create Table' :
-    'Data Transfer';
+  updatePageTitle();
   if (location.hash !== `#${hashName}`) history.replaceState(null, '', `#${hashName}`);
   if (name === 'export') {
     renderExportTablePicker();
-    exportDbName.textContent = currentDbName() || 'No database selected';
+    exportDbName.textContent = currentDbName() || t('database.noneSelected');
   }
 }
 
@@ -2144,12 +3770,13 @@ function sandboxExecWithOptions(sql, options = {}) {
 function setSqlRunBusy(busy) {
   runBtn.disabled = busy;
   runBtn.setAttribute('aria-busy', busy ? 'true' : 'false');
-  runBtn.textContent = busy ? 'Running...' : 'Run SQL';
+  runBtn.textContent = t(busy ? 'sql.running' : 'sql.run');
 }
 
 function runSql() {
   if (sqlRunPromise) return sqlRunPromise;
   stopAsaRunSounds();
+  void primeAsaRunSounds();
   setSqlRunBusy(true);
   sqlRunPromise = runSqlOnce().finally(() => {
     sqlRunPromise = null;
@@ -2159,38 +3786,42 @@ function runSql() {
 }
 
 async function runSqlOnce() {
-  // Audio priming must never delay or gate the first query click.
-  void primeAsaRunSounds();
-  applySqlAutoCorrection(true);
-  updateSqlEditor();
+  if (!sqlEditorMetrics.large) applySqlAutoCorrection(true);
+  const sql = sqlInput.value;
+  const metrics = updateSqlEditor();
   clearTimeout(sqlAnalyzeTimer);
   sqlAnalyzeTimer = 0;
   sqlAnalyzeRequest += 1;
-  const sql = sqlInput.value;
-  setSqlDiagnostics(analyzeSqlClient(sql));
+  if (metrics.large) setSqlDiagnostics([]);
+  else setSqlDiagnostics(analyzeSqlClient(sql));
+  const plan = backendOnline ? createSqlExecutionPlan(sql) : null;
+  await new Promise(resolve => requestAnimationFrame(resolve));
   const started = performance.now();
   let data;
   if (backendOnline) {
     try {
-      data = shouldBatchBackendSql(sql)
-        ? await executeBackendSqlBatched(sql, {
+      data = plan.mode === 'reservoir'
+        ? await executeBackendSqlStreamed(sql, {
             stopOnError: true,
-            syncFinal: 'none',
-            onProgress: ({ completed, total, label }) => noteArchiveSqlProgress(sql, completed, total, label),
+            onProgress: ({ completed, total, statements }) => {
+              const percent = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+              setLastRunKey('progress.importing', { percent, count: statements });
+            },
           })
         : await executeBackendSql(sql, { sync: false });
     } catch (err) {
       data = { results: [{ status: 'error', message: `Backend Prolog gagal: ${err.message}` }] };
-      log(`Backend Prolog failed: ${err.message}`);
+      log(t('log.backendFailed', { error: err.message }));
     }
   } else {
     data = sandboxExec(sql);
   }
-  renderResults(data.results || [data]);
+  renderResults(data.results || [data], { sourceSql: sql });
   addRuntimeDiagnostics(data.results || [data]);
   playAsaRunSound(resultSetHasError(data) ? 'error' : 'ok');
-  lastRun.textContent = `${Math.round(performance.now() - started)} ms`;
-  log(`Executed ${splitStatements(sql).length} statement(s).`);
+  setLastRunRaw(`${Math.round(performance.now() - started)} ms`);
+  const statementCount = Number(data.statementCount ?? plan?.statementCount ?? 0);
+  log(statementCount > 0 ? t('result.executed', { count: formatNumber(statementCount) }) : t('result.completed'));
   await refreshBrowserAfterRun(sql, data);
 }
 
@@ -2200,11 +3831,14 @@ async function refreshBrowserAfterRun(sql, data) {
     return;
   }
 
-  const synced = await syncCatalogFromBackend().catch(err => {
-    log(`Post-run sync skipped: ${err.message}`);
-    return false;
-  });
-  if (!synced) log('Post-run catalog refresh was unavailable.');
+  const [synced] = await Promise.all([
+    syncCatalogFromBackend().catch(err => {
+      log(t('log.postSyncSkipped', { error: err.message }));
+      return false;
+    }),
+    refreshDatabaseMetadata().catch(() => null),
+  ]);
+  if (!synced) log(t('log.postSyncUnavailable'));
 
   renderTableBrowser();
 }
@@ -2213,10 +3847,67 @@ function shouldBatchBackendSql(sql) {
   return String(sql || '').length > 180000 || splitStatementsDetailed(sql).length > 12;
 }
 
-function renderResults(results) {
+function pageableResultSql(sql) {
+  if (!sql) return '';
+  try {
+    const text = String(sql);
+    return text.length <= 250000 && splitStatementsDetailed(text).length === 1 ? text : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function resultPageOffsets(results, supplied) {
+  return (results || []).map((result, index) => {
+    const existing = Number(supplied?.[index]);
+    if (Number.isFinite(existing) && existing >= 0) return existing;
+    return Number(result?.rows?.length) || 0;
+  });
+}
+
+async function loadMoreResultPage(index) {
+  const context = resultPageContext;
+  const current = lastRenderedResults[index];
+  if (!context?.sql || !current?.has_more || resultPagePromises.has(index)) return;
+  const offset = context.offsets[index] || 0;
+  const pending = (async () => {
+    const data = await executeBackendSqlPage(context.sql, offset);
+    const next = (data.results || [data])[index] || (data.results || [data]).find(item => item.status === 'table');
+    if (!next || next.status !== 'table') throw new Error(t('result.previewMissing'));
+    const merged = [...lastRenderedResults];
+    merged[index] = {
+      ...current,
+      ...next,
+      rows: [...(current.rows || []), ...(next.rows || [])],
+      returned_rows: (Number(current.returned_rows) || (current.rows || []).length) + (Number(next.returned_rows) || (next.rows || []).length),
+    };
+    context.offsets[index] = offset + (next.rows || []).length;
+    renderResults(merged, { sourceSql: context.sql, resultOffsets: context.offsets });
+  })().catch(err => {
+    log(`${t('result.loadingMore')} ${asaErrorCopy(err.message)}`);
+  }).finally(() => {
+    resultPagePromises.delete(index);
+  });
+  resultPagePromises.set(index, pending);
+  await pending;
+}
+
+function renderResults(results, options = {}) {
+  const nextResults = Array.isArray(results) ? results : [];
+  if (options.remember !== false) lastRenderedResults = [...nextResults];
+  const pageSql = pageableResultSql(options.sourceSql || (options.remember === false ? resultPageContext?.sql : ''));
+  if (pageSql) {
+    resultPageContext = {
+      sql: pageSql,
+      offsets: resultPageOffsets(nextResults, options.resultOffsets || resultPageContext?.offsets),
+    };
+  } else if (options.remember !== false) {
+    resultPageContext = null;
+    resultPagePromises.clear();
+  }
   resultBox.innerHTML = '';
   const fragment = document.createDocumentFragment();
-  for (const r of results) {
+  for (const [resultIndex, r] of nextResults.entries()) {
     const item = document.createElement('div');
     item.className = 'result-item';
     if (r.status === 'table') {
@@ -2229,18 +3920,35 @@ function renderResults(results) {
       if (r.has_more) {
         const note = document.createElement('div');
         note.className = 'result-page-note';
-        note.textContent = `${formatNumber(r.returned_rows || (r.rows || []).length)} rows shown. More rows are available.`;
+        note.textContent = t('result.rowsShown', { count: formatNumber(r.returned_rows || (r.rows || []).length) });
         item.appendChild(note);
+        if (resultPageContext?.sql) {
+          const more = document.createElement('button');
+          more.type = 'button';
+          more.className = 'result-show-more';
+          more.textContent = t('result.showMore');
+          more.addEventListener('click', () => {
+            more.disabled = true;
+            more.textContent = t('result.loadingMore');
+            loadMoreResultPage(resultIndex).finally(() => {
+              if (more.isConnected) {
+                more.disabled = false;
+                more.textContent = t('result.showMore');
+              }
+            });
+          });
+          item.appendChild(more);
+        }
       }
     } else if (r.status === 'ok') {
-      item.innerHTML = `<div class="ok-text">${r.line ? `<span class="result-line">Line ${r.line}</span>` : ''}${escapeHtml(ASA_OK_LABEL)}: ${escapeHtml(asaResultCopy(r))}</div>`;
+      item.innerHTML = `<div class="ok-text">${r.line ? `<span class="result-line">${escapeHtml(t('result.line'))} ${r.line}</span>` : ''}${escapeHtml(ASA_OK_LABEL)}: ${escapeHtml(asaResultCopy(r))}</div>`;
     } else {
-      item.innerHTML = `<div class="error-text">${r.line ? `<span class="result-line">Line ${r.line}</span>` : ''}${escapeHtml(ASA_ERROR_LABEL)}: ${escapeHtml(asaResultCopy(r))}</div>`;
+      item.innerHTML = `<div class="error-text">${r.line ? `<span class="result-line">${escapeHtml(t('result.line'))} ${r.line}</span>` : ''}${escapeHtml(ASA_ERROR_LABEL)}: ${escapeHtml(asaResultCopy(r))}</div>`;
     }
     fragment.appendChild(item);
   }
   resultBox.appendChild(fragment);
-  noteArchiveQuery(results, sqlInput?.value || '');
+  if (options.archive !== false) noteArchiveQuery(results, sqlInput?.value || '');
 }
 
 function renderTable(columns, rows) {
@@ -2272,10 +3980,13 @@ function renderTableBrowser() {
 
   tableCount.textContent = activeDb
     ? relationCountText(visible.length, relations.length, Object.keys(db).length, Object.keys(dbViews).length, filter)
-    : 'No database selected';
+    : t('database.noneSelected');
+  tableListObserver?.disconnect();
+  tableListObserver = null;
   tableList.innerHTML = '';
 
-  for (const item of visible) {
+  const rendered = visible.slice(0, tableListVisibleLimit);
+  for (const item of rendered) {
     const row = document.createElement('div');
     row.className = `table-row ${item.kind}-row`;
     const button = document.createElement('button');
@@ -2289,25 +4000,52 @@ function renderTableBrowser() {
     drop.className = 'drop-table-button';
     drop.dataset.dropTable = item.name;
     drop.dataset.kind = item.kind;
-    drop.title = `Drop ${item.kind} ${item.name}`;
-    drop.setAttribute('aria-label', `Drop ${item.kind} ${item.name}`);
+    const kindLabel = localizedRelationKind(item.kind);
+    drop.title = t('table.dropNamed', { kind: kindLabel, name: item.name });
+    drop.setAttribute('aria-label', t('table.dropNamed', { kind: kindLabel, name: item.name }));
     drop.innerHTML = '<span class="drop-icon" aria-hidden="true"></span>';
     row.append(button, drop);
     tableList.appendChild(row);
+  }
+  if (visible.length > rendered.length) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'table-show-more';
+    more.textContent = t('table.showMore');
+    more.title = t('table.tablesShown', {
+      shown: formatNumber(rendered.length),
+      total: formatNumber(visible.length),
+    });
+    more.addEventListener('click', () => {
+      tableListVisibleLimit += TABLE_LIST_PAGE_SIZE;
+      renderTableBrowser();
+    });
+    tableList.appendChild(more);
+    if ('IntersectionObserver' in window) {
+      tableListObserver = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          tableListVisibleLimit += TABLE_LIST_PAGE_SIZE;
+          renderTableBrowser();
+        }
+      }, { root: null, rootMargin: '80px' });
+      tableListObserver.observe(more);
+    }
   }
   renderExportTablePicker();
   updateArchiveMonitor();
 }
 
 function relationCountText(visibleCount, totalCount, tableCountValue, viewCount, filter) {
-  if (filter) return `${visibleCount} of ${totalCount} objects`;
-  return viewCount ? `${tableCountValue} tables, ${viewCount} views` : `${tableCountValue} tables`;
+  if (filter) return t('table.countFiltered', { visible: formatNumber(visibleCount), total: formatNumber(totalCount) });
+  return viewCount
+    ? t('table.countViews', { tables: formatNumber(tableCountValue), views: formatNumber(viewCount) })
+    : t('table.count', { count: formatNumber(tableCountValue) });
 }
 
 function renderDbSelector() {
   const names = visibleDbNames();
   const activeDb = currentDbName();
-  dbSelect.innerHTML = '<option value="">Select DB</option>' +
+  dbSelect.innerHTML = `<option value="">${escapeHtml(t('database.select'))}</option>` +
     names.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
   dbSelect.value = activeDb && names.includes(activeDb) ? activeDb : '';
   dbName.value = activeDb || '';
@@ -2319,7 +4057,7 @@ function renderExportTablePicker() {
   const activeDb = currentDbName();
   const db = activeDb ? (sandbox.dbs[activeDb] || {}) : {};
   const tables = Object.keys(db).sort((a, b) => a.localeCompare(b));
-  exportDbName.textContent = activeDb || 'No database selected';
+  exportDbName.textContent = activeDb || t('database.noneSelected');
   exportTableRows.innerHTML = '';
 
   for (const table of tables) {
@@ -2363,24 +4101,30 @@ function escapeHtml(s) {
 async function createDatabase() {
   const nextDb = sanitizeIdentifier(dbName.value);
   if (!nextDb) {
-    log('Create DB failed: database name is empty.');
+    log(t('log.databaseNameEmpty'));
     return;
   }
   const sql = `CREATE DATABASE IF NOT EXISTS ${quoteIdent(nextDb)};\nUSE ${quoteIdent(nextDb)};`;
   setSqlText(sql);
+  let data;
   if (backendOnline) {
     try {
-      const data = await executeBackendSql(sql);
-      renderResults(data.results || [data]);
-      log(`Created and selected database ${nextDb}.`);
+      data = await executeBackendSql(sql);
+      if (hasResultError(data)) {
+        renderResults(data.results || [data]);
+        return;
+      }
+      log(t('log.databaseCreated', { name: nextDb }));
     } catch (err) {
       backendOnline = false;
-      log(`Backend DB create failed, fallback sandbox: ${err.message}`);
-      sandboxExec(sql);
+      engineCheckCompleted = true;
+      updateEngineStatus();
+      log(t('log.databaseCreateFallback', { error: err.message }));
     }
-  } else {
-    sandboxExec(sql);
   }
+  if (!data) data = sandboxExec(sql);
+  renderResults(data.results || [data]);
+  if (hasResultError(data)) return;
   sandbox.currentDb = nextDb;
   sandbox.dbs[nextDb] ||= {};
   sandbox.views ||= {};
@@ -2396,10 +4140,17 @@ async function selectDatabaseByName(nextDb) {
   const sql = `USE ${quoteIdent(nextDb)};`;
   if (backendOnline) {
     try {
-      await executeBackendSql(sql);
+      const data = await executeBackendSql(sql);
+      if (hasResultError(data)) {
+        renderResults(data.results || [data]);
+        renderTableBrowser();
+        return;
+      }
     } catch (err) {
       backendOnline = false;
-      log(`Backend DB select failed, using browser state: ${err.message}`);
+      engineCheckCompleted = true;
+      updateEngineStatus();
+      log(t('log.databaseSelectFallback', { error: err.message }));
     }
   }
   sandbox.currentDb = nextDb;
@@ -2409,7 +4160,7 @@ async function selectDatabaseByName(nextDb) {
   selectedTable = '';
   saveSandbox();
   renderTableBrowser();
-  log(`Selected database ${nextDb}.`);
+  log(t('log.databaseSelected', { name: nextDb }));
 }
 
 async function saveCurrentDatabase() {
@@ -2423,9 +4174,9 @@ async function saveCurrentDatabase() {
       await syncBackendStateSmart();
     } catch (err) {
       backendOnline = false;
-      engineStatus.textContent = 'Mode: browser sandbox';
-      engineStatus.className = 'status warn';
-      log(`Backend save failed, saved browser state only: ${err.message}`);
+      engineCheckCompleted = true;
+      updateEngineStatus();
+      log(t('log.databaseSaveFallback', { error: err.message }));
     }
   }
 
@@ -2433,34 +4184,48 @@ async function saveCurrentDatabase() {
   if (!data) data = { results: [{ status: 'ok', message: `saved_database(${db})` }] };
   renderResults(data.results || [data]);
   renderTableBrowser();
-  log(`Saved database ${db}.`);
+  log(t('log.databaseSaved', { name: db }));
 }
 
 async function dropCurrentDatabase() {
   const db = ensureCurrentDb('drop database');
   if (!db) return;
-  if (!confirm(`Drop database "${db}" permanently? Semua table dan view di dalamnya akan dihapus.`)) return;
+  if (!confirm(t('confirm.dropDatabase', { name: db }))) return;
 
   const sql = `DROP DATABASE ${quoteIdent(db)};`;
   setSqlText(sql);
   let data;
+  let droppedOnBackend = false;
 
   if (backendOnline) {
     try {
-      data = await executeBackendSql(sql);
+      data = await executeBackendSql(sql, { sync: false });
+      droppedOnBackend = true;
     } catch (err) {
       backendOnline = false;
-      engineStatus.textContent = 'Mode: browser sandbox';
-      engineStatus.className = 'status warn';
-      log(`Backend drop database failed, fallback sandbox: ${err.message}`);
+      engineCheckCompleted = true;
+      updateEngineStatus();
+      log(t('log.dropBackendFallback', { error: err.message }));
     }
   }
 
   if (!data) data = sandboxExec(sql);
   renderResults(data.results || [data]);
   if (hasResultError(data)) {
-    log(`Drop database ${db} failed.`);
+    log(t('log.dropFailed', { kind: t('common.database'), name: db }));
     return;
+  }
+
+  if (droppedOnBackend) {
+    try {
+      if (await backendListContains('SHOW DATABASES;', db)) {
+        log(t('log.dropFailed', { kind: t('common.database'), name: db }));
+        return;
+      }
+    } catch (err) {
+      log(`${t('log.dropVerifyFailed', { kind: t('common.database'), name: db })} ${err.message}`);
+      return;
+    }
   }
 
   delete sandbox.dbs[db];
@@ -2468,9 +4233,10 @@ async function dropCurrentDatabase() {
   if (sandbox.currentDb === db) sandbox.currentDb = '';
   selectedTable = '';
   saveSandbox();
+  if (droppedOnBackend) await syncCatalogFromBackend().catch(() => false);
   renderTableBrowser();
   showView('sql');
-  log(`Dropped database ${db}.`);
+  log(t('log.dropped', { kind: t('common.database'), name: db }));
 }
 
 function focusSqlCommand() {
@@ -2494,27 +4260,47 @@ async function dropTable(tableName) {
   if (!db || !tableName) return;
   const relation = currentRelation(tableName);
   const kind = relation?.kind || 'table';
-  if (!confirm(`Drop ${kind} "${tableName}" from database "${db}"?`)) return;
+  const kindLabel = localizedRelationKind(kind);
+  if (!confirm(t('confirm.dropTable', { kind: kindLabel, name: tableName, db }))) return;
   const sql = kind === 'view' ? `DROP VIEW IF EXISTS ${quoteIdent(tableName)};` : `DROP TABLE IF EXISTS ${quoteIdent(tableName)};`;
+  let data;
+  let droppedOnBackend = false;
   if (backendOnline) {
     try {
-      const data = await executeBackendSql(sql);
-      renderResults(data.results || [data]);
+      data = await executeBackendSql(sql, { sync: false });
+      droppedOnBackend = true;
     } catch (err) {
       backendOnline = false;
-      log(`Backend drop failed, fallback sandbox: ${err.message}`);
-      sandboxExec(sql);
+      engineCheckCompleted = true;
+      updateEngineStatus();
+      log(t('log.dropBackendFallback', { error: err.message }));
     }
-  } else {
-    sandboxExec(sql);
+  }
+  if (!data) data = sandboxExec(sql);
+  renderResults(data.results || [data]);
+  if (hasResultError(data)) {
+    log(t('log.dropFailed', { kind: kindLabel, name: tableName }));
+    return;
+  }
+  if (droppedOnBackend) {
+    try {
+      if (await backendListContains('SHOW TABLES;', tableName)) {
+        log(t('log.dropFailed', { kind: kindLabel, name: tableName }));
+        return;
+      }
+    } catch (err) {
+      log(`${t('log.dropVerifyFailed', { kind: kindLabel, name: tableName })} ${err.message}`);
+      return;
+    }
   }
   if (kind === 'view') delete sandbox.views?.[db]?.[tableName];
   else delete sandbox.dbs[db]?.[tableName];
   if (selectedTable === tableName) selectedTable = '';
   saveSandbox();
+  if (droppedOnBackend) await syncCatalogFromBackend().catch(() => false);
   renderTableBrowser();
-  if (views.table && !selectedTable) showView('sql');
-  log(`Dropped ${kind} ${tableName}.`);
+  if (currentViewName === 'table' && !selectedTable) showView('sql');
+  log(t('log.dropped', { kind: kindLabel, name: tableName }));
 }
 
 function showCreateTableView() {
@@ -2536,8 +4322,11 @@ function renderTableDetail(tableName, mode = 'structure') {
   if (!relation) return;
   const table = relation.value;
 
+  tableDetailRequestId += 1;
+  tableDataPageState = null;
   selectedTable = tableName;
-  tableDetailName.textContent = relation.kind === 'view' ? `${tableName} (view)` : tableName;
+  currentTableDetailMode = mode;
+  tableDetailName.textContent = relation.kind === 'view' ? `${tableName} (${t('table.view')})` : tableName;
   tableStructurePanel.hidden = mode !== 'structure';
   tableDataPanel.hidden = mode !== 'data';
   tableSelectDataBtn.classList.toggle('strong', mode === 'data');
@@ -2577,29 +4366,28 @@ function renderViewStructureDetail(viewName, view) {
     <tr>
       <td>${escapeHtml(viewName)}</td>
       <td>VIEW</td>
-      <td>${escapeHtml(view.query || 'SELECT-backed view')}</td>
+      <td>${escapeHtml(view.query || t('table.viewDescription'))}</td>
     </tr>
   `;
-  tableIndexBody.innerHTML = '<tr><td>VIEW</td><td class="index-column">virtual result</td></tr>';
+  tableIndexBody.innerHTML = `<tr><td>VIEW</td><td class="index-column">${escapeHtml(t('table.virtualResult'))}</td></tr>`;
 }
 
 async function renderViewDataDetail(viewName) {
-  tableDataBox.innerHTML = '<div class="empty-state">Loading view...</div>';
   if (!backendOnline) {
-    tableDataBox.innerHTML = '<div class="empty-state">View data needs the Prolog backend.</div>';
+    tableDataBox.innerHTML = `<div class="empty-state">${escapeHtml(t('table.viewNeedsBackend'))}</div>`;
     return;
   }
-  try {
-    const data = await executeBackendSql(`SELECT * FROM ${quoteIdent(viewName)};`);
-    const result = (data.results || [data]).find(item => item.status === 'table');
-    if (!result) throw new Error(data.message || 'View did not return a table.');
-    tableDataBox.innerHTML = '';
-    const tableNode = renderTable(result.columns || [], result.rows || []);
-    tableNode.classList.add('legacy-data-table');
-    tableDataBox.appendChild(tableNode);
-  } catch (err) {
-    tableDataBox.innerHTML = `<div class="empty-state error-text">${escapeHtml(ASA_ERROR_LABEL)}: ${escapeHtml(asaErrorCopy(err.message))}</div>`;
-  }
+  tableDataPageState = {
+    sql: `SELECT * FROM ${quoteIdent(viewName)};`,
+    columns: [],
+    rows: [],
+    offset: 0,
+    total: 0,
+    hasMore: true,
+    loading: false,
+    loadingLabel: t('table.loadingView'),
+  };
+  await loadTableDataPage(tableDataPageState, tableDetailRequestId);
 }
 
 function renderTableStructureDetail(tableName, table) {
@@ -2627,38 +4415,87 @@ function renderTableStructureDetail(tableName, table) {
 }
 
 async function renderTableDataDetail(tableName, table) {
-  tableDataBox.innerHTML = '';
   const columns = (table.columns || []).map(col => col.name);
   const localRows = (table.rows || []).map(row => columns.map(column => row[column] ?? null));
   const remoteRows = Number(table.rowCount) || 0;
 
   if (backendOnline && remoteRows > localRows.length) {
-    tableDataBox.innerHTML = '<div class="empty-state">Loading backend preview...</div>';
-    try {
-      const data = await executeBackendSql(`SELECT * FROM ${quoteIdent(tableName)} LIMIT 100;`, { sync: false });
-      const result = (data.results || [data]).find(item => item.status === 'table');
-      if (!result) throw new Error(data.message || 'Table preview did not return rows.');
-      tableDataBox.innerHTML = '';
-      const tableNode = renderTable(result.columns || columns, result.rows || []);
-      tableNode.classList.add('legacy-data-table');
-      tableDataBox.appendChild(tableNode);
-      if (remoteRows > (result.rows || []).length) {
-        const note = document.createElement('div');
-        note.className = 'empty-state';
-        note.textContent = `Showing ${Math.min(100, (result.rows || []).length)} of ${formatNumber(remoteRows)} backend row(s).`;
-        tableDataBox.appendChild(note);
-      }
-      return;
-    } catch (err) {
-      tableDataBox.innerHTML = `<div class="empty-state error-text">${escapeHtml(ASA_ERROR_LABEL)}: ${escapeHtml(asaErrorCopy(err.message))}</div>`;
-      return;
-    }
+    tableDataPageState = {
+      sql: `SELECT * FROM ${quoteIdent(tableName)};`,
+      columns,
+      rows: [],
+      offset: 0,
+      total: remoteRows,
+      hasMore: true,
+      loading: false,
+      loadingLabel: t('table.loadingPreview'),
+    };
+    await loadTableDataPage(tableDataPageState, tableDetailRequestId);
+    return;
   }
 
+  tableDataBox.innerHTML = '';
   const rows = localRows;
   const tableNode = renderTable(columns, rows);
   tableNode.classList.add('legacy-data-table');
   tableDataBox.appendChild(tableNode);
+}
+
+function renderTableDataPage(state) {
+  if (!state || state !== tableDataPageState) return;
+  tableDataBox.innerHTML = '';
+  if (state.loading && !state.rows.length) {
+    tableDataBox.innerHTML = `<div class="empty-state">${escapeHtml(state.loadingLabel || t('table.loadingMore'))}</div>`;
+  } else {
+    const tableNode = renderTable(state.columns || [], state.rows || []);
+    tableNode.classList.add('legacy-data-table');
+    tableDataBox.appendChild(tableNode);
+  }
+
+  if (state.total > 0 && state.rows.length > 0) {
+    const note = document.createElement('div');
+    note.className = 'empty-state table-page-note';
+    note.textContent = state.hasMore
+      ? t('table.showingRows', { shown: formatNumber(state.rows.length), total: formatNumber(state.total) })
+      : t('result.allRows', { count: formatNumber(state.rows.length) });
+    tableDataBox.appendChild(note);
+  }
+
+  if (state.hasMore && !state.loading) {
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'table-show-more';
+    more.textContent = t('table.showMore');
+    more.addEventListener('click', () => loadTableDataPage(state, state.requestId));
+    tableDataBox.appendChild(more);
+  }
+}
+
+async function loadTableDataPage(state, requestId = tableDetailRequestId) {
+  if (!state || state !== tableDataPageState || state.loading || requestId !== tableDetailRequestId) return;
+  state.loading = true;
+  state.requestId = requestId;
+  renderTableDataPage(state);
+  try {
+    const data = state.offset > 0
+      ? await executeBackendSqlPage(state.sql, state.offset)
+      : await executeBackendSql(state.sql, { sync: false });
+    const result = (data.results || [data]).find(item => item.status === 'table');
+    if (!result) throw new Error(data.message || t('result.previewMissing'));
+    if (requestId !== tableDetailRequestId || state !== tableDataPageState) return;
+    state.columns = result.columns || state.columns;
+    state.rows.push(...(result.rows || []));
+    state.offset += (result.rows || []).length;
+    state.hasMore = Boolean(result.has_more) || (state.total > 0 && state.offset < state.total);
+  } catch (err) {
+    if (requestId === tableDetailRequestId && state === tableDataPageState) {
+      tableDataBox.innerHTML = `<div class="empty-state error-text">${escapeHtml(ASA_ERROR_LABEL)}: ${escapeHtml(asaErrorCopy(err.message))}</div>`;
+    }
+    return;
+  } finally {
+    state.loading = false;
+  }
+  renderTableDataPage(state);
 }
 
 function columnTypeHtml(column) {
@@ -2699,10 +4536,10 @@ function addCreateColumnRow(column = {}) {
     <td><input class="create-col-null" type="checkbox" ${column.nullable ? 'checked' : ''} /></td>
     <td><input class="create-col-auto-increment" type="radio" name="createAutoIncrementPick" ${column.autoIncrement ? 'checked' : ''} /></td>
     <td>
-      <button class="mini-button create-row-add" type="button" title="Add column" aria-label="Add column">+</button>
-      <button class="mini-button create-row-up" type="button" title="Move up" aria-label="Move column up">&uarr;</button>
-      <button class="mini-button create-row-down" type="button" title="Move down" aria-label="Move column down">&darr;</button>
-      <button class="mini-button create-row-delete" type="button" title="Delete column" aria-label="Delete column">x</button>
+      <button class="mini-button create-row-add" type="button" title="${escapeHtml(t('table.addColumn'))}" aria-label="${escapeHtml(t('table.addColumn'))}">+</button>
+      <button class="mini-button create-row-up" type="button" title="${escapeHtml(t('table.moveUp'))}" aria-label="${escapeHtml(t('table.moveUp'))}">&uarr;</button>
+      <button class="mini-button create-row-down" type="button" title="${escapeHtml(t('table.moveDown'))}" aria-label="${escapeHtml(t('table.moveDown'))}">&darr;</button>
+      <button class="mini-button create-row-delete" type="button" title="${escapeHtml(t('table.deleteColumn'))}" aria-label="${escapeHtml(t('table.deleteColumn'))}">x</button>
     </td>
   `;
   createColumnsBody.appendChild(row);
@@ -2714,7 +4551,7 @@ async function saveCreateTable(event) {
   if (!activeDb) return;
   const tableName = sanitizeIdentifier(createTableName.value);
   if (!tableName) {
-    log('Create table failed: table name is empty.');
+    log(t('log.tableNameEmpty'));
     return;
   }
 
@@ -2740,7 +4577,7 @@ async function saveCreateTable(event) {
   }
 
   if (!columns.length) {
-    log('Create table failed: add at least one column.');
+    log(t('log.tableColumnsEmpty'));
     return;
   }
 
@@ -2762,9 +4599,12 @@ async function saveCreateTable(event) {
     try {
       const data = await executeBackendSql(createSql);
       renderResults(data.results || [data]);
+      if (hasResultError(data)) return;
     } catch (err) {
       backendOnline = false;
-      log(`Backend create table failed, keeping browser state: ${err.message}`);
+      engineCheckCompleted = true;
+      updateEngineStatus();
+      log(t('log.tableCreateFallback', { error: err.message }));
     }
   }
 
@@ -2772,7 +4612,7 @@ async function saveCreateTable(event) {
   sandbox.dbs[activeDb][tableName] = tableRecord;
   saveSandbox();
   renderTableBrowser();
-  log(`Created table ${tableName}.`);
+  log(t('log.tableCreated', { name: tableName }));
   renderTableDetail(tableName, 'structure');
 }
 
@@ -2789,10 +4629,25 @@ function detectImportFormat(fileName, bytes, textHint = '') {
   return 'mysql';
 }
 
-async function importFromFiles() {
+function startImportOperation(operation) {
+  if (importOperationPromise) return importOperationPromise;
+  const pending = Promise.resolve().then(operation).finally(() => {
+    if (importOperationPromise === pending) importOperationPromise = null;
+    updateImportControls();
+  });
+  importOperationPromise = pending;
+  updateImportControls();
+  return pending;
+}
+
+function importFromFiles() {
+  return startImportOperation(importFromFilesOnce);
+}
+
+async function importFromFilesOnce() {
   const files = Array.from(importFileInput.files || []);
   if (!files.length) {
-    importSummary.textContent = 'No file selected.';
+    importSummary.textContent = t('import.noFile');
     return;
   }
   const summaries = [];
@@ -2805,20 +4660,22 @@ async function importFromFiles() {
         try {
           summary = await importServerPathWithBackend(backendPath, file.size);
         } catch (backendErr) {
-          log(`Backend file import rejected for ${file.name}, trying upload stream: ${backendErr.message}`);
+          log(t('log.importRejected', { name: file.name, error: backendErr.message }));
           summary = await importUploadedFileWithBackend(file);
         }
       } else if (useBackendSql && shouldUploadFileToBackend(file)) {
         summary = await importUploadedFileWithBackend(file);
       } else if (!backendOnline && shouldUseBackendFileImport(file.name, importFormat.value) && file.size > BROWSER_SQL_IMPORT_LIMIT_BYTES) {
-        throw new Error('Prolog backend belum online. File SQL besar harus lewat engine backend supaya browser tidak macet.');
+        throw new Error(t('import.largeBackendRequired'));
       } else {
         summary = await importFromBuffer(file.name, await file.arrayBuffer(), importFormat.value);
       }
       summaries.push(summary);
     } catch (err) {
-      summaries.push(`${file.name}: ${ASA_ERROR_LABEL} ${asaErrorCopy(err.message)}`);
-      log(`Import failed for ${file.name}: ${err.message}`);
+      summaries.push(err.reservoirStatus === 'cancelled'
+        ? `${file.name}: ${t('import.cancelled')}`
+        : `${file.name}: ${ASA_ERROR_LABEL} ${asaErrorCopy(err.message)}`);
+      log(t('log.importFailed', { name: file.name, error: err.message }));
       if (importStopOnError.checked) break;
     }
   }
@@ -2827,7 +4684,11 @@ async function importFromFiles() {
   renderTableBrowser();
 }
 
-async function importFromServerFile() {
+function importFromServerFile() {
+  return startImportOperation(importFromServerFileOnce);
+}
+
+async function importFromServerFileOnce() {
   const path = importServerPath.value.trim();
   if (!path) return;
   try {
@@ -2836,15 +4697,17 @@ async function importFromServerFile() {
       return;
     }
     if (!backendOnline && isKnownHugeServerImport(path)) {
-      throw new Error('Prolog backend wajib online untuk import file SQL besar dari server.');
+      throw new Error(t('import.largeBackendRequired'));
     }
     const res = await fetch(path, { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const summary = await importFromBuffer(path, await res.arrayBuffer(), importFormat.value);
     importSummary.textContent = summary;
   } catch (err) {
-    importSummary.textContent = `${ASA_ERROR_LABEL}: ${asaErrorCopy(err.message)}`;
-    log(`Server import failed: ${err.message}`);
+    importSummary.textContent = err.reservoirStatus === 'cancelled'
+      ? t('import.cancelled')
+      : `${ASA_ERROR_LABEL}: ${asaErrorCopy(err.message)}`;
+    log(t('log.serverImportFailed', { error: err.message }));
   }
 }
 
@@ -2863,8 +4726,7 @@ function shouldUploadFileToBackend(file) {
 
 function knownServerImportPath(fileName) {
   const name = String(fileName || '').split(/[\\/]/).pop();
-  if (/^public_safety_archive_1275080\.sql$/i.test(name)) return 'test/public_safety_archive_1275080.sql';
-  if (/^public_safety_archive_\d+\.sql$/i.test(name)) return `Stress Test/${name}`;
+  if (/^public_safety_archive_\d+\.sql$/i.test(name)) return `stress tests/${name}`;
   return '';
 }
 
@@ -2877,21 +4739,19 @@ function makeImportId() {
 }
 
 async function importServerPathWithBackend(path, sizeHint = 0) {
-  const importId = makeImportId();
   noteArchiveImportStart(path, sizeHint);
-  log(`Backend import started: ${path}`);
-  const body = new URLSearchParams({
-    path,
-    import_id: importId,
-    stop_on_error: importStopOnError.checked ? 'true' : 'false',
+  log(t('log.reservoirFileStart', { name: path }));
+  const data = await startReservoirFile(path, {
+    kind: 'import-file',
+    label: path,
+    sizeBytes: sizeHint,
+    stopOnError: importStopOnError.checked,
+    onProgress: ({ completed, total, statements, label }) => {
+      const percent = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+      setLastRunKey('progress.reservoir', { percent, count: statements });
+      noteArchiveSqlProgress('', completed, total, label);
+    },
   });
-  const res = await fetch('/api/import_file', {
-    method: 'POST',
-    headers: apiHeaders({ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }),
-    body,
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
 
   const results = data.results || [data];
   renderResults(results);
@@ -2902,33 +4762,34 @@ async function importServerPathWithBackend(path, sizeHint = 0) {
   const errors = Number(row[3]) || 0;
   const sizeBytes = Number(row[6]) || sizeHint || 0;
 
-  await syncCatalogFromBackend().catch(() => false);
+  await Promise.all([
+    syncCatalogFromBackend().catch(() => false),
+    refreshDatabaseMetadata().catch(() => null),
+  ]);
   noteArchiveImportComplete(path, sizeBytes, summaryTable?.columns || ['status'], summaryTable?.rows || [[status]], statements);
   setSqlText(`-- Backend Prolog import: ${path}\nSHOW TABLES;\nSELECT COUNT(*) AS total_rows FROM Public_Safety_Archive;`);
-  lastRun.textContent = `${statements} backend step(s)`;
+  setLastRunKey('progress.backendSteps', { count: statements });
   renderTableBrowser();
-  const summary = `${path}: backend Prolog import, ${statements} statement(s), ${errors} error(s)`;
+  const summary = t('import.backendSummary', { name: path, statements: formatNumber(statements), errors: formatNumber(errors) });
   log(summary);
   if (errors > 0) throw new Error(summary);
   return summary;
 }
 
 async function importUploadedFileWithBackend(file) {
-  const importId = makeImportId();
   noteArchiveImportStart(file.name, file.size || 0);
-  log(`Backend upload import started: ${file.name}`);
-  const body = new FormData();
-  body.append('file', file, file.name);
-  body.append('import_id', importId);
-  body.append('stop_on_error', importStopOnError.checked ? 'true' : 'false');
-
-  const res = await fetch('/api/import_upload', {
-    method: 'POST',
-    headers: apiHeaders(),
-    body,
+  log(t('log.reservoirUploadStart', { name: file.name }));
+  const data = await submitReservoirPayload(file, {
+    kind: 'import-upload',
+    label: file.name,
+    sizeBytes: file.size || 0,
+    contentType: file.type || 'application/sql',
+    stopOnError: importStopOnError.checked,
+    onProgress: ({ completed, total, statements }) => {
+      const percent = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+      setLastRunKey('progress.reservoir', { percent, count: statements });
+    },
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
 
   const results = data.results || [data];
   renderResults(results);
@@ -2939,12 +4800,15 @@ async function importUploadedFileWithBackend(file) {
   const errors = Number(row[3]) || 0;
   const sizeBytes = Number(row[6]) || file.size || 0;
 
-  await syncBackendStateSmart().catch(() => syncCatalogFromBackend().catch(() => false));
+  await Promise.all([
+    syncBackendStateSmart().catch(() => syncCatalogFromBackend().catch(() => false)),
+    refreshDatabaseMetadata().catch(() => null),
+  ]);
   noteArchiveImportComplete(file.name, sizeBytes, summaryTable?.columns || ['status'], summaryTable?.rows || [[status]], statements);
   setSqlText(`-- Uploaded through Prolog backend: ${file.name}\nSHOW TABLES;`);
-  lastRun.textContent = `${statements} backend step(s)`;
+  setLastRunKey('progress.backendSteps', { count: statements });
   renderTableBrowser();
-  const summary = `${file.name}: backend Prolog upload import, ${statements} statement(s), ${errors} error(s)`;
+  const summary = t('import.uploadSummary', { name: file.name, statements: formatNumber(statements), errors: formatNumber(errors) });
   log(summary);
   if (errors > 0) throw new Error(summary);
   return summary;
@@ -2961,7 +4825,8 @@ async function importFromBuffer(name, rawBuffer, selectedFormat) {
   const initialText = isLikelyText(cleanName) ? decodeText(buffer) : '';
   const format = selectedFormat === 'auto' ? detectImportFormat(cleanName, buffer, initialText) : selectedFormat;
   const mode = importWriteMode.value;
-  let summary = `${name}: ${FORMAT_LABELS[format]} -> AsaDB`;
+  let summary = t('import.conversion', { name, format: FORMAT_LABELS[format] });
+  let backendMutation = false;
   noteArchiveImportStart(name, rawBuffer.byteLength || buffer.byteLength || 0);
 
   if (format === 'asadb') {
@@ -2970,16 +4835,16 @@ async function importFromBuffer(name, rawBuffer, selectedFormat) {
     saveSandbox();
     const preview = firstImportedTablePreview(imported);
     noteArchiveImportComplete(name, rawBuffer.byteLength || buffer.byteLength || 0, preview.columns, preview.rows, preview.rowCount);
-    summary += `, ${countTables(imported)} table(s) loaded`;
+    summary += `, ${t('import.tablesLoaded', { count: formatNumber(countTables(imported)) })}`;
   } else if (format === 'csv') {
-    if (!ensureCurrentDb('import CSV')) throw new Error('Create or select a database before importing CSV.');
+    if (!ensureCurrentDb('import CSV')) throw new Error(t('import.databaseRequired', { format: 'CSV' }));
     const tableName = importTargetTable.value.trim() || sanitizeName(baseName(cleanName));
     const matrix = parseCsv(decodeText(buffer));
     upsertMatrixTable(tableName, matrix, mode);
     noteArchiveImportComplete(name, rawBuffer.byteLength || buffer.byteLength || 0, matrix[0] || [], matrix.slice(1, 5), Math.max(0, matrix.length - 1));
-    summary += `, table ${tableName}, ${Math.max(0, matrix.length - 1)} row(s)`;
+    summary += `, ${t('import.tableRows', { table: tableName, count: formatNumber(Math.max(0, matrix.length - 1)) })}`;
   } else if (format === 'xlsx') {
-    if (!ensureCurrentDb('import XLSX')) throw new Error('Create or select a database before importing XLSX.');
+    if (!ensureCurrentDb('import XLSX')) throw new Error(t('import.databaseRequired', { format: 'XLSX' }));
     const workbook = await readXlsxWorkbook(buffer);
     for (const sheet of workbook.sheets) {
       const tableName = sanitizeName(sheet.name || baseName(cleanName));
@@ -2987,36 +4852,51 @@ async function importFromBuffer(name, rawBuffer, selectedFormat) {
     }
     const firstSheet = workbook.sheets[0] || { rows: [] };
     noteArchiveImportComplete(name, rawBuffer.byteLength || buffer.byteLength || 0, firstSheet.rows[0] || [], (firstSheet.rows || []).slice(1, 5), Math.max(0, (firstSheet.rows || []).length - 1));
-    summary += `, ${workbook.sheets.length} sheet(s)`;
+    summary += `, ${t('import.sheetsLoaded', { count: formatNumber(workbook.sheets.length) })}`;
   } else if (format === 'mysql' || format === 'postgresql') {
     const sql = convertDialectToAsaSql(decodeText(buffer), format);
     let data;
     if (backendOnline) {
-      data = await executeBackendSqlBatched(sql, {
-        stopOnError: importStopOnError.checked,
-        showOnlyErrors: importShowOnlyErrors.checked,
-        maxVisible: 50,
-        syncFinal: sql.length < 5 * 1024 * 1024,
-        onProgress: ({ completed, total, label }) => noteArchiveSqlProgress(sql, completed, total, label),
-      });
+      const plan = createSqlExecutionPlan(sql);
+      backendMutation = true;
+      data = plan.mode === 'reservoir'
+        ? await executeBackendSqlStreamed(sql, {
+            kind: 'import-conversion',
+            label: name,
+            sizeBytes: rawBuffer.byteLength || buffer.byteLength || 0,
+            stopOnError: importStopOnError.checked,
+            onProgress: ({ completed, total, statements }) => {
+              const percent = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+              setLastRunKey('progress.importing', { percent, count: statements });
+            },
+          })
+        : await executeBackendSql(sql, { sync: false });
     } else if (sql.length > 100000) {
-      throw new Error('Prolog backend belum online. Import SQL besar wajib lewat engine Prolog.');
+      throw new Error(t('import.largeBackendRequired'));
     } else {
       data = sandboxExecWithOptions(sql, {
         stopOnError: importStopOnError.checked,
         showOnlyErrors: importShowOnlyErrors.checked,
       });
     }
-    renderResults(data.results);
+    renderResults(data.results || [data]);
     if (sql.length < 500000) setSqlText(sql);
     else setSqlText(`-- Large SQL imported through Prolog backend: ${name}\nSHOW TABLES;`);
-    lastRun.textContent = `${data.allResults.length} step(s)`;
-    noteArchiveImportComplete(name, rawBuffer.byteLength || buffer.byteLength || 0, ['statement', 'status'], data.allResults.slice(0, 4).map((result, index) => [index + 1, result.status || 'ok']), data.allResults.length);
-    summary += `, ${splitStatements(sql).length} statement(s)`;
+    const allResults = data.allResults || data.results || [];
+    const statementCount = Number(data.statementCount || allResults.length || 0);
+    setLastRunKey('import.statements', { count: statementCount });
+    noteArchiveImportComplete(name, rawBuffer.byteLength || buffer.byteLength || 0, ['statement', 'status'], allResults.slice(0, 4).map((result, index) => [index + 1, result.status || 'ok']), statementCount);
+    summary += `, ${t('import.statements', { count: formatNumber(statementCount) })}`;
   } else {
-    throw new Error(`Unsupported format: ${format}`);
+    throw new Error(t('import.unsupportedFormat', { format }));
   }
 
+  if (backendMutation) {
+    await Promise.all([
+      syncBackendStateSmart().catch(() => syncCatalogFromBackend().catch(() => false)),
+      refreshDatabaseMetadata().catch(() => null),
+    ]);
+  }
   saveSandbox();
   renderTableBrowser();
   log(summary);
@@ -3080,7 +4960,7 @@ function mergeSandbox(incoming, replace) {
 
 function upsertMatrixTable(tableName, matrix, mode) {
   const activeDb = ensureCurrentDb('import table');
-  if (!activeDb) throw new Error('Create or select a database before importing table data.');
+  if (!activeDb) throw new Error(t('database.selectFirst'));
   const rows = matrix.filter(row => row.some(cell => String(cell ?? '').trim() !== ''));
   if (!rows.length) return;
   const headers = rows[0].map((name, index) => sanitizeName(name || `column_${index + 1}`));
@@ -3211,22 +5091,22 @@ async function exportDatabase() {
     exportPreview.textContent = pkg.preview;
     if (output === 'open') {
       openBlob(blob, filename);
-      log(`Opened ${filename}.`);
+      log(t('log.fileOpened', { name: filename }));
     } else {
       downloadBlob(blob, filename);
-      log(`Downloaded ${filename}.`);
+      log(t('log.fileDownloaded', { name: filename }));
     }
   } catch (err) {
     exportPreview.textContent = `${ASA_ERROR_LABEL}: ${asaErrorCopy(err.message)}`;
-    log(`Export failed: ${err.message}`);
+    log(t('log.exportFailed', { error: err.message }));
   }
 }
 
 async function buildExportPackage(format) {
   const db = ensureCurrentDb('export');
-  if (!db) throw new Error('Create or select a database before exporting.');
+  if (!db) throw new Error(t('database.selectFirst'));
   const selection = getExportSelection();
-  if (!selection.length) throw new Error('No tables selected.');
+  if (!selection.length) throw new Error(t('export.noTables'));
 
   if (format === 'asadb') {
     const bytes = makeAsaDbBytes(db, selection);
@@ -3250,7 +5130,7 @@ async function buildExportPackage(format) {
     const sql = buildSqlExport(db, selection, format);
     return { blob: new Blob([sql], { type: 'application/sql' }), filename: `${db}-${format}.sql`, preview: sql.slice(0, 9000) };
   }
-  throw new Error(`Unsupported format: ${format}`);
+  throw new Error(t('import.unsupportedFormat', { format }));
 }
 
 function checkedValue(name) {
@@ -3909,9 +5789,21 @@ function handleSqlIndentKey(event) {
   return true;
 }
 
-sqlInput.addEventListener('input', () => {
-  applySqlAutoCorrection(false);
-  updateSqlEditor();
+sqlInput.addEventListener('paste', () => {
+  sqlPasteInProgress = true;
+  sqlPasteAnchor = { top: sqlInput.scrollTop, left: sqlInput.scrollLeft };
+  requestAnimationFrame(() => {
+    sqlPasteInProgress = false;
+  });
+});
+sqlInput.addEventListener('input', (event) => {
+  const pasted = sqlPasteInProgress || event.inputType === 'insertFromPaste';
+  if (!pasted) applySqlAutoCorrection(false);
+  const scrollTop = pasted
+    ? Math.max(sqlPasteAnchor.top, sqlInput.scrollTop, sqlCaretScrollTarget())
+    : sqlInput.scrollTop;
+  const scrollLeft = pasted ? Math.max(sqlPasteAnchor.left, sqlInput.scrollLeft) : sqlInput.scrollLeft;
+  updateSqlEditor({ scrollTop, scrollLeft, persistScroll: pasted });
   scheduleSqlAnalysis();
 });
 sqlInput.addEventListener('scroll', syncSqlScroll);
@@ -3923,8 +5815,11 @@ sqlInput.addEventListener('keydown', (event) => {
   }
 });
 
-runBtn.addEventListener('pointerdown', primeAsaRunSounds, { passive: true });
 runBtn.addEventListener('click', runSql);
+languageSwitcher?.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-language]');
+  if (button) setLanguage(button.dataset.language);
+});
 $('pingBtn').addEventListener('click', checkEngine);
 $('clearBtn').addEventListener('click', () => setSqlText(''));
 $('clearLogBtn').addEventListener('click', () => logBox.textContent = '');
@@ -3936,7 +5831,7 @@ $('resetSandboxBtn').addEventListener('click', () => {
   selectedTable = '';
   renderTableBrowser();
   setSqlText('');
-  log('Sandbox reset to empty state.');
+  log(t('sandbox.resetDone'));
 });
 $('loadSampleBtn').addEventListener('click', () => {
   setSqlText(`CREATE DATABASE ${SAMPLE_DB};\nUSE ${SAMPLE_DB};\nCREATE TABLE users (id INT NOT NULL, user_login VARCHAR(100), display_name VARCHAR(120), status VARCHAR(20) DEFAULT 'active');\nINSERT INTO users (id, user_login, display_name, status) VALUES (1, 'aires', 'Aires Admin', 'active'), (2, 'asa', 'Asa Editor', 'active');\nSELECT * FROM users;`);
@@ -3970,6 +5865,14 @@ tableNewItemBtn.addEventListener('click', () => {
 tableDropBtn.addEventListener('click', () => selectedTable && dropTable(selectedTable));
 importExecuteBtn.addEventListener('click', importFromFiles);
 importRunServerBtn.addEventListener('click', importFromServerFile);
+importCancelBtn.addEventListener('click', cancelActiveReservoirJob);
+dbMetadataPanel?.addEventListener('toggle', () => {
+  if (dbMetadataPanel.open) scheduleMetadataPoll(0);
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'hidden') scheduleMetadataPoll(0);
+});
+window.addEventListener('focus', () => scheduleMetadataPoll(0));
 exportRunBtn.addEventListener('click', exportDatabase);
 createTableForm.addEventListener('submit', saveCreateTable);
 createAddHeaderBtn.addEventListener('click', () => addCreateColumnRow({ type: 'int' }));
@@ -4005,7 +5908,10 @@ createColumnsBody.addEventListener('click', (event) => {
     if (createColumnsBody.rows.length > 1) row.remove();
   }
 });
-tableSearch.addEventListener('input', renderTableBrowser);
+tableSearch.addEventListener('input', () => {
+  tableListVisibleLimit = TABLE_LIST_PAGE_SIZE;
+  renderTableBrowser();
+});
 tableList.addEventListener('click', (event) => {
   const drop = event.target.closest('[data-drop-table]');
   if (drop) {
@@ -4024,6 +5930,7 @@ exportAllData.addEventListener('change', () => {
   document.querySelectorAll('.export-data-check').forEach(input => input.checked = exportAllData.checked);
 });
 
+setLanguage(currentLanguage, false);
 updateSqlEditor();
 setSqlDiagnostics(analyzeSqlClient(sqlInput.value));
 renderTableBrowser();
@@ -4038,4 +5945,7 @@ if (initialHash.startsWith('table=')) {
 } else {
   showView('sql');
 }
+// app-loader.js uses this marker to show a useful error rather than leaving a
+// static-looking page should an unsupported browser reject the UI bundle.
+window.__asadbUiReady = true;
 runStartupWarmup(checkEngine());

@@ -10,6 +10,7 @@ main :-
     run_sql_file('tests/alter_table_comprehensive.sql'),
     run_sql_file('tests/critical_select_features.sql'),
     run_persistence_assertions,
+    run_metadata_persistence_assertions,
     run_alter_order_assertions,
     run_auto_increment_assertions,
     run_order_by_duplicate_assertions,
@@ -20,6 +21,7 @@ main :-
     run_read_only_no_autosave_assertions,
     run_limited_result_assertions,
     run_storage_engine_assertions,
+    run_drop_table_cleanup_assertions,
     run_catalog_multitable_assertions,
     run_critical_select_assertions,
     cleanup,
@@ -63,6 +65,44 @@ run_persistence_assertions :-
     ),
     expect_sql('SELECT * FROM kept;',
                table([id,note], [])),
+    asadb_shutdown,
+    cleanup.
+
+run_metadata_persistence_assertions :-
+    cleanup,
+    asadb_boot('tests/testdata.asa'),
+    asadb_exec_sql('CREATE DATABASE metadata_assert; USE metadata_assert; CREATE TABLE items (id INT); INSERT INTO items VALUES (1), (2), (3);', SetupResult),
+    ( result_has_error(SetupResult) ->
+        asadb_format_result(SetupResult),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ; true
+    ),
+    asadb_database_metadata(Before),
+    DatabaseId = Before.database_id,
+    ( Before.engine_version == '1.3.0',
+      Before.storage_format =:= 3,
+      Before.summary.row_count =:= 3 ->
+        true
+    ;   format('ASSERTION FAILED: live database metadata is invalid: ~w.~n', [Before]),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ),
+    asadb_shutdown,
+    asadb_boot('tests/testdata.asa'),
+    asadb_database_metadata(After),
+    ( After.database_id == DatabaseId,
+      After.summary.current_database == metadata_assert,
+      After.summary.row_count =:= 3,
+      After.checkpoint_count >= Before.checkpoint_count ->
+        true
+    ;   format('ASSERTION FAILED: database metadata did not survive restart: before=~w after=~w.~n', [Before,After]),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ),
     asadb_shutdown,
     cleanup.
 
@@ -262,10 +302,22 @@ run_limited_result_assertions :-
         cleanup,
         halt(1)
     ),
+    asadb_database_metadata(BeforeCountMetadata),
+    BeforeSequentialScans = BeforeCountMetadata.storage.planner.sequential_scans,
     asadb_exec_sql_limited('SELECT COUNT(*) AS total FROM t;', 3, Counted),
     ( Counted = multi([table([total], [[4]])]) ->
         true
     ;   format('ASSERTION FAILED: result limit changed aggregate semantics: ~w.~n', [Counted]),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ),
+    asadb_database_metadata(Metadata),
+    Planner = Metadata.storage.planner,
+    ( Planner.metadata_count_scans >= 1,
+      Planner.sequential_scans =:= BeforeSequentialScans ->
+        true
+    ;   format('ASSERTION FAILED: COUNT(*) did not use the catalog metadata path: ~w.~n', [Planner]),
         asadb_shutdown,
         cleanup,
         halt(1)
@@ -312,6 +364,51 @@ run_storage_engine_assertions :-
         cleanup,
         halt(1)
     ),
+    asadb_shutdown,
+    cleanup.
+
+run_drop_table_cleanup_assertions :-
+    cleanup,
+    asadb_boot('tests/testdata.asa'),
+    Setup = 'CREATE DATABASE drop_assert; USE drop_assert; CREATE TABLE doomed (id INT PRIMARY KEY, qty INT); INSERT INTO doomed VALUES (1, 20), (2, 30); CREATE INDEX idx_qty ON doomed(qty);',
+    asadb_exec_sql(Setup, SetupResult),
+    ( result_has_error(SetupResult) ->
+        asadb_format_result(SetupResult),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ; true
+    ),
+    expect_sql('SELECT id FROM doomed WHERE qty = 20;',
+               table([id], [[1]])),
+    asadb_record_manager:asadb_record_store_id(drop_assert, doomed, StoreId),
+    atom_concat(StoreId, '.heap', HeapName),
+    directory_file_path('tests/testdata.asa.store', HeapName, HeapFile),
+    asadb_record_manager:asadb_record_index_file(StoreId, qty, IndexFile),
+    ( exists_file(HeapFile), exists_file(IndexFile) ->
+        true
+    ;   format('ASSERTION FAILED: DROP TABLE fixture did not create heap/index files.~nHeap=~w~nIndex=~w~n', [HeapFile,IndexFile]),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ),
+    expect_sql('DROP TABLE IF EXISTS doomed;',
+               ok(dropped_table(doomed))),
+    expect_sql('SHOW TABLES;',
+               table([table], [])),
+    ( \+ exists_file(HeapFile), \+ exists_file(IndexFile) ->
+        true
+    ;   format('ASSERTION FAILED: DROP TABLE left heap/index files behind.~nHeap=~w~nIndex=~w~n', [HeapFile,IndexFile]),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ),
+    asadb_shutdown,
+    asadb_boot('tests/testdata.asa'),
+    expect_sql('SHOW TABLES;',
+               table([table], [])),
+    expect_sql('DROP TABLE IF EXISTS doomed;',
+               ok(dropped_table(doomed))),
     asadb_shutdown,
     cleanup.
 
@@ -406,4 +503,7 @@ cleanup :-
     ( exists_file('tests/testdata.asa.journal') -> delete_file('tests/testdata.asa.journal') ; true ),
     ( exists_file('tests/testdata.asa.current_db') -> delete_file('tests/testdata.asa.current_db') ; true ),
     ( exists_file('tests/testdata.asa.wal') -> delete_file('tests/testdata.asa.wal') ; true ),
+    ( exists_file('tests/testdata.asa.meta') -> delete_file('tests/testdata.asa.meta') ; true ),
+    ( exists_file('tests/testdata.asa.meta.tmp') -> delete_file('tests/testdata.asa.meta.tmp') ; true ),
+    ( exists_file('tests/testdata.asa.meta.bak') -> delete_file('tests/testdata.asa.meta.bak') ; true ),
     ( exists_directory('tests/testdata.asa.store') -> delete_directory_and_contents('tests/testdata.asa.store') ; true ).

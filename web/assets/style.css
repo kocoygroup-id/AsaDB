@@ -1,5 +1,15 @@
 /* Copyright (C) 2026 Kocoy Group and AsaDB contributors */
 /* SPDX-License-Identifier: GPL-3.0-only */
+/* Noto Sans JP is bundled under SIL OFL-1.1; see THIRD_PARTY_NOTICES.md. */
+@font-face {
+  font-family: "AsaDB Noto Sans JP";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/noto-sans-jp-japanese-400-normal.woff2") format("woff2"),
+       url("fonts/noto-sans-jp-japanese-400-normal.woff") format("woff");
+}
+
 :root {
   --bg: #f6f7f9;
   --sidebar: #ffffff;
@@ -23,6 +33,12 @@
   --font-mono: "Cascadia Mono", Consolas, "Courier New", monospace;
 }
 
+/* Minimal Linux installs often ship no Japanese font at all. */
+html:lang(ja) {
+  --font-main: "AsaDB Noto Sans JP", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  --font-mono: "AsaDB Noto Sans JP", "Cascadia Mono", Consolas, "Courier New", monospace;
+}
+
 * { box-sizing: border-box; }
 
 body {
@@ -43,6 +59,8 @@ body {
   display: grid;
   place-items: center;
   padding: 24px;
+  /* A visual warmup notice must never intercept clicks or keyboard focus. */
+  pointer-events: none;
   background:
     linear-gradient(180deg, rgba(246, 247, 249, .96), rgba(242, 238, 228, .94));
   transition: opacity .22s ease, visibility .22s ease;
@@ -52,6 +70,7 @@ body {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
+  animation: none;
 }
 
 .startup-loader-panel {
@@ -98,7 +117,7 @@ body {
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--accent), var(--ok));
-  animation: startup-progress 3.5s ease-out forwards;
+  animation: startup-progress .9s ease-out forwards;
 }
 
 body.is-warming .shell {
@@ -110,15 +129,41 @@ body.is-warming .shell {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .startup-loader,
-  .startup-loader-bar span {
+  .startup-loader {
     transition: none;
+  }
+
+  .startup-loader-bar span {
     animation: none;
   }
 
   .startup-loader-bar span {
     width: 100%;
   }
+}
+
+.ui-boot-error {
+  position: fixed;
+  z-index: 10001;
+  right: 18px;
+  bottom: 18px;
+  max-width: min(460px, calc(100vw - 36px));
+  padding: 14px 16px;
+  border: 1px solid #c56a73;
+  border-radius: 8px;
+  background: #fff7f7;
+  box-shadow: var(--shadow);
+  color: #62101d;
+}
+
+.ui-boot-error strong,
+.ui-boot-error span {
+  display: block;
+}
+
+.ui-boot-error span {
+  margin-top: 4px;
+  color: #7b2a34;
 }
 
 button,
@@ -551,6 +596,39 @@ th {
   gap: 2px;
 }
 
+.table-show-more,
+.result-show-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  margin: 7px 2px 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: #fffdf7;
+  color: var(--accent-dark);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.table-show-more {
+  width: calc(100% - 4px);
+}
+
+.table-show-more:hover,
+.result-show-more:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.table-show-more:disabled,
+.result-show-more:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
 .table-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 30px;
@@ -692,6 +770,43 @@ th {
   gap: 8px;
 }
 
+.language-switcher {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 3px;
+  border: 1px solid #d8cfbb;
+  border-radius: 999px;
+  background: #fffdf7;
+  box-shadow: 0 2px 7px rgba(73, 55, 22, .06);
+}
+
+.language-button {
+  min-width: 34px;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #6b6251;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: .04em;
+  box-shadow: none;
+}
+
+.language-button:hover {
+  background: #f5efe0;
+  transform: none;
+}
+
+.language-button.active,
+.language-button[aria-pressed="true"] {
+  background: #e8f6f0;
+  color: var(--ok);
+  box-shadow: inset 0 0 0 1px #a7d8c9;
+}
+
 .db-action-button {
   position: relative;
   display: inline-grid;
@@ -778,6 +893,7 @@ th {
   border: 1px solid var(--line-strong);
   border-radius: 7px;
   background: #fff;
+  overflow-anchor: none;
 }
 
 .sql-editor-shell.has-error {
@@ -796,6 +912,12 @@ th {
   font-size: 13px;
   line-height: 1.55;
   user-select: none;
+  overflow-anchor: none;
+}
+
+.sql-line-numbers-content {
+  min-height: 100%;
+  box-sizing: border-box;
 }
 
 .sql-line-numbers span {
@@ -813,11 +935,21 @@ th {
   font-weight: 800;
 }
 
+.sql-editor-shell.large-script .sql-highlight {
+  display: none;
+}
+
+.sql-editor-shell.large-script #sqlInput {
+  color: var(--text);
+  -webkit-text-fill-color: currentColor;
+}
+
 .sql-code-area {
   position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  overflow-anchor: none;
 }
 
 .sql-highlight,
@@ -838,16 +970,20 @@ th {
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.55;
+  overflow-anchor: none;
 }
 
 .sql-highlight {
   pointer-events: none;
+  overflow: hidden;
   background: transparent;
   color: var(--text);
 }
 
 #sqlInput {
   resize: none;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   background: transparent;
   color: transparent;
   caret-color: #111827;
@@ -860,6 +996,81 @@ th {
 
 #sqlInput:focus-visible {
   outline: none;
+}
+
+.db-metadata {
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.db-metadata summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 38px;
+  cursor: pointer;
+  color: var(--text);
+  font-weight: 700;
+  list-style: none;
+}
+
+.db-metadata summary::-webkit-details-marker {
+  display: none;
+}
+
+.db-metadata summary::before {
+  content: '+';
+  color: var(--accent-dark);
+}
+
+.db-metadata[open] summary::before {
+  content: '-';
+}
+
+.db-metadata summary > span:first-of-type {
+  margin-right: auto;
+}
+
+.metadata-state {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.db-metadata dl {
+  display: grid;
+  gap: 0;
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.db-metadata dl > div {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--line);
+}
+
+.db-metadata dl > div:last-child {
+  border-bottom: 0;
+}
+
+.db-metadata dt {
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.db-metadata dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  text-align: right;
 }
 
 .sql-keyword { color: var(--accent-dark); font-weight: 700; }
@@ -1038,6 +1249,94 @@ th {
 .import-toggle {
   min-width: 178px;
   box-shadow: 0 10px 22px rgba(34, 31, 24, 0.04);
+}
+
+.import-progress-panel {
+  display: grid;
+  gap: 10px;
+  width: min(1120px, 100%);
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: linear-gradient(135deg, #fffdf7, var(--accent-soft));
+  box-shadow: 0 12px 28px rgba(34, 31, 24, 0.05);
+}
+
+.import-progress-panel[hidden] {
+  display: none;
+}
+
+.import-progress-heading,
+.import-progress-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.import-progress-heading > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.import-progress-eyebrow {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+#importProgressLabel,
+#importProgressStatus {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.import-progress-percent {
+  color: var(--accent-dark);
+  font-size: 18px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+#importProgressBar {
+  width: 100%;
+  height: 12px;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  accent-color: var(--accent-dark);
+}
+
+#importProgressBar::-webkit-progress-bar {
+  border-radius: 999px;
+  background: rgba(133, 99, 11, .14);
+}
+
+#importProgressBar::-webkit-progress-value {
+  border-radius: 999px;
+  background: var(--accent-dark);
+}
+
+#importProgressBar::-moz-progress-bar {
+  border-radius: 999px;
+  background: var(--accent-dark);
+}
+
+.import-progress-footer {
+  align-items: flex-start;
+}
+
+.import-cancel-button {
+  flex: 0 0 auto;
+}
+
+.import-cancel-button[disabled] {
+  cursor: default;
+  opacity: .55;
 }
 
 .legacy-fieldset {
@@ -1780,6 +2079,15 @@ th {
   font-size: 0.9rem;
 }
 
+.result-show-more {
+  margin-top: 8px;
+}
+
+.table-page-note {
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+
 .result-data-table {
   width: max-content;
   min-width: 100%;
@@ -1905,6 +2213,10 @@ th {
     justify-content: flex-end;
   }
 
+  .language-switcher {
+    margin-right: auto;
+  }
+
   .db-action-button {
     flex: 0 0 40px;
   }
@@ -1944,5 +2256,19 @@ th {
 
   .sql-diagnostic strong {
     min-width: 0;
+  }
+
+  .import-progress-heading,
+  .import-progress-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .import-progress-percent {
+    align-self: flex-start;
+  }
+
+  .import-cancel-button {
+    width: 100%;
   }
 }
