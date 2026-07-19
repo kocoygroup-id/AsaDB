@@ -4,7 +4,7 @@
 :- initialization(main, main).
 
 main :-
-    File = 'Stress Test/public_safety_archive_5500.sql',
+    File = 'stress tests/public_safety_archive_5500.sql',
     DbFile = 'tests/benchmark_components.asa',
     cleanup(DbFile),
     read_file_to_codes(File, Codes, []),

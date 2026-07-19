@@ -7,6 +7,7 @@
     asadb_buffer_pool_pin/4,
     asadb_buffer_pool_unpin/3,
     asadb_buffer_pool_mark_dirty/2,
+    asadb_buffer_pool_file_page_count/2,
     asadb_buffer_pool_invalidate_file/1,
     asadb_buffer_pool_flush_page/2,
     asadb_buffer_pool_flush_all/0,
@@ -22,7 +23,10 @@
 :- dynamic buffer_stat/2.
 :- dynamic buffer_write_count/1.
 
-% buffer_page(File, PageNo, Bytes, Dirty, Pins, Referenced, Tick, ByteCount).
+% buffer_page(File, PageNo, Data, Dirty, Pins, Referenced, Tick, ByteCount).
+% Data is a compact SWI-Prolog string. Keeping 4 KB pages as integer lists in
+% dynamic facts multiplied their real heap cost and made every lookup copy a
+% large term. The public API still exposes byte lists to the page manager.
 
 asadb_buffer_pool_reset :-
     with_mutex(asadb_buffer_pool,
@@ -44,15 +48,23 @@ asadb_buffer_pool_get(File, PageNo, Bytes) :-
     with_mutex(asadb_buffer_pool, get_locked(File, PageNo, Bytes)).
 
 get_locked(File, PageNo, Bytes) :-
-    buffer_page(File, PageNo, Bytes0, Dirty, Pins, _, _, Size), !,
-    next_tick(Tick),
-    retractall(buffer_page(File, PageNo, _, _, _, _, _, _)),
-    assertz(buffer_page(File, PageNo, Bytes0, Dirty, Pins, true, Tick, Size)),
+    buffer_page(File, PageNo, Data, Dirty, Pins, Ref, Tick0, Size), !,
+    touch_cached_page(File, PageNo, Data, Dirty, Pins, Ref, Tick0, Size),
     bump_stat(hit),
-    Bytes = Bytes0.
+    string_codes(Data, Bytes).
 get_locked(_, _, _) :-
     bump_stat(miss),
     fail.
+
+% Clock only needs a write when a previously cleared reference bit is restored.
+% Reasserting a dynamic fact containing a 4 KB byte list on every cache hit made
+% sequential imports copy the same page thousands of times.
+touch_cached_page(_, _, _, _, _, true, _, _) :-
+    asadb_config_get(cache_policy, clock), !.
+touch_cached_page(File, PageNo, Bytes, Dirty, Pins, _, Tick0, Size) :-
+    ( asadb_config_get(cache_policy, lru) -> next_tick(Tick) ; Tick = Tick0 ),
+    retractall(buffer_page(File, PageNo, _, _, _, _, _, _)),
+    assertz(buffer_page(File, PageNo, Bytes, Dirty, Pins, true, Tick, Size)).
 
 asadb_buffer_pool_put(File, PageNo, Bytes, Dirty0) :-
     normalize_dirty(Dirty0, Dirty),
@@ -62,8 +74,9 @@ asadb_buffer_pool_put(File, PageNo, Bytes, Dirty0) :-
 put_locked(File, PageNo, Bytes, Dirty, Pins) :-
     next_tick(Tick),
     length(Bytes, Size),
+    string_codes(Data, Bytes),
     retractall(buffer_page(File, PageNo, _, _, _, _, _, _)),
-    assertz(buffer_page(File, PageNo, Bytes, Dirty, Pins, true, Tick, Size)),
+    assertz(buffer_page(File, PageNo, Data, Dirty, Pins, true, Tick, Size)),
     note_write(Dirty),
     evict_if_needed.
 
@@ -72,14 +85,14 @@ asadb_buffer_pool_pin(File, PageNo, Loader, Bytes) :-
         pin_locked(File, PageNo, Loader, Bytes)).
 
 pin_locked(File, PageNo, _, Bytes) :-
-    buffer_page(File, PageNo, Bytes0, Dirty, Pins0, _, _, Size), !,
+    buffer_page(File, PageNo, Data, Dirty, Pins0, _, _, Size), !,
     Pins is Pins0 + 1,
     next_tick(Tick),
     retractall(buffer_page(File, PageNo, _, _, _, _, _, _)),
-    assertz(buffer_page(File, PageNo, Bytes0, Dirty, Pins, true, Tick, Size)),
+    assertz(buffer_page(File, PageNo, Data, Dirty, Pins, true, Tick, Size)),
     bump_stat(hit),
     bump_stat(pin),
-    Bytes = Bytes0.
+    string_codes(Data, Bytes).
 pin_locked(File, PageNo, Loader, Bytes) :-
     bump_stat(miss),
     call(Loader, Bytes),
@@ -92,10 +105,10 @@ asadb_buffer_pool_unpin(File, PageNo, Dirty0) :-
         unpin_locked(File, PageNo, DirtyRequest)).
 
 unpin_locked(File, PageNo, DirtyRequest) :-
-    retract(buffer_page(File, PageNo, Bytes, Dirty0, Pins0, Ref, Tick, Size)), !,
+    retract(buffer_page(File, PageNo, Data, Dirty0, Pins0, Ref, Tick, Size)), !,
     Pins is max(0, Pins0 - 1),
     merge_dirty(Dirty0, DirtyRequest, Dirty),
-    assertz(buffer_page(File, PageNo, Bytes, Dirty, Pins, Ref, Tick, Size)),
+    assertz(buffer_page(File, PageNo, Data, Dirty, Pins, Ref, Tick, Size)),
     note_write(DirtyRequest),
     bump_stat(unpin),
     evict_if_needed.
@@ -103,10 +116,24 @@ unpin_locked(_, _, _).
 
 asadb_buffer_pool_mark_dirty(File, PageNo) :-
     with_mutex(asadb_buffer_pool,
-        ( retract(buffer_page(File, PageNo, Bytes, _, Pins, Ref, Tick, Size)),
-          assertz(buffer_page(File, PageNo, Bytes, dirty, Pins, Ref, Tick, Size)),
+        ( retract(buffer_page(File, PageNo, Data, _, Pins, Ref, Tick, Size)),
+          assertz(buffer_page(File, PageNo, Data, dirty, Pins, Ref, Tick, Size)),
           note_write(dirty)
         )).
+
+asadb_buffer_pool_file_page_count(File, Count) :-
+    with_mutex(asadb_buffer_pool,
+        ( findall(PageNo,
+                  buffer_page(File, PageNo, _, _, _, _, _, _),
+                  PageNos),
+          cached_page_count(PageNos, Count)
+        )).
+
+cached_page_count([], 0).
+cached_page_count(PageNos, Count) :-
+    PageNos = [_|_],
+    max_list(PageNos, LastPage),
+    Count is LastPage + 1.
 
 asadb_buffer_pool_invalidate_file(File) :-
     with_mutex(asadb_buffer_pool,
@@ -126,10 +153,10 @@ asadb_buffer_pool_flush_page(File, PageNo) :-
     with_mutex(asadb_buffer_pool, flush_page_locked(File, PageNo)).
 
 flush_page_locked(File, PageNo) :-
-    buffer_page(File, PageNo, Bytes, dirty, Pins, Ref, Tick, Size), !,
-    write_page_bytes(File, PageNo, Bytes),
+    buffer_page(File, PageNo, Data, dirty, Pins, Ref, Tick, Size), !,
+    write_page_bytes(File, PageNo, Data),
     retractall(buffer_page(File, PageNo, _, _, _, _, _, _)),
-    assertz(buffer_page(File, PageNo, Bytes, clean, Pins, Ref, Tick, Size)),
+    assertz(buffer_page(File, PageNo, Data, clean, Pins, Ref, Tick, Size)),
     bump_stat(flush).
 flush_page_locked(_, _).
 
@@ -238,15 +265,15 @@ eviction_candidate(_, File, PageNo) :-
     \+ ( buffer_page(_, _, _, _, 0, _, Earlier, _), Earlier < Tick ).
 
 clear_unpinned_reference_bits :-
-    findall(page(File, PageNo, Bytes, Dirty, Tick, Size),
-            buffer_page(File, PageNo, Bytes, Dirty, 0, true, Tick, Size),
+    findall(page(File, PageNo, Data, Dirty, Tick, Size),
+            buffer_page(File, PageNo, Data, Dirty, 0, true, Tick, Size),
             Pages),
     clear_reference_pages(Pages).
 
 clear_reference_pages([]).
-clear_reference_pages([page(File, PageNo, Bytes, Dirty, Tick, Size)|Pages]) :-
+clear_reference_pages([page(File, PageNo, Data, Dirty, Tick, Size)|Pages]) :-
     retractall(buffer_page(File, PageNo, _, _, _, _, _, _)),
-    assertz(buffer_page(File, PageNo, Bytes, Dirty, 0, false, Tick, Size)),
+    assertz(buffer_page(File, PageNo, Data, Dirty, 0, false, Tick, Size)),
     clear_reference_pages(Pages).
 
 flush_one_dirty_unpinned :-
@@ -255,14 +282,14 @@ flush_one_dirty_unpinned :-
     flush_page_locked(File, PageNo).
 flush_one_dirty_unpinned.
 
-write_page_bytes(File, PageNo, Bytes) :-
+write_page_bytes(File, PageNo, Data) :-
     ensure_page_file(File),
     asadb_config_get(page_size, PageSize),
     Offset is PageNo * PageSize,
     setup_call_cleanup(
         open(File, update, Stream, [type(binary)]),
         ( seek(Stream, Offset, bof, _),
-          format(Stream, '~s', [Bytes]),
+          format(Stream, '~s', [Data]),
           flush_output(Stream)
         ),
         close(Stream)

@@ -27,11 +27,13 @@
     asadb_save/0,
     asadb_exec_sql/2,
     asadb_exec_sql_limited/3,
+    asadb_exec_sql_page/4,
     asadb_parse_sql/2,
     asadb_analyze_sql/2,
     asadb_current_database/1,
     asadb_get_state/1,
     asadb_storage_stats/1,
+    asadb_database_metadata/1,
     asadb_analysis_json/2,
     asadb_result_json/2,
     asadb_format_result/1
@@ -44,6 +46,7 @@
 :- discontiguous normalize_tables/3.
 
 :- use_module(library(lists)).
+:- use_module(library(assoc)).
 :- use_module(library(readutil)).
 :- use_module(library(solution_sequences)).
 :- use_module('asadb_buffer_pool.pl').
@@ -51,6 +54,7 @@
 :- use_module('asadb_btree.pl').
 :- use_module('asadb_config.pl').
 :- use_module('asadb_record_manager.pl').
+:- use_module('asadb_metadata.pl').
 
 :- dynamic asadb_state/1.
 :- dynamic asadb_file/1.
@@ -61,6 +65,7 @@
 :- dynamic asadb_btree_cache/4.
 :- dynamic asadb_plan_stat/2.
 :- dynamic asadb_checkpoint_dirty/0.
+:- thread_local asadb_query_batch_depth/1.
 
 asadb_magic("ASADB001\n").
 
@@ -232,7 +237,9 @@ asadb_boot(InputFile) :-
     retractall(asadb_btree_cache(_, _, _, _)),
     retractall(asadb_plan_stat(_, _)),
     retractall(asadb_checkpoint_dirty),
+    retractall(asadb_query_batch_depth(_)),
     assertz(asadb_file(File)),
+    asadb_metadata_open(File),
     ( exists_file(File) ->
         catch(asadb_load_file(File, State), _, empty_state(State))
     ; empty_state(State)
@@ -280,7 +287,9 @@ asadb_shutdown :-
     retractall(asadb_btree_cache(_, _, _, _)),
     retractall(asadb_plan_stat(_, _)),
     retractall(asadb_checkpoint_dirty),
-    asadb_buffer_pool_flush_all.
+    retractall(asadb_query_batch_depth(_)),
+    asadb_buffer_pool_flush_all,
+    asadb_metadata_close.
 
 asadb_save_if_needed :-
     asadb_file(File),
@@ -306,7 +315,9 @@ asadb_save_locked :-
     asadb_state(State),
     asadb_save_file(File, State),
     clear_wal,
-    retractall(asadb_checkpoint_dirty).
+    retractall(asadb_checkpoint_dirty),
+    metadata_checkpoint_summary(State, Summary),
+    catch(asadb_metadata_checkpoint(Summary), _, true).
 
 mark_state_upgrade(state(V, _)) :-
     ( \+ integer(V) ; V < 3 ), !,
@@ -314,7 +325,7 @@ mark_state_upgrade(state(V, _)) :-
 mark_state_upgrade(_).
 
 asadb_get_state(State) :-
-    asadb_state(State).
+    with_mutex(asadb_write, asadb_state(State)).
 
 asadb_storage_stats(storage{config:Config,pager:PagerStats,btree_cache:btree_cache{entries:CacheEntries},planner:Planner}) :-
     asadb_config_snapshot(Config),
@@ -322,12 +333,127 @@ asadb_storage_stats(storage{config:Config,pager:PagerStats,btree_cache:btree_cac
     aggregate_all(count, asadb_btree_cache(_, _, _, _), CacheEntries),
     planner_stats_dict(Planner).
 
+asadb_database_metadata(Metadata) :-
+    asadb_metadata_snapshot(Identity),
+    with_mutex(asadb_write,
+        asadb_database_metadata_snapshot(File, Summary,
+                                         TransactionActive, CheckpointDirty)),
+    file_size_or_zero(File, CatalogBytes),
+    atom_concat(File, '.store', StoreRoot),
+    directory_size(StoreRoot, StoreBytes),
+    wal_file(WalFile),
+    file_size_or_zero(WalFile, WalBytes),
+    asadb_storage_stats(Storage),
+    Persistence = persistence{
+        catalog_file:File,
+        catalog_bytes:CatalogBytes,
+        store_directory:StoreRoot,
+        store_bytes:StoreBytes,
+        wal_bytes:WalBytes,
+        transaction_active:TransactionActive,
+        checkpoint_dirty:CheckpointDirty,
+        atomic_catalog_replace:true,
+        page_checksums:true
+    },
+    Metadata = Identity.put(_{summary:Summary,persistence:Persistence,storage:Storage}).
+
+asadb_database_metadata_snapshot(File, Summary, TransactionActive, CheckpointDirty) :-
+    asadb_file(File),
+    asadb_state(State),
+    metadata_checkpoint_summary(State, Summary),
+    bool_value(asadb_tx_snapshot(_), TransactionActive),
+    bool_value(asadb_checkpoint_dirty, CheckpointDirty).
+
+metadata_checkpoint_summary(state(StorageFormat, DBs), summary{
+    current_database:CurrentDb,
+    database_count:DatabaseCount,
+    table_count:TableCount,
+    view_count:ViewCount,
+    row_count:RowCount,
+    storage_format:StorageFormat
+}) :-
+    asadb_current_database(CurrentDb),
+    metadata_catalog_counts(DBs, 0, DatabaseCount, 0, TableCount, 0, ViewCount, 0, RowCount).
+
+metadata_catalog_counts([], DBs, DBs, Tables, Tables, Views, Views, Rows, Rows).
+metadata_catalog_counts([DB|Rest], DBs0, DBs, Tables0, Tables, Views0, Views, Rows0, Rows) :-
+    metadata_db_parts(DB, Name, DBTables, DBViews),
+    ( metadata_visible_database(Name) ->
+        length(DBTables, DBTableCount),
+        length(DBViews, DBViewCount),
+        metadata_table_rows(DBTables, 0, DBRows),
+        DBs1 is DBs0 + 1,
+        Tables1 is Tables0 + DBTableCount,
+        Views1 is Views0 + DBViewCount,
+        Rows1 is Rows0 + DBRows
+    ; DBs1 = DBs0,
+      Tables1 = Tables0,
+      Views1 = Views0,
+      Rows1 = Rows0
+    ),
+    metadata_catalog_counts(Rest, DBs1, DBs, Tables1, Tables, Views1, Views, Rows1, Rows).
+
+metadata_db_parts(db(Name, Tables, Views, _, _, _), Name, Tables, Views) :- !.
+metadata_db_parts(db(Name, Tables), Name, Tables, []).
+
+metadata_visible_database(Name) :- \+ sub_atom(Name, 0, 2, _, '__').
+
+metadata_table_rows([], Rows, Rows).
+metadata_table_rows([table(_, _, paged_rows(_, Count, _), _)|Tables], Rows0, Rows) :- !,
+    Rows1 is Rows0 + Count,
+    metadata_table_rows(Tables, Rows1, Rows).
+metadata_table_rows([table(_, _, TableRows, _)|Tables], Rows0, Rows) :- !,
+    length(TableRows, Count),
+    Rows1 is Rows0 + Count,
+    metadata_table_rows(Tables, Rows1, Rows).
+metadata_table_rows([_|Tables], Rows0, Rows) :-
+    metadata_table_rows(Tables, Rows0, Rows).
+
+file_size_or_zero(File, Size) :-
+    catch(
+        ( exists_file(File) -> size_file(File, Size) ; Size = 0 ),
+        _,
+        Size = 0
+    ).
+
+directory_size(Directory, Size) :-
+    exists_directory(Directory), !,
+    catch(
+        ( directory_files(Directory, Names),
+          directory_entries_size(Names, Directory, 0, Size)
+        ),
+        _,
+        Size = 0
+    ).
+directory_size(_, 0).
+
+directory_entries_size([], _, Size, Size).
+directory_entries_size(['.'|Names], Directory, Size0, Size) :- !,
+    directory_entries_size(Names, Directory, Size0, Size).
+directory_entries_size(['..'|Names], Directory, Size0, Size) :- !,
+    directory_entries_size(Names, Directory, Size0, Size).
+directory_entries_size([Name|Names], Directory, Size0, Size) :-
+    directory_file_path(Directory, Name, Path),
+    ( exists_directory(Path) -> directory_size(Path, EntrySize)
+    ; file_size_or_zero(Path, EntrySize)
+    ),
+    Size1 is Size0 + EntrySize,
+    directory_entries_size(Names, Directory, Size1, Size).
+
+bool_value(Goal, true) :- call(Goal), !.
+bool_value(_, false).
+
 planner_stats_dict(planner{index_scans:IndexScans,index_order_scans:IndexOrderScans,
-                           sequential_scans:SequentialScans,index_builds:IndexBuilds}) :-
+                           sequential_scans:SequentialScans,index_builds:IndexBuilds,
+                           metadata_count_scans:MetadataCountScans,
+                           indexed_joins:IndexedJoins,nested_loop_joins:NestedLoopJoins}) :-
     plan_stat(index_scan, IndexScans),
     plan_stat(index_order_scan, IndexOrderScans),
     plan_stat(sequential_scan, SequentialScans),
-    plan_stat(index_build, IndexBuilds).
+    plan_stat(index_build, IndexBuilds),
+    plan_stat(metadata_count_scan, MetadataCountScans),
+    plan_stat(indexed_join, IndexedJoins),
+    plan_stat(nested_loop_join, NestedLoopJoins).
 
 plan_stat(Name, Value) :- asadb_plan_stat(Name, Value), !.
 plan_stat(_, 0).
@@ -511,19 +637,59 @@ decode_codes([E|Es], [C|Cs]) :- C is (E xor 90) mod 256, decode_codes(Es, Cs).
    ------------------------------------------------------------------------- */
 
 asadb_exec_sql(SQL, Result) :-
-    catch((
+    catch(with_query_batch((
         asadb_parse_sql(SQL, Statements),
         execute_many(Statements, Results),
         Result = multi(Results)
-    ), Error, Result = error(runtime_error, Error)).
+    )), Error, Result = error(runtime_error, Error)).
 
 asadb_exec_sql_limited(SQL, MaxRows, Result) :-
-    catch((
+    catch(with_query_batch((
         asadb_parse_sql(SQL, Statements0),
         maplist(limit_top_level_statement(MaxRows), Statements0, Statements),
         execute_many(Statements, Results),
         Result = multi(Results)
-    ), Error, Result = error(runtime_error, Error)).
+    )), Error, Result = error(runtime_error, Error)).
+
+% Execute a read page without materializing the rows before Offset.  The
+% regular limited pipeline intentionally starts at row zero; the page
+% pipeline keeps the SQL LIMIT/OFFSET semantics intact so the panel can ask
+% for the next page after a result reaches the 500-row display boundary.
+asadb_exec_sql_page(SQL, Offset, MaxRows, Result) :-
+    valid_result_page_number(Offset),
+    valid_result_page_number(MaxRows),
+    MaxRows > 0,
+    catch(with_query_batch((
+        asadb_parse_sql(SQL, Statements0),
+        maplist(page_top_level_statement(Offset, MaxRows), Statements0, Statements),
+        execute_many(Statements, Results),
+        Result = multi(Results)
+    )), Error, Result = error(runtime_error, Error)).
+
+valid_result_page_number(Value) :- integer(Value), Value >= 0.
+
+with_query_batch(Goal) :-
+    begin_query_batch(Outermost),
+    call_cleanup(Goal, end_query_batch(Outermost)).
+
+begin_query_batch(true) :-
+    \+ asadb_query_batch_depth(_), !,
+    assertz(asadb_query_batch_depth(1)).
+begin_query_batch(false) :-
+    retract(asadb_query_batch_depth(Depth0)),
+    Depth is Depth0 + 1,
+    assertz(asadb_query_batch_depth(Depth)).
+
+end_query_batch(false) :-
+    retract(asadb_query_batch_depth(Depth0)), !,
+    Depth is max(1, Depth0 - 1),
+    assertz(asadb_query_batch_depth(Depth)).
+end_query_batch(true) :-
+    retractall(asadb_query_batch_depth(_)),
+    ( asadb_tx_snapshot(_) -> true
+    ; asadb_checkpoint_dirty -> asadb_save
+    ; true
+    ).
 
 limit_top_level_statement(MaxRows,
                           select(Projection, Source, Where, Group, Order, Limit0),
@@ -534,6 +700,27 @@ limit_top_level_statement(MaxRows,
                           select(Projection, Source, Where, Order, Limit)) :- !,
     cap_result_limit(MaxRows, Limit0, Limit).
 limit_top_level_statement(_, Statement, Statement).
+
+page_top_level_statement(Offset, MaxRows,
+                         select(Projection, Source, Where, Group, Order, Limit0),
+                         select(Projection, Source, Where, Group, Order, Limit)) :- !,
+    page_result_limit(Offset, MaxRows, Limit0, Limit).
+page_top_level_statement(Offset, MaxRows,
+                         select(Projection, Source, Where, Order, Limit0),
+                         select(Projection, Source, Where, Order, Limit)) :- !,
+    page_result_limit(Offset, MaxRows, Limit0, Limit).
+page_top_level_statement(_, _, Statement, Statement).
+
+page_result_limit(Offset, MaxRows, none, limit(Offset, MaxRows)) :- !.
+page_result_limit(Offset, MaxRows, limit(ExistingOffset, ExistingCount),
+                  limit(NewOffset, PageCount)) :- !,
+    NewOffset is ExistingOffset + Offset,
+    Remaining is max(0, ExistingCount - Offset),
+    PageCount is min(MaxRows, Remaining).
+page_result_limit(Offset, MaxRows, limit(ExistingCount), limit(Offset, PageCount)) :- !,
+    Remaining is max(0, ExistingCount - Offset),
+    PageCount is min(MaxRows, Remaining).
+page_result_limit(Offset, MaxRows, _, limit(Offset, MaxRows)).
 
 cap_result_limit(MaxRows, none, limit(0, MaxRows)) :- !.
 cap_result_limit(MaxRows, limit(Offset, Count), limit(Offset, Capped)) :- !,
@@ -1880,6 +2067,15 @@ execute_statement(union(Left, Right, Mode), table(Columns, OutRows)) :-
     append(LeftRows, RightRows, Rows),
     union_rows(Mode, Rows, OutRows).
 
+execute_statement(select(Projection, table_ref(Table, _Alias), true, none, _Order, Limit),
+                  table([Label], OutRows)) :-
+    count_all_projection(Projection, Label),
+    current_db_or_default(DB),
+    require_privilege(select, DB, Table),
+    get_table_storage(DB, Table, table(Table, _Columns, paged_rows(_StoreId, Count, _Counters), _Indexes)), !,
+    note_plan(metadata_count_scan),
+    aggregate_limit_rows(Limit, [Count], OutRows).
+
 execute_statement(select(Projection, table_ref(Table, Alias), Where, none, _Order, Limit), table(OutColumns, OutRows)) :-
     select_needs_grouping(Projection, none),
     current_db_or_default(DB),
@@ -1901,8 +2097,14 @@ execute_statement(select(Projection, table_ref(Table, Alias), Where, none, Order
 execute_statement(select(Projection, Source, Where, Group, Order, Limit), table(OutColumns, OutRows)) :-
     current_db_or_default(DB),
     require_source_privileges(DB, Source),
-    build_source_rows(DB, Source, Columns, Rows0),
-    maybe_source_index_filter(DB, Source, Where, Rows0, Rows),
+    % Push predicates that belong to one side of a JOIN into that source
+    % before materializing it.  Without this, a query such as
+    % `... JOIN ... WHERE c.company_id <= 20` loaded both 250k-row tables,
+    % built the join, and only then discarded 249,980 left rows.  The
+    % residual WHERE is still evaluated below, preserving exact semantics for
+    % mixed predicates and OR expressions.
+    build_source_rows_filtered(DB, Source, Where, Columns, Rows0),
+    Rows = Rows0,
     filter_rows(Where, Rows, Filtered0),
     ( select_needs_grouping(Projection, Group) ->
         project_grouped_rows(Projection, Group, Filtered0, OutColumns, GroupRows),
@@ -2126,7 +2328,220 @@ build_source_rows(DB, join(Kind, Left, Right, On), Columns, JoinedRows) :-
     append(LeftOutColumns, RightOutColumns, Columns),
     source_null_row(Right, RightColumns, NullRight),
     source_null_row(Left, LeftColumns, NullLeft),
-    join_rows(Kind, LeftRows, RightRows, NullLeft, NullRight, On, JoinedRows).
+    join_rows(Kind, LeftRows, RightRows, NullLeft, NullRight, On,
+              Left, Right, JoinedRows).
+
+% Build source rows while pushing safe, source-local WHERE conjuncts down into
+% JOIN inputs.  This is deliberately conservative: an expression mentioning
+% both inputs, an unqualified column, or a non-conjunctive predicate remains a
+% residual filter at the normal SELECT stage.
+build_source_rows_filtered(DB, table_ref(Table, Alias), Where, Columns, SourceRows) :-
+    % Keep paged tables lazy.  get_table_existing/3 materializes the complete
+    % heap, which defeats predicate pushdown before storage_source_rows/10 can
+    % apply its bounded scan.
+    get_table_storage(DB, Table, table(Table, Columns, RowStorage, Indexes)), !,
+    source_qualifiers(Table, Alias, Qualifiers),
+    source_where_for_storage(Where, StorageWhere),
+    ( paged_row_storage(RowStorage) ->
+        storage_source_rows(DB, Table, Alias, Columns, Indexes, RowStorage,
+                            StorageWhere, none, source_fetch_all_limit, SourceRows)
+    ; table_rows_to_source_rows(Table, Qualifiers, Columns, RowStorage, Rows0),
+      filter_rows(StorageWhere, Rows0, SourceRows)
+    ).
+build_source_rows_filtered(DB, table_ref(View, Alias), _Where, Columns, SourceRows) :-
+    get_view(DB, View, view(View, SelectAST, _CreatedAt)), !,
+    execute_statement(SelectAST, table(Labels, RowLists)),
+    labels_to_columns(Labels, Columns),
+    rows_from_value_lists(Labels, RowLists, Rows),
+    source_qualifiers(View, Alias, Qualifiers),
+    table_rows_to_source_rows(View, Qualifiers, Columns, Rows, SourceRows).
+% For an INNER/LEFT equality JOIN whose right side is a paged table, use its
+% persistent B+Tree directly for the already-filtered left keys.  This avoids
+% materializing a second 250k-row table merely to discover the twenty matching
+% status rows in the common Double_Company-shaped query.
+build_source_rows_filtered(DB, join(Kind, Left, Right, On), Where, Columns, JoinedRows) :-
+    memberchk(Kind, [inner,left]),
+    split_join_source_where(Where, Left, Right, LeftWhere, RightWhere),
+    % A right-side predicate changes which rows are eligible after the key
+    % lookup, so leave that case to the general filtered-source path.  Check
+    % this before touching either source to avoid duplicate work on
+    % backtracking.
+    RightWhere = true,
+    build_source_rows_filtered(DB, Left, LeftWhere, LeftColumns, LeftRows),
+    length(LeftRows, LeftCount),
+    LeftCount =< 4096,
+    equi_join_expressions(On, Left, Right, LeftExpr, RightExpr),
+    build_join_lookup_rows(DB, Right, LeftRows, LeftExpr, RightExpr,
+                           RightColumns, RightRows),
+    join_side_columns(Left, LeftColumns, LeftOutColumns),
+    join_side_columns(Right, RightColumns, RightOutColumns),
+    append(LeftOutColumns, RightOutColumns, Columns),
+    source_null_row(Right, RightColumns, NullRight),
+    source_null_row(Left, LeftColumns, NullLeft),
+    join_rows(Kind, LeftRows, RightRows, NullLeft, NullRight, On,
+              Left, Right, JoinedRows), !.
+build_source_rows_filtered(DB, join(Kind, Left, Right, On), Where, Columns, JoinedRows) :-
+    split_join_source_where(Where, Left, Right, LeftWhere, RightWhere),
+    build_source_rows_filtered(DB, Left, LeftWhere, LeftColumns, LeftRows),
+    build_source_rows_filtered(DB, Right, RightWhere, RightColumns, RightRows),
+    join_side_columns(Left, LeftColumns, LeftOutColumns),
+    join_side_columns(Right, RightColumns, RightOutColumns),
+    append(LeftOutColumns, RightOutColumns, Columns),
+    source_null_row(Right, RightColumns, NullRight),
+    source_null_row(Left, LeftColumns, NullLeft),
+    join_rows(Kind, LeftRows, RightRows, NullLeft, NullRight, On,
+              Left, Right, JoinedRows).
+
+build_join_lookup_rows(DB, table_ref(Table, Alias), LeftRows, LeftExpr,
+                       qcol(_, RightColumn), Columns, SourceRows) :-
+    get_table_storage(DB, Table,
+                      table(Table, Columns, paged_rows(StoreId, _, _), Indexes)),
+    source_qualifiers(Table, Alias, Qualifiers),
+    join_lookup_left_keys(LeftRows, LeftExpr, Keys),
+    ( join_lookup_unique_column(RightColumn, Indexes) ->
+        % A unique key is sufficient to answer this small lookup without
+        % building a persistent B+Tree on demand.  This matters immediately
+        % after a bulk import.  For the common append-ordered integer key,
+        % read only the prefix that can contain the requested keys; if that
+        % conservative check does not hold, fall back to a complete scan.
+        ( join_lookup_prefix_limit(Keys, PrefixLimit),
+          findnsols(PrefixLimit, BaseRow,
+                    asadb_record_scan(StoreId, _, BaseRow), PrefixRows),
+          prefix_rows_cover_keys(PrefixRows, RightColumn, Keys) ->
+            include(base_row_has_join_key(RightColumn, Keys),
+                    PrefixRows, MatchedRows),
+            maplist(table_row_to_source_row(Table, Qualifiers, Columns),
+                    MatchedRows, SourceRows)
+        ;   findall(SourceRow,
+                ( asadb_record_scan(StoreId, _, BaseRow),
+                  BaseRow = row(BasePairs),
+                  lookup_value(RightColumn, BasePairs, Key),
+                      join_lookup_key_member(Key, Keys),
+                      table_row_to_source_row(Table, Qualifiers, Columns,
+                                              BaseRow, SourceRow)
+                    ),
+                    SourceRows)
+        )
+    ;   ensure_persistent_btree(DB, Table, StoreId, RightColumn, File),
+        findall(SourceRow,
+                ( member(Key, Keys),
+                  asadb_btree_file_candidate(File, '=', Key, Rid),
+                  asadb_record_read(StoreId, Rid, BaseRow),
+                  table_row_to_source_row(Table, Qualifiers, Columns,
+                                          BaseRow, SourceRow)
+                ),
+                SourceRows)
+    ), !.
+
+join_lookup_left_keys(LeftRows, LeftExpr, Keys) :-
+    findall(Key,
+            ( member(LeftRow, LeftRows),
+              eval_expr(LeftRow, LeftExpr, Key)
+            ), RawKeys),
+    sort(RawKeys, Keys).
+
+join_lookup_unique_column(Column, Indexes) :-
+    member(index(_, [IndexedColumn], unique), Indexes),
+    same_identifier(Column, IndexedColumn), !.
+
+join_lookup_key_member(Key, [Candidate|_]) :- sql_equal(Key, Candidate), !.
+join_lookup_key_member(Key, [_|Keys]) :- join_lookup_key_member(Key, Keys).
+
+join_lookup_prefix_limit(Keys, Limit) :-
+    Keys \= [],
+    maplist(positive_integer_key, Keys),
+    max_list(Keys, Limit),
+    Limit =< 4096.
+
+positive_integer_key(Key) :- integer(Key), Key > 0.
+
+prefix_rows_cover_keys(Rows, Column, Keys) :-
+    forall(member(Key, Keys),
+           ( member(row(Pairs), Rows),
+             lookup_value(Column, Pairs, Found),
+             sql_equal(Key, Found) )).
+
+base_row_has_join_key(Column, Keys, row(Pairs)) :-
+    lookup_value(Column, Pairs, Key),
+    join_lookup_key_member(Key, Keys).
+
+source_where_for_storage(Where, StorageWhere) :-
+    source_where_unqualify(Where, StorageWhere).
+
+source_where_unqualify(true, true) :- !.
+source_where_unqualify(qcol(_, Name), col(Name)) :- !.
+source_where_unqualify(col(Name), col(Name)) :- !.
+source_where_unqualify(value(Value), value(Value)) :- !.
+source_where_unqualify(cmp(Op, A, B), cmp(Op, UA, UB)) :- !,
+    source_where_unqualify(A, UA),
+    source_where_unqualify(B, UB).
+source_where_unqualify(and(A, B), and(UA, UB)) :- !,
+    source_where_unqualify(A, UA),
+    source_where_unqualify(B, UB).
+source_where_unqualify(or(A, B), or(UA, UB)) :- !,
+    source_where_unqualify(A, UA),
+    source_where_unqualify(B, UB).
+source_where_unqualify(not(A), not(UA)) :- !, source_where_unqualify(A, UA).
+source_where_unqualify(is_null(A), is_null(UA)) :- !, source_where_unqualify(A, UA).
+source_where_unqualify(is_not_null(A), is_not_null(UA)) :- !, source_where_unqualify(A, UA).
+source_where_unqualify(like(A, B), like(UA, UB)) :- !,
+    source_where_unqualify(A, UA),
+    source_where_unqualify(B, UB).
+source_where_unqualify(in_list(A, Values), in_list(UA, UValues)) :- !,
+    source_where_unqualify(A, UA),
+    maplist(source_where_unqualify, Values, UValues).
+source_where_unqualify(between(A, Low, High), between(UA, ULow, UHigh)) :- !,
+    source_where_unqualify(A, UA),
+    source_where_unqualify(Low, ULow),
+    source_where_unqualify(High, UHigh).
+source_where_unqualify(Expr, Expr).
+
+split_join_source_where(Where, LeftSource, RightSource, LeftWhere, RightWhere) :-
+    split_where_conjuncts(Where, Parts),
+    include(expr_only_source_for(LeftSource), Parts, LeftParts),
+    include(expr_only_source_for(RightSource), Parts, RightParts),
+    conjunction_from_parts(LeftParts, LeftWhere),
+    conjunction_from_parts(RightParts, RightWhere).
+
+expr_only_source_for(Source, Expr) :- expr_only_source(Expr, Source).
+
+expr_only_source(cmp(_, A, B), Side) :- !,
+    expr_only_source(A, Side),
+    expr_only_source(B, Side).
+expr_only_source(and(A, B), Side) :- !,
+    expr_only_source(A, Side),
+    expr_only_source(B, Side).
+expr_only_source(or(A, B), Side) :- !,
+    expr_only_source(A, Side),
+    expr_only_source(B, Side).
+expr_only_source(not(A), Side) :- !, expr_only_source(A, Side).
+expr_only_source(is_null(A), Side) :- !, expr_only_source(A, Side).
+expr_only_source(is_not_null(A), Side) :- !, expr_only_source(A, Side).
+expr_only_source(like(A, B), Side) :- !,
+    expr_only_source(A, Side),
+    expr_only_source(B, Side).
+expr_only_source(in_list(A, Values), Side) :- !,
+    expr_only_source(A, Side),
+    maplist(expr_only_source_side(Side), Values).
+expr_only_source(between(A, Low, High), Side) :- !,
+    expr_only_source(A, Side),
+    expr_only_source(Low, Side),
+    expr_only_source(High, Side).
+expr_only_source(qcol(Qualifier, _), Source) :-
+    source_has_qualifier(Source, Qualifier).
+expr_only_source(value(_), _) :- !.
+expr_only_source_side(Side, Expr) :- expr_only_source(Expr, Side).
+
+split_where_conjuncts(and(A, B), Parts) :- !,
+    split_where_conjuncts(A, Left),
+    split_where_conjuncts(B, Right),
+    append(Left, Right, Parts).
+split_where_conjuncts(Where, [Where]).
+
+conjunction_from_parts([], true).
+conjunction_from_parts([Part], Part) :- !.
+conjunction_from_parts([Part|Parts], and(Part, Rest)) :-
+    conjunction_from_parts(Parts, Rest).
 
 maybe_source_index_filter(DB, table_ref(Table, none), Where, Rows, CandidateRows) :-
     get_table_existing(DB, Table, table(Table, _Columns, _BaseRows, Indexes)),
@@ -2190,7 +2605,14 @@ null_pairs_for_display_columns([], []).
 null_pairs_for_display_columns([col(Name,_,_)|Columns], [Name=null|Pairs]) :-
     null_pairs_for_display_columns(Columns, Pairs).
 
-join_rows(inner, LeftRows, RightRows, _, _, On, JoinedRows) :- !,
+join_rows(Kind, LeftRows, RightRows, NullLeft, NullRight, On,
+          LeftSource, RightSource, JoinedRows) :-
+    equi_join_expressions(On, LeftSource, RightSource, LeftExpr, RightExpr), !,
+    note_plan(indexed_join),
+    indexed_join_rows(Kind, LeftRows, RightRows, NullLeft, NullRight,
+                      LeftExpr, RightExpr, JoinedRows).
+join_rows(inner, LeftRows, RightRows, _, _, On, _, _, JoinedRows) :- !,
+    note_plan(nested_loop_join),
     findall(Joined,
             ( member(L, LeftRows),
               member(R, RightRows),
@@ -2198,10 +2620,113 @@ join_rows(inner, LeftRows, RightRows, _, _, On, JoinedRows) :- !,
               row_matches(Joined, On)
             ),
             JoinedRows).
-join_rows(left, LeftRows, RightRows, _, NullRight, On, JoinedRows) :- !,
+join_rows(left, LeftRows, RightRows, _, NullRight, On, _, _, JoinedRows) :- !,
+    note_plan(nested_loop_join),
     left_join_rows(LeftRows, RightRows, NullRight, On, JoinedRows).
-join_rows(right, LeftRows, RightRows, NullLeft, _, On, JoinedRows) :- !,
+join_rows(right, LeftRows, RightRows, NullLeft, _, On, _, _, JoinedRows) :- !,
+    note_plan(nested_loop_join),
     right_join_rows(RightRows, LeftRows, NullLeft, On, JoinedRows).
+
+% A simple qualified equality is the overwhelmingly common JOIN shape.  The
+% old implementation compared every left row with every right row (O(n*m)).
+% Resolve which operand belongs to each source and use an AVL-backed lookup
+% index instead.  Complex ON predicates deliberately retain the compatible
+% nested-loop fallback above.
+equi_join_expressions(cmp('=', qcol(QA, CA), qcol(QB, CB)),
+                      LeftSource, RightSource,
+                      qcol(QA, CA), qcol(QB, CB)) :-
+    source_has_qualifier(LeftSource, QA),
+    source_has_qualifier(RightSource, QB), !.
+equi_join_expressions(cmp('=', qcol(QA, CA), qcol(QB, CB)),
+                      LeftSource, RightSource,
+                      qcol(QB, CB), qcol(QA, CA)) :-
+    source_has_qualifier(LeftSource, QB),
+    source_has_qualifier(RightSource, QA).
+
+source_has_qualifier(table_ref(Table, none), Qualifier) :- !,
+    same_identifier(Table, Qualifier).
+source_has_qualifier(table_ref(Table, Alias), Qualifier) :-
+    ( same_identifier(Alias, Qualifier)
+    ; same_identifier(Table, Qualifier)
+    ), !.
+source_has_qualifier(join(_, Left, Right, _), Qualifier) :-
+    ( source_has_qualifier(Left, Qualifier)
+    ; source_has_qualifier(Right, Qualifier)
+    ).
+
+indexed_join_rows(inner, LeftRows, RightRows, _, _, LeftExpr, RightExpr, Rows) :- !,
+    build_join_index(RightRows, RightExpr, Index),
+    indexed_inner_rows(LeftRows, LeftExpr, Index, Rows).
+indexed_join_rows(left, LeftRows, RightRows, _, NullRight, LeftExpr, RightExpr, Rows) :- !,
+    build_join_index(RightRows, RightExpr, Index),
+    indexed_left_rows(LeftRows, LeftExpr, Index, NullRight, Rows).
+indexed_join_rows(right, LeftRows, RightRows, NullLeft, _, LeftExpr, RightExpr, Rows) :- !,
+    build_join_index(LeftRows, LeftExpr, Index),
+    indexed_right_rows(RightRows, RightExpr, Index, NullLeft, Rows).
+
+build_join_index(Rows, Expr, Index) :-
+    empty_assoc(Empty),
+    build_join_index_rows(Rows, Expr, Empty, ReversedIndex),
+    map_assoc(reverse, ReversedIndex, Index).
+
+build_join_index_rows([], _, Index, Index).
+build_join_index_rows([Row|Rows], Expr, Index0, Index) :-
+    eval_expr(Row, Expr, Value),
+    join_index_key(Value, Key),
+    ( get_assoc(Key, Index0, Existing) -> Bucket = [Row|Existing]
+    ; Bucket = [Row]
+    ),
+    put_assoc(Key, Index0, Bucket, Index1),
+    build_join_index_rows(Rows, Expr, Index1, Index).
+
+join_index_key(Value, number(NumberKey)) :-
+    comparable_number(Value, Number), !,
+    NumberKey is rationalize(Number).
+join_index_key(Value, term(Value)).
+
+indexed_inner_rows([], _, _, []).
+indexed_inner_rows([Left|LeftRows], LeftExpr, Index, Rows) :-
+    indexed_matches(Left, LeftExpr, Index, Matches),
+    combine_left_bucket(Left, Matches, Joined),
+    append(Joined, Rest, Rows),
+    indexed_inner_rows(LeftRows, LeftExpr, Index, Rest).
+
+indexed_left_rows([], _, _, _, []).
+indexed_left_rows([Left|LeftRows], LeftExpr, Index, NullRight, Rows) :-
+    indexed_matches(Left, LeftExpr, Index, Matches),
+    ( Matches = [] ->
+        combine_rows(Left, NullRight, Joined),
+        Rows = [Joined|Rest]
+    ; combine_left_bucket(Left, Matches, JoinedRows),
+      append(JoinedRows, Rest, Rows)
+    ),
+    indexed_left_rows(LeftRows, LeftExpr, Index, NullRight, Rest).
+
+indexed_right_rows([], _, _, _, []).
+indexed_right_rows([Right|RightRows], RightExpr, Index, NullLeft, Rows) :-
+    indexed_matches(Right, RightExpr, Index, Matches),
+    ( Matches = [] ->
+        combine_rows(NullLeft, Right, Joined),
+        Rows = [Joined|Rest]
+    ; combine_right_bucket(Matches, Right, JoinedRows),
+      append(JoinedRows, Rest, Rows)
+    ),
+    indexed_right_rows(RightRows, RightExpr, Index, NullLeft, Rest).
+
+indexed_matches(Row, Expr, Index, Matches) :-
+    eval_expr(Row, Expr, Value),
+    join_index_key(Value, Key),
+    ( get_assoc(Key, Index, Matches) -> true ; Matches = [] ).
+
+combine_left_bucket(_, [], []).
+combine_left_bucket(Left, [Right|Rights], [Joined|Rows]) :-
+    combine_rows(Left, Right, Joined),
+    combine_left_bucket(Left, Rights, Rows).
+
+combine_right_bucket([], _, []).
+combine_right_bucket([Left|Lefts], Right, [Joined|Rows]) :-
+    combine_rows(Left, Right, Joined),
+    combine_right_bucket(Lefts, Right, Rows).
 
 left_join_rows([], _, _, _, []).
 left_join_rows([L|Ls], RightRows, NullRight, On, Rows) :-
@@ -2243,8 +2768,9 @@ update_state_raw(Action) :-
 
 update_state_locked(Action) :-
     ensure_write_allowed(Action),
-    retract(asadb_state(State)),
+    asadb_state(State),
     apply_action(Action, State, NewState),
+    retractall(asadb_state(_)),
     assertz(asadb_state(NewState)),
     ( State == NewState -> true
     ; invalidate_index_cache(Action),
@@ -2253,8 +2779,12 @@ update_state_locked(Action) :-
 
 persist_state_after_write(_) :- asadb_tx_snapshot(_), !.
 persist_state_after_write(Action) :- paged_storage_action(Action), !,
-    asadb_save_locked.
+    assert_checkpoint_dirty,
+    ( asadb_query_batch_depth(_) -> true ; asadb_save_locked ).
 persist_state_after_write(Action) :- append_wal(Action).
+
+assert_checkpoint_dirty :-
+    ( asadb_checkpoint_dirty -> true ; assertz(asadb_checkpoint_dirty) ).
 
 paged_storage_action(create_table(_, _, _)).
 paged_storage_action(drop_table(_, _)).
@@ -2289,25 +2819,34 @@ invalidate_index_cache(_) :-
     true.
 
 start_transaction_snapshot :-
+    with_mutex(asadb_write, start_transaction_snapshot_locked).
+
+start_transaction_snapshot_locked :-
     asadb_tx_snapshot(_), !.
-start_transaction_snapshot :-
+start_transaction_snapshot_locked :-
     asadb_state(State),
     assertz(asadb_tx_snapshot(State)),
     asadb_record_tx_begin.
 
 commit_transaction_snapshot :-
+    with_mutex(asadb_write, commit_transaction_snapshot_locked).
+
+commit_transaction_snapshot_locked :-
     asadb_tx_snapshot(_), !,
     retractall(asadb_tx_snapshot(_)),
-    asadb_save,
+    asadb_save_locked,
     asadb_record_tx_commit.
-commit_transaction_snapshot.
+commit_transaction_snapshot_locked.
 
 rollback_transaction_snapshot :-
+    with_mutex(asadb_write, rollback_transaction_snapshot_locked).
+
+rollback_transaction_snapshot_locked :-
     retract(asadb_tx_snapshot(State)), !,
     asadb_record_tx_rollback,
     retractall(asadb_state(_)),
     assertz(asadb_state(State)).
-rollback_transaction_snapshot.
+rollback_transaction_snapshot_locked.
 
 parse_lock_targets(Tokens, Tables) :-
     split_top_commas(Tokens, Parts),
@@ -2532,7 +3071,7 @@ apply_db_action(truncate_table_in_db(Name), db(DB, Tables, V, F, P, T), db(DB, N
 apply_db_action(insert_rows_in_db(Name, Columns, ValueRows), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Name, Tables, table(Name, TableColumns, paged_rows(StoreId, Count0, Counters0), Indexes), OtherTables), !,
     build_rows_(TableColumns, Columns, ValueRows, Counters0, Counters, NewRows),
-    asadb_record_insert_batch(StoreId, NewRows, _),
+    asadb_record_insert_batch(StoreId, NewRows),
     asadb_record_invalidate_indexes(StoreId),
     length(NewRows, Added),
     Count is Count0 + Added,
@@ -2840,6 +3379,31 @@ storage_source_rows(DB, Table, Alias, Columns, Indexes,
                  member(BaseRow, BaseRows),
                  table_row_to_source_row(Table, Qualifiers, Columns, BaseRow, SourceRow)),
     storage_collect_rows(Generator, SourceRow, Where, none, Limit, Rows).
+% Predicate-pushdown sources use a deliberately large fetch window.  If an
+% index file has not been materialized yet, building a 250k-row B+Tree just
+% to filter one side of a JOIN is slower than scanning the append-only store
+% once and keeping the matching rows.  Normal SELECTs retain the indexed path
+% below, so this fallback only applies to the pushdown marker.
+storage_source_rows(_, Table, Alias, Columns, Indexes,
+                    paged_rows(StoreId, _, _), Where, none,
+                    source_fetch_all_limit, Rows) :-
+    source_prefix_fetch_limit(StoreId, Where, Indexes, PrefixLimit),
+    !,
+    source_qualifiers(Table, Alias, Qualifiers),
+    Generator = (asadb_record_scan(StoreId, _, BaseRow),
+                 table_row_to_source_row(Table, Qualifiers, Columns,
+                                         BaseRow, SourceRow)),
+    storage_collect_rows(Generator, SourceRow, Where, none,
+                         limit(PrefixLimit), Rows).
+storage_source_rows(_, Table, Alias, Columns, _Indexes,
+                    paged_rows(StoreId, _, _), Where, none,
+                    source_fetch_all_limit, Rows) :- !,
+    source_qualifiers(Table, Alias, Qualifiers),
+    Generator = (asadb_record_scan(StoreId, _, BaseRow),
+                 table_row_to_source_row(Table, Qualifiers, Columns,
+                                         BaseRow, SourceRow)),
+    storage_collect_rows(Generator, SourceRow, Where, none,
+                         source_fetch_all_limit, Rows).
 storage_source_rows(DB, Table, Alias, Columns, Indexes, RowStorage, Where, Order, Limit, Rows) :-
     RowStorage = paged_rows(StoreId, _, _),
     source_qualifiers(Table, Alias, Qualifiers),
@@ -2923,6 +3487,31 @@ result_window(none, 0, Count) :- !,
     asadb_config_get(max_result_rows, Count).
 result_window(limit(Count), 0, Count) :- !.
 result_window(limit(Offset, Count), Offset, Count).
+% Internal marker used by source-predicate pushdown.  It deliberately means
+% "fetch all matching rows" while remaining distinguishable from a user's
+% ordinary LIMIT term.
+result_window(source_fetch_all_limit, 0, 1000000000).
+
+source_prefix_fetch_limit(StoreId, cmp(Op, col(Column), value(Value)), Indexes, Limit) :-
+    memberchk(Op, ['=','<','<=']),
+    integer(Value),
+    Value > 0,
+    Value =< 4096,
+    join_lookup_unique_column(Column, Indexes),
+    ( Op == '<' -> Limit is Value - 1 ; Limit = Value ),
+    Limit > 0,
+    findnsols(Limit, BaseRow,
+              asadb_record_scan(StoreId, _, BaseRow), PrefixRows),
+    length(PrefixRows, Limit),
+    ordered_prefix_rows(PrefixRows, Column, 1).
+
+ordered_prefix_rows([], _, _).
+ordered_prefix_rows([row(Pairs)|Rows], Column, Expected) :-
+    lookup_value(Column, Pairs, Value),
+    integer(Value),
+    Value =:= Expected,
+    Next is Expected + 1,
+    ordered_prefix_rows(Rows, Column, Next).
 
 buffer_top_row(_, _, 0, _) :- !.
 buffer_top_row(Acc, Order, Keep, Row) :-
@@ -2946,6 +3535,9 @@ flush_top_row_buffer(Acc, Order, Keep) :-
     nb_setarg(1, Acc, Limited),
     nb_setarg(2, Acc, []),
     nb_setarg(3, Acc, 0).
+
+count_all_projection([projection(Label, Expr)], Label) :-
+    aggregate_expr(Expr, count, all).
 
 storage_aggregate_rows(DB, Table, Alias, Columns, Indexes,
                        paged_rows(StoreId, _, _), Projection, Where, Limit,
@@ -3215,13 +3807,59 @@ build_rows(TableColumns, Columns, ValueRows, ExistingRows, NewRows) :-
 build_rows(TableColumns, Columns, ValueRows, NewRows) :-
     build_rows(TableColumns, Columns, ValueRows, [], NewRows).
 
-build_rows_(_, _, [], Counters, Counters, []).
-build_rows_(TableColumns, Columns, [Values|Rows], Counters0, Counters, [row(Pairs)|Built]) :-
-    ( Columns = [] -> column_names(TableColumns, ColNames) ; ColNames = Columns ),
-    zip_columns_values(ColNames, Values, Pairs0),
-    fill_defaults(TableColumns, Pairs0, Counters0, Counters1, FilledPairs),
-    row_pairs_for_columns(TableColumns, FilledPairs, Pairs),
-    build_rows_(TableColumns, Columns, Rows, Counters1, Counters, Built).
+build_rows_(TableColumns, Columns, ValueRows, Counters0, Counters, Built) :-
+    ( Columns = [] -> column_names(TableColumns, InputColumns) ; InputColumns = Columns ),
+    row_build_plan(TableColumns, InputColumns, 0, Plan),
+    build_rows_with_plan(ValueRows, Plan, Counters0, Counters, Built).
+
+row_build_plan([], _, _, []).
+row_build_plan([col(Name, _, Options)|TableColumns], InputColumns, _,
+               [row_field(Name, Options, Source)|Plan]) :-
+    first_identifier_position(Name, InputColumns, 0, Position), !,
+    Source = source(Position),
+    row_build_plan(TableColumns, InputColumns, 0, Plan).
+row_build_plan([col(Name, _, Options)|TableColumns], InputColumns, _,
+               [row_field(Name, Options, missing)|Plan]) :-
+    row_build_plan(TableColumns, InputColumns, 0, Plan).
+
+first_identifier_position(Name, [Input|_], Position, Position) :-
+    same_identifier(Name, Input), !.
+first_identifier_position(Name, [_|Inputs], Position0, Position) :-
+    Position1 is Position0 + 1,
+    first_identifier_position(Name, Inputs, Position1, Position).
+
+build_rows_with_plan([], _, Counters, Counters, []).
+build_rows_with_plan([Values|Rows], Plan, Counters0, Counters,
+                     [row(Pairs)|Built]) :-
+    build_row_from_plan(Plan, Values, Counters0, Counters1, Pairs),
+    build_rows_with_plan(Rows, Plan, Counters1, Counters, Built).
+
+build_row_from_plan([], _, Counters, Counters, []).
+build_row_from_plan([row_field(Name, Options, Source)|Plan], Values,
+                    Counters0, Counters, [Name=Value|Pairs]) :-
+    planned_field_value(Source, Values, Name, Options,
+                        Counters0, Counters1, Value),
+    build_row_from_plan(Plan, Values, Counters1, Counters, Pairs).
+
+planned_field_value(source(Position), Values, Name, Options,
+                    Counters0, Counters, Value) :-
+    nth0(Position, Values, Supplied), !,
+    ( auto_increment_column(Options), blank_auto_value(Supplied) ->
+        next_auto_value(Name, Counters0, Counters, Value)
+    ; auto_increment_column(Options) ->
+        bump_auto_counter(Name, Supplied, Counters0, Counters),
+        Value = Supplied
+    ; Counters = Counters0,
+      Value = Supplied
+    ).
+planned_field_value(_, _, Name, Options, Counters0, Counters, Value) :-
+    ( auto_increment_column(Options) ->
+        next_auto_value(Name, Counters0, Counters, Value)
+    ; option_default(Options, Value) ->
+        Counters = Counters0
+    ; Counters = Counters0,
+      Value = null
+    ).
 
 zip_columns_values(Columns, Values, Pairs) :-
     zip_columns_values_(Columns, Values, [], RevPairs),
@@ -3339,7 +3977,7 @@ truthy(V) :- number(V), V =\= 0.
 eval_expr(_, value(V), V) :- !.
 eval_expr(row(Pairs), col(Name), V) :- !, lookup_value(Name, Pairs, V).
 eval_expr(row(Pairs), qcol(Qualifier, Name), V) :- !,
-    ( lookup_value(q(Qualifier,Name), Pairs, V) -> true
+    ( lookup_qualified_value(Qualifier, Name, Pairs, V) -> true
     ; qualified_column_atom(Qualifier, Name, Atom),
       lookup_value(Atom, Pairs, V)
     ).
@@ -3461,6 +4099,16 @@ like_atom(Value, Pattern) :- Value == Pattern.
 lookup_value(Name, Pairs, V) :-
     lookup_pair_value(Name, Pairs, V), !.
 lookup_value(_, [], null).
+
+% Generic lookup_value/3 returns null for a missing key.  JOIN aliases need to
+% distinguish "missing" from "present with NULL" so the dotted-name fallback
+% remains reachable and aliases are resolved correctly.
+lookup_qualified_value(Qualifier, Name,
+                       [q(RowQualifier, RowName)=Value|_], Value) :-
+    same_identifier(Qualifier, RowQualifier),
+    same_identifier(Name, RowName), !.
+lookup_qualified_value(Qualifier, Name, [_|Pairs], Value) :-
+    lookup_qualified_value(Qualifier, Name, Pairs, Value).
 
 compare_value('=', A, B) :- !, sql_equal(A, B).
 compare_value('!=', A, B) :- !, \+ sql_equal(A, B).

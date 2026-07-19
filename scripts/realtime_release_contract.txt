@@ -1,0 +1,11 @@
+# Copyright (C) 2026 Kocoy Group and AsaDB contributors
+# SPDX-License-Identifier: GPL-3.0-only
+#
+# scope|literal marker
+# bundle markers must occur in both the modern and Firefox-compatible bundles.
+# markup markers must occur in web/index.html. Backend markers are added only
+# for externally visible HTTP contracts, never for private predicate names.
+bundle|asadb-active-reservoir-job-v1
+bundle|/api/reservoir/cancel?id=
+markup|importCancelBtn
+backend|reservoir_jobs{

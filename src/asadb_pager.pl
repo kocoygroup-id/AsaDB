@@ -23,8 +23,10 @@ asadb_pager_page_size(Size) :- asadb_config_get(page_size, Size).
 
 asadb_pager_read_page(File, PageNo, Bytes) :-
     must_be(nonneg, PageNo),
-    asadb_buffer_pool_pin(File, PageNo, load_fixed_page(File, PageNo), Bytes),
-    asadb_buffer_pool_unpin(File, PageNo, clean).
+    ( asadb_buffer_pool_get(File, PageNo, Bytes) -> true
+    ; load_fixed_page(File, PageNo, Bytes),
+      asadb_buffer_pool_put(File, PageNo, Bytes, clean)
+    ).
 
 asadb_pager_scan_page(File, PageNo, Bytes) :-
     exists_file(File),
@@ -62,7 +64,9 @@ asadb_pager_allocate_page(File, Bytes0, PageNo) :-
 asadb_pager_page_count(File, Count) :-
     ( exists_file(File) -> size_file(File, Size) ; Size = 0 ),
     asadb_pager_page_size(PageSize),
-    Count is (Size + PageSize - 1) // PageSize.
+    DiskCount is (Size + PageSize - 1) // PageSize,
+    asadb_buffer_pool_file_page_count(File, CachedCount),
+    Count is max(DiskCount, CachedCount).
 
 asadb_pager_flush :- asadb_buffer_pool_flush_all.
 
@@ -84,6 +88,9 @@ load_fixed_page(File, PageNo, Bytes) :-
     ),
     fixed_page_bytes(PageSize, Raw, Bytes).
 
+fixed_page_bytes(PageSize, Bytes0, Bytes) :-
+    length(Bytes0, PageSize), !,
+    Bytes = Bytes0.
 fixed_page_bytes(PageSize, Bytes0, Bytes) :-
     length_prefix(PageSize, Bytes0, Prefix),
     length(Prefix, Used),

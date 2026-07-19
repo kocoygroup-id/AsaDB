@@ -32,7 +32,6 @@ asadb_page_new(PageId, Type, Prev0, Next0, Page) :-
     asadb_page_build(PageId, Type, Prev0, Next0, [], Page).
 
 asadb_page_build(PageId, Type, Prev0, Next0, Records, Page) :-
-    maplist(record_bytes_valid, Records),
     page_type_code(Type, TypeCode),
     pointer_code(Prev0, Prev),
     pointer_code(Next0, Next),
@@ -62,8 +61,6 @@ asadb_page_build(PageId, Type, Prev0, Next0, Records, Page) :-
     append([Header, SlotBytes, Gap, Payload], RawPage),
     length(RawPage, PageSize),
     finalize_page(RawPage, Page).
-
-record_bytes_valid(Bytes) :- maplist(valid_byte, Bytes).
 
 records_byte_length([], 0).
 records_byte_length([Bytes|Records], Total) :-
@@ -262,17 +259,23 @@ asadb_page_validate(Page) :-
     Meta.checksum =:= Actual.
 
 finalize_page(Page0, Page) :-
-    set_u32(Page0, 26, 0, WithoutChecksum),
-    page_checksum(WithoutChecksum, Checksum),
-    set_u32(WithoutChecksum, 26, Checksum, Page).
+    page_checksum(Page0, Checksum),
+    set_u32(Page0, 26, Checksum, Page).
 
 page_checksum(Page, Checksum) :-
-    zero_checksum_field(Page, Bytes),
-    sum_list(Bytes, Total),
+    page_checksum_bytes(Page, 0, 0, Total),
     Checksum is Total mod 4294967291.
 
-zero_checksum_field(Page, Bytes) :-
-    set_u32(Page, 26, 0, Bytes).
+page_checksum_bytes([], _, Total, Total).
+page_checksum_bytes([_|Bytes], Index, Acc, Total) :-
+    Index >= 26,
+    Index =< 29, !,
+    Next is Index + 1,
+    page_checksum_bytes(Bytes, Next, Acc, Total).
+page_checksum_bytes([Byte|Bytes], Index, Acc0, Total) :-
+    Acc is Acc0 + Byte,
+    Next is Index + 1,
+    page_checksum_bytes(Bytes, Next, Acc, Total).
 
 pointer_code(none, Code) :- !, page_none(Code).
 pointer_code(Code, Code) :- integer(Code), Code >= 0.
