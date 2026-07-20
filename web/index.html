@@ -131,7 +131,8 @@
               <div id="sqlLineNumbers" class="sql-line-numbers" aria-hidden="true"><div id="sqlLineNumbersContent" class="sql-line-numbers-content"></div></div>
               <div class="sql-code-area">
                 <pre id="sqlHighlight" class="sql-highlight" aria-hidden="true"></pre>
-                <textarea id="sqlInput" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Tulis SQL di sini..." data-i18n-placeholder="sql.placeholder"></textarea>
+                <textarea id="sqlInput" wrap="off" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="Tulis SQL di sini..." data-i18n-placeholder="sql.placeholder"></textarea>
+                <div id="sqlCompletions" class="sql-completions" role="listbox" aria-label="SQL autocomplete" hidden></div>
               </div>
             </div>
             <div id="sqlDiagnostics" class="sql-diagnostics" aria-live="polite"></div>

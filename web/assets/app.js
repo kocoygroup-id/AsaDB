@@ -882,6 +882,7 @@ const sqlHighlight = $('sqlHighlight');
 const sqlLineNumbers = $('sqlLineNumbers');
 const sqlLineNumbersContent = $('sqlLineNumbersContent');
 const sqlDiagnostics = $('sqlDiagnostics');
+const sqlCompletions = $('sqlCompletions');
 const resultBox = $('resultBox');
 const runBtn = $('runBtn');
 const logBox = $('logBox');
@@ -1135,7 +1136,230 @@ const SQL_TYPES = new Set([
   'zerofill',
 ]);
 
-const SQL_FUNCTIONS = new Set(['count', 'max', 'min', 'sum', 'avg', 'now', 'current_timestamp']);
+const SQL_FUNCTIONS = new Set(['count', 'max', 'min', 'sum', 'avg', 'lower', 'upper', 'length', 'concat', 'substr', 'substring', 'trim', 'replace', 'coalesce', 'now', 'current_timestamp']);
+
+// Keep the editor self-contained: catalog names come from the normal panel
+// refresh, so suggestions never need a request for each keystroke.
+const SQL_COMPLETION_KEYWORDS = [
+  'ADD', 'AFTER', 'ALL', 'ALTER', 'ANALYZE', 'AND', 'AS', 'ASC', 'AUTO_INCREMENT', 'BEGIN', 'BEFORE', 'BETWEEN', 'BY',
+  'CASCADE', 'CASE', 'CHANGE', 'CHECK', 'COLLATE', 'COLUMN', 'COLUMNS', 'COMMENT',
+  'COMMIT', 'CONSTRAINT', 'CREATE', 'DATABASE', 'DATABASES', 'DEFAULT',
+  'DELETE', 'DESC', 'DESCRIBE', 'DISTINCT', 'DROP', 'EACH', 'ELSE', 'END', 'ENGINE', 'EXISTS',
+  'EXPLAIN', 'FALSE', 'FOR', 'FOREIGN', 'FROM', 'FULL', 'FUNCTION', 'GRANT',
+  'GRANTS', 'GROUP', 'HAVING', 'IDENTIFIED', 'IF', 'IN', 'INOUT', 'INDEX', 'INDEXES',
+  'INNER', 'INSERT', 'INTO', 'IS', 'JOIN', 'KEY', 'KEYS', 'LEFT', 'LIKE',
+  'LIMIT', 'LOCK', 'LOGIN', 'MODIFY', 'NOT', 'NULL', 'OFFSET', 'ON', 'OR',
+  'ORDER', 'OUT', 'OUTER', 'PASSWORD', 'PRIMARY', 'PROCEDURE', 'REFERENCES',
+  'RENAME', 'REPLACE', 'RETURN', 'RETURNS', 'REVOKE', 'RIGHT', 'ROLLBACK', 'ROW', 'SELECT', 'SET',
+  'SHOW', 'START', 'TABLE', 'TABLES', 'THEN', 'TO', 'TRANSACTION', 'TRUE',
+  'TRIGGER', 'TRUNCATE', 'UNION', 'UNIQUE', 'UNLOCK', 'UPDATE', 'USE', 'USER',
+  'USING', 'VALUES', 'VIEW', 'WHEN', 'WHERE', 'WITH',
+];
+
+// The parser's SQL vocabulary is also the highlighter vocabulary. Keep types
+// and functions in the set for recognition, then give them their own colour
+// class when rendering below.
+for (const word of SQL_COMPLETION_KEYWORDS) SQL_KEYWORDS.add(word.toLowerCase());
+for (const type of SQL_TYPES) SQL_KEYWORDS.add(type);
+for (const functionName of SQL_FUNCTIONS) SQL_KEYWORDS.add(functionName);
+
+let sqlCompletionState = { open: false, items: [], active: 0, start: 0, end: 0 };
+let sqlCompletionCanvas = null;
+
+function sqlCompletionIcon(kind) {
+  return kind === 'column' ? '⊟' : kind === 'table' ? '▤' : kind === 'view' ? '◫' :
+    kind === 'function' ? 'ƒ' : kind === 'type' ? 'T' : kind === 'database' ? '●' : '›';
+}
+
+function sqlCompletionIdentifier(name) {
+  const text = String(name || '');
+  return /^[A-Za-z_][\w$]*$/.test(text) ? text : `\`${text.replace(/`/g, '``')}\``;
+}
+
+function sqlCompletionRelation(name) {
+  const db = sandbox.dbs?.[currentDbName()] || {};
+  const viewsForDb = sandbox.views?.[currentDbName()] || {};
+  const key = Object.keys(db).find(item => item.toLowerCase() === String(name).toLowerCase());
+  if (key) return { kind: 'table', name: key, value: db[key] };
+  const viewKey = Object.keys(viewsForDb).find(item => item.toLowerCase() === String(name).toLowerCase());
+  return viewKey ? { kind: 'view', name: viewKey, value: viewsForDb[viewKey] } : null;
+}
+
+function sqlCompletionAliases(statement) {
+  const aliases = new Map();
+  const relationPattern = /\b(?:from|join|update|into|table|references)\s+(`[^`]+`|[A-Za-z_][\w$]*)(?:\s+(?:as\s+)?([A-Za-z_][\w$]*))?/gi;
+  let match;
+  while ((match = relationPattern.exec(statement))) {
+    const relationName = match[1].replace(/^`|`$/g, '');
+    const relation = sqlCompletionRelation(relationName);
+    if (!relation) continue;
+    aliases.set(relationName.toLowerCase(), relation);
+    const alias = match[2]?.toLowerCase();
+    if (alias && !SQL_KEYWORDS.has(alias)) aliases.set(alias, relation);
+  }
+  return aliases;
+}
+
+function sqlCompletionInsideLiteral(text) {
+  let quote = '';
+  let blockComment = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (blockComment) {
+      if (char === '*' && next === '/') { blockComment = false; index += 1; }
+      continue;
+    }
+    if (quote) {
+      if (char === '\\') { index += 1; continue; }
+      if (char === quote) {
+        if (next === quote && quote !== '`') { index += 1; continue; }
+        quote = '';
+      }
+      continue;
+    }
+    if (char === '/' && next === '*') { blockComment = true; index += 1; continue; }
+    if (char === '-' && next === '-') {
+      const end = text.indexOf('\n', index + 2);
+      index = end < 0 ? text.length : end;
+      continue;
+    }
+    if (char === '#') {
+      const end = text.indexOf('\n', index + 1);
+      index = end < 0 ? text.length : end;
+      continue;
+    }
+    if (char === "'" || char === '"' || char === '`') quote = char;
+  }
+  return Boolean(quote || blockComment);
+}
+
+function sqlCompletionToken() {
+  const caret = sqlInput.selectionStart ?? sqlInput.value.length;
+  const before = sqlInput.value.slice(0, caret);
+  const match = /([A-Za-z_][\w$]*)$/.exec(before);
+  const prefix = match?.[1] || '';
+  const start = caret - prefix.length;
+  const statementStart = before.lastIndexOf(';') + 1;
+  const statement = before.slice(statementStart);
+  const qualified = /([A-Za-z_][\w$]*)\.\s*([A-Za-z_][\w$]*)?$/.exec(statement);
+  return { caret, start, prefix, statement, qualified, beforeToken: before.slice(statementStart, start) };
+}
+
+function sqlCompletionCatalogItems(relation) {
+  return (relation?.value?.columns || []).map(column => ({
+    label: String(column.name), insert: sqlCompletionIdentifier(column.name), kind: 'column',
+    detail: String(column.type || 'TEXT'),
+  }));
+}
+
+function sqlCompletionItems(token) {
+  const prefix = token.prefix.toLowerCase();
+  const add = (items, label, insert, kind, detail = '') => {
+    const key = `${kind}:${label}`.toLowerCase();
+    if (!items.some(item => `${item.kind}:${item.label}`.toLowerCase() === key)) items.push({ label, insert, kind, detail });
+  };
+  const items = [];
+  const aliases = sqlCompletionAliases(token.statement);
+  const qualifier = token.qualified?.[1]?.toLowerCase();
+  if (qualifier) {
+    for (const item of sqlCompletionCatalogItems(aliases.get(qualifier) || sqlCompletionRelation(qualifier))) add(items, item.label, item.insert, item.kind, item.detail);
+  } else {
+    const context = token.beforeToken.trim();
+    const wantsRelation = /\b(?:from|join|update|into|table|describe|desc|truncate)\s*$/i.test(context) ||
+      /\b(?:create|drop)\s+(?:unique\s+)?index\b[\s\S]*\bon\s*$/i.test(context) ||
+      /\b(?:create|drop)\s+trigger\b[\s\S]*\bon\s*$/i.test(context);
+    const wantsDatabase = /\b(?:use|database)\s*$/i.test(context);
+    const activeDb = sandbox.dbs?.[currentDbName()] || {};
+    const activeViews = sandbox.views?.[currentDbName()] || {};
+    if (wantsDatabase) {
+      for (const name of visibleDbNames(sandbox)) add(items, name, sqlCompletionIdentifier(name), 'database', 'database');
+    } else if (wantsRelation) {
+      for (const [name] of Object.entries(activeDb)) add(items, name, sqlCompletionIdentifier(name), 'table', 'table');
+      for (const [name] of Object.entries(activeViews)) add(items, name, sqlCompletionIdentifier(name), 'view', 'view');
+    } else {
+      for (const relation of Object.values(activeDb)) {
+        for (const item of sqlCompletionCatalogItems({ kind: 'table', value: relation })) add(items, item.label, item.insert, item.kind, item.detail);
+      }
+      for (const name of SQL_FUNCTIONS) add(items, name.toUpperCase(), `${name.toUpperCase()}()`, 'function', 'function');
+      for (const type of SQL_TYPES) add(items, type.toUpperCase(), type.toUpperCase(), 'type', 'type');
+      for (const keyword of SQL_COMPLETION_KEYWORDS) add(items, keyword, keyword, 'keyword', 'keyword');
+    }
+  }
+  const rank = item => {
+    const label = item.label.toLowerCase();
+    if (!prefix) return 1;
+    if (label.startsWith(prefix)) return 0;
+    return label.includes(prefix) ? 2 : 9;
+  };
+  return items.filter(item => rank(item) < 9).sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label)).slice(0, 18);
+}
+
+function positionSqlCompletions() {
+  if (!sqlCompletionState.open) return;
+  const caret = sqlCompletionState.end;
+  const lineStart = sqlInput.value.lastIndexOf('\n', caret - 1) + 1;
+  const line = sqlInput.value.slice(lineStart, caret).replace(/\t/g, '    ');
+  const lineNumber = sqlInput.value.slice(0, lineStart).split('\n').length - 1;
+  sqlCompletionCanvas ||= document.createElement('canvas');
+  const style = getComputedStyle(sqlInput);
+  const context = sqlCompletionCanvas.getContext('2d');
+  context.font = `${style.fontSize} ${style.fontFamily}`;
+  const left = Math.max(4, Math.min(sqlInput.clientWidth - 424, 14 + context.measureText(line).width - sqlInput.scrollLeft));
+  const naturalTop = 12 + ((lineNumber + 1) * SQL_EDITOR_LINE_HEIGHT) - sqlInput.scrollTop;
+  const top = naturalTop + 272 > sqlInput.clientHeight ? Math.max(4, naturalTop - 278) : naturalTop;
+  sqlCompletions.style.left = `${left}px`;
+  sqlCompletions.style.top = `${top}px`;
+}
+
+function closeSqlCompletions() {
+  sqlCompletionState = { open: false, items: [], active: 0, start: 0, end: 0 };
+  sqlCompletions.hidden = true;
+  sqlCompletions.textContent = '';
+}
+
+function renderSqlCompletions() {
+  sqlCompletions.textContent = '';
+  sqlCompletionState.items.forEach((item, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `sql-completion${index === sqlCompletionState.active ? ' active' : ''}`;
+    button.setAttribute('role', 'option');
+    button.setAttribute('aria-selected', String(index === sqlCompletionState.active));
+    button.append(Object.assign(document.createElement('span'), { className: 'sql-completion-icon', textContent: sqlCompletionIcon(item.kind) }));
+    button.append(Object.assign(document.createElement('span'), { className: 'sql-completion-label', textContent: item.label }));
+    button.append(Object.assign(document.createElement('span'), { className: 'sql-completion-detail', textContent: item.detail }));
+    button.addEventListener('mousedown', event => { event.preventDefault(); applySqlCompletion(index); });
+    sqlCompletions.append(button);
+  });
+  sqlCompletions.hidden = false;
+  positionSqlCompletions();
+  sqlCompletions.children[sqlCompletionState.active]?.scrollIntoView({ block: 'nearest' });
+}
+
+function updateSqlCompletions(force = false) {
+  if (sqlEditorMetrics.large || sqlCompletionInsideLiteral(sqlInput.value.slice(0, sqlInput.selectionStart ?? 0))) return closeSqlCompletions();
+  const token = sqlCompletionToken();
+  const contextExpected = /\b(?:select|from|join|where|on|set|values|show|use|create|alter|drop)\s*$/i.test(token.statement);
+  if (!force && !token.prefix && !token.qualified && !contextExpected) return closeSqlCompletions();
+  const items = sqlCompletionItems(token);
+  if (!items.length) return closeSqlCompletions();
+  sqlCompletionState = { open: true, items, active: 0, start: token.start, end: token.caret };
+  renderSqlCompletions();
+}
+
+function applySqlCompletion(index = sqlCompletionState.active) {
+  const item = sqlCompletionState.items[index];
+  if (!item) return closeSqlCompletions();
+  const before = sqlInput.value.slice(0, sqlCompletionState.start);
+  const after = sqlInput.value.slice(sqlCompletionState.end);
+  sqlInput.value = `${before}${item.insert}${after}`;
+  const caret = before.length + item.insert.length - (item.kind === 'function' ? 1 : 0);
+  sqlInput.setSelectionRange(caret, caret);
+  updateSqlEditor();
+  scheduleSqlAnalysis();
+  closeSqlCompletions();
+}
 
 const SQL_INDENT = '\t';
 
@@ -1653,9 +1877,9 @@ function highlightSql(sql) {
       while (i < sql.length && /[\w$]/.test(sql[i])) i += 1;
       const word = sql.slice(start, i);
       const lower = word.toLowerCase();
-      const cls = SQL_KEYWORDS.has(lower) ? 'sql-keyword' :
-        SQL_TYPES.has(lower) ? 'sql-type' :
+      const cls = SQL_TYPES.has(lower) ? 'sql-type' :
         SQL_FUNCTIONS.has(lower) ? 'sql-function' :
+        SQL_KEYWORDS.has(lower) ? 'sql-keyword' :
         'sql-identifier';
       html += `<span class="${cls}">${escapeHtml(word)}</span>`;
       continue;
@@ -2010,7 +2234,7 @@ function analyzeSqlClient(sql) {
     });
   }
 
-  const supported = /^(create|use|drop|truncate|insert|select|describe|desc|show|update|delete|alter|explain)\b/i;
+  const supported = /^(create|use|drop|truncate|insert|select|describe|desc|show|update|delete|alter|explain|begin|start|commit|rollback|lock|unlock|grant|revoke|login)\b/i;
   for (const stmt of splitStatementsDetailed(sql)) {
     const first = /^\s*([A-Za-z_][\w$]*)/.exec(stmt.text)?.[1] || '';
     if (first && !supported.test(first)) {
@@ -2146,6 +2370,7 @@ function syncSqlScroll() {
     sqlLineRenderFrame = requestAnimationFrame(() => renderSqlLineNumbers(sqlInput.value));
   }
   sqlLineNumbers.scrollTop = sqlInput.scrollTop;
+  positionSqlCompletions();
 }
 
 function sqlCaretScrollTarget() {
@@ -2187,13 +2412,17 @@ function updateSqlEditor(options = {}) {
 function setSqlText(text, analyze = true) {
   sqlInput.value = text;
   updateSqlEditor();
+  closeSqlCompletions();
   if (analyze) scheduleSqlAnalysis();
 }
 
 function scheduleSqlAnalysis() {
   clearTimeout(sqlAnalyzeTimer);
+  // Reject an old backend response immediately, rather than after the
+  // debounce delay. This prevents a stale "missing ;" warning from briefly
+  // replacing diagnostics for the query the user has already corrected.
+  sqlAnalyzeRequest += 1;
   if (sqlEditorMetrics.large) {
-    sqlAnalyzeRequest += 1;
     setSqlDiagnostics([]);
     return;
   }
@@ -5805,15 +6034,45 @@ sqlInput.addEventListener('input', (event) => {
   const scrollLeft = pasted ? Math.max(sqlPasteAnchor.left, sqlInput.scrollLeft) : sqlInput.scrollLeft;
   updateSqlEditor({ scrollTop, scrollLeft, persistScroll: pasted });
   scheduleSqlAnalysis();
+  updateSqlCompletions();
 });
 sqlInput.addEventListener('scroll', syncSqlScroll);
 sqlInput.addEventListener('keydown', (event) => {
+  if (sqlCompletionState.open) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      sqlCompletionState.active = (sqlCompletionState.active + direction + sqlCompletionState.items.length) % sqlCompletionState.items.length;
+      renderSqlCompletions();
+      return;
+    }
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      applySqlCompletion();
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSqlCompletions();
+      return;
+    }
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key === ' ') {
+    event.preventDefault();
+    updateSqlCompletions(true);
+    return;
+  }
   if (handleSqlIndentKey(event)) return;
   if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
     event.preventDefault();
     runSql();
   }
 });
+sqlInput.addEventListener('click', () => updateSqlCompletions());
+sqlInput.addEventListener('keyup', (event) => {
+  if (!['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(event.key)) updateSqlCompletions();
+});
+sqlInput.addEventListener('blur', () => setTimeout(closeSqlCompletions, 120));
 
 runBtn.addEventListener('click', runSql);
 languageSwitcher?.addEventListener('click', (event) => {

@@ -1,8 +1,12 @@
-# AsaDB 1.3.0 Compatibility Matrix
+# AsaDB 1.3.1 Release Candidate Compatibility Matrix
 
 This document separates validated behavior from conditional compatibility.
-`STABLE` means the documented release gates pass; it does not mean every SQL
-dialect, operating system, or third-party runtime is supported.
+`Release Candidate` means the documented candidate gates pass; it does not
+mean every SQL dialect, operating system, or third-party runtime is supported.
+
+The 1.3.1 Release Candidate has passed the available Linux runtime and core/Reservoir
+regressions. A Windows portable executable must be rebuilt on Windows before
+this matrix can claim a 1.3.1 Windows validation result.
 
 ## Release validation host
 
@@ -20,9 +24,11 @@ check when moving the package to another host.
 | BusyBox `sh` | CI-covered | GitHub Actions installs BusyBox and checks every shipped shell script. |
 | SWI-Prolog core | Validated | Core assertions and the JOIN workload pass on the available SWI-Prolog WASM runtime; native Linux is a CI and target-host gate. |
 | Native HTTP/Reservoir backend | Runtime-gated | `check_linux_runtime.sh` loads required HTTP, crypto, UUID, thread, core, Reservoir, and web modules before use. |
+| Asa Process Guardian | Validated on Linux | Standalone rolling source mirror and child-process supervision. It uses atomic per-file replacement, SHA-256 manifests, bounded logs, heartbeat auditing, Unix `CONT` nudges, and bounded crash restart. It is opt-in and never participates in SQL execution. |
 | AsAPanel browser bundle | Covered | `app-loader.js` loads a checked-in Firefox 38 syntax-compatible bundle and polyfills `NodeList.forEach`, `Element.append`, and other small APIs needed at boot. It also ships Noto Sans JP in WOFF2 plus WOFF for JP text on browsers without system CJK fonts. Current Firefox is recommended. |
 | 4MLinux x86_64 | Validated on release host | Paths and shell syntax were exercised on the recorded 4MLinux host; a compatible feature-complete `swipl` is still required on any other host. |
-| Windows x86 portable | Validated under Wine | The bundled 32-bit executable and runtime package use the same 1.3.0 backend/UI sources; native Windows x64 compilation remains a separate target. |
+| Windows source-launcher ZIP | Package-checked | Includes the same 1.3.1 source tree plus `run_asadb.bat` and `run_panel.bat`; install a compatible SWI-Prolog on Windows and place `swipl` on `PATH`. Native Windows execution has not been run on this Linux host. |
+| Windows x86 portable executable | Pending 1.3.1 rebuild | The historical 1.3.0 executable was Wine-validated, but it is not relabelled as 1.3.1. Rebuild it with Windows PowerShell and SWI-Prolog to validate the embedded backend. |
 | macOS or non-x86_64 Linux | Not release-tested | Source may be portable, but it is outside this artifact's validation label. |
 
 ## Runtime requirements
@@ -64,6 +70,7 @@ the capability probe is authoritative:
 | Browser bootstrap / buttons | Covered | Loader-to-legacy-bundle interaction test confirms language and database buttons attach even while the backend request is stalled. |
 | Reservoir queue/spool | Covered by source tests | Full native execution requires thread, crypto, UUID, and HTTP-capable SWI-Prolog. |
 | Reservoir reload/cancel/live metadata | Covered | Active jobs are rediscovered after reload without replay, receiving/queued/processing cancellation is regression-tested, and metadata uses adaptive no-cache polling while visible. Modern and legacy bundles share a build preflight contract. |
+| Asa Process Guardian | Covered on Linux | `tests/guardian_regression.sh` verifies a one-shot rolling mirror, SHA-256 manifest, exclusion rules, captured child output, and clean child completion. Windows can use the mirror and generic process APIs, but its Unix-specific `CONT` nudge is intentionally skipped. |
 | SQL/table paging beyond 500 rows | Covered | `/api/query` serves bounded pages; SQL results, table previews, and the searchable sidebar expose unobtrusive Show-more controls. |
 | Karyawan Reservoir adviser | Covered | `src/bridge/karyawan.pl` is pure Prolog, reports single-worker pressure/health, and is exercised through Reservoir snapshots and stats; no R runtime is required. |
 | Large SQL paste / stress import | Covered | The line-number gutter remains visible for large scripts; 256-statement import batches use bounded 8,192-row storage chunks and the Linux stress-file resolver is case-tolerant. |
@@ -84,7 +91,7 @@ Run these checks on the actual target machine; passing on another Linux
 distribution cannot prove its libc or locally built SWI-Prolog compatibility:
 
 ```sh
-cd AsaDB-1.3.0-linux-x86_64
+cd AsaDB-1.3.1-linux-x86_64
 ./scripts/check_linux_runtime.sh
 make test
 make test-join
