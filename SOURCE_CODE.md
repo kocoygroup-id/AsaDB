@@ -4,9 +4,14 @@ The official AsaDB source repository is:
 
 https://github.com/kocoygroup-id/AsaDB
 
-`AsaDB-1.3.0-linux-x86_64.tar.Z` is itself a complete corresponding-source
+`AsaDB-1.3.1-linux-x86_64.tar.Z` is itself a complete corresponding-source
 package. The platform label identifies the release target; no SWI-Prolog or
 other third-party runtime binary is bundled in that archive.
+
+The matching `AsaDB-1.3.1-windows-source.zip` contains the same corresponding
+source together with Windows batch launchers. It is for a Windows installation
+that supplies its own compatible SWI-Prolog runtime; it is not a substitute for
+the separately built portable executable.
 
 For an official binary release, use the source tag matching the binary's
 version. The source must include the Prolog modules, AsAPanel files, build

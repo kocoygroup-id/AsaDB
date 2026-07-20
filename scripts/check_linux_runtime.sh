@@ -46,8 +46,8 @@ if ! swipl -q -g "current_predicate(thread_create/3),current_predicate(message_q
   exit 1
 fi
 
-if ! swipl -q -g "load_files('src/asadb_core.pl',[silent(true)]),load_files('src/bridge/reservoir.pl',[silent(true)]),load_files('src/asadb_web.pl',[silent(true)]),halt"; then
-  echo "FAIL: core, Reservoir, atau backend web AsaDB tidak dapat dimuat." >&2
+if ! swipl -q -g "load_files('src/asadb_core.pl',[silent(true)]),load_files('src/bridge/reservoir.pl',[silent(true)]),load_files('src/bridge/horsemen/contract/war/here/yoru_the_wardevil.pl',[silent(true)]),load_files('src/asadb_web.pl',[silent(true)]),halt"; then
+  echo "FAIL: core, Reservoir, Process Guardian, atau backend web AsaDB tidak dapat dimuat." >&2
   exit 1
 fi
 

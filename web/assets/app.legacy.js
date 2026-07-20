@@ -775,6 +775,7 @@ var sqlHighlight = $('sqlHighlight');
 var sqlLineNumbers = $('sqlLineNumbers');
 var sqlLineNumbersContent = $('sqlLineNumbersContent');
 var sqlDiagnostics = $('sqlDiagnostics');
+var sqlCompletions = $('sqlCompletions');
 var resultBox = $('resultBox');
 var runBtn = $('runBtn');
 var logBox = $('logBox');
@@ -1016,7 +1017,214 @@ function apiHeaders() {
 }
 var SQL_KEYWORDS = new Set(['add', 'all', 'alter', 'and', 'as', 'asc', 'begin', 'between', 'by', 'cascade', 'check', 'collate', 'column', 'columns', 'commit', 'constraint', 'create', 'database', 'databases', 'default', 'delete', 'desc', 'describe', 'distinct', 'drop', 'exists', 'explain', 'for', 'from', 'grant', 'grants', 'group', 'having', 'identified', 'if', 'in', 'index', 'indexes', 'insert', 'into', 'is', 'join', 'key', 'keys', 'left', 'like', 'limit', 'lock', 'login', 'not', 'null', 'offset', 'on', 'or', 'order', 'password', 'primary', 'references', 'revoke', 'right', 'rollback', 'select', 'set', 'show', 'start', 'table', 'tables', 'to', 'transaction', 'truncate', 'unique', 'unlock', 'update', 'user', 'use', 'values', 'where']);
 var SQL_TYPES = new Set(['bigint', 'binary', 'blob', 'bool', 'boolean', 'char', 'character', 'date', 'datetime', 'decimal', 'double', 'enum', 'float', 'int', 'integer', 'longblob', 'longtext', 'mediumint', 'mediumtext', 'real', 'smallint', 'text', 'time', 'timestamp', 'tinyint', 'tinytext', 'unsigned', 'varbinary', 'varchar', 'year', 'zerofill']);
-var SQL_FUNCTIONS = new Set(['count', 'max', 'min', 'sum', 'avg', 'now', 'current_timestamp']);
+var SQL_FUNCTIONS = new Set(['count', 'max', 'min', 'sum', 'avg', 'lower', 'upper', 'length', 'concat', 'substr', 'substring', 'trim', 'replace', 'coalesce', 'now', 'current_timestamp']);
+/* Kept in the checked-in Firefox-38 bundle: do not make one request per key. */
+var SQL_COMPLETION_KEYWORDS = 'ADD AFTER ALL ALTER ANALYZE AND AS ASC AUTO_INCREMENT BEGIN BEFORE BETWEEN BY CASCADE CASE CHANGE CHECK COLLATE COLUMN COLUMNS COMMENT COMMIT CONSTRAINT CREATE DATABASE DATABASES DEFAULT DELETE DESC DESCRIBE DISTINCT DROP EACH ELSE END ENGINE EXISTS EXPLAIN FALSE FOR FOREIGN FROM FULL FUNCTION GRANT GRANTS GROUP HAVING IDENTIFIED IF IN INOUT INDEX INDEXES INNER INSERT INTO IS JOIN KEY KEYS LEFT LIKE LIMIT LOCK LOGIN MODIFY NOT NULL OFFSET ON OR ORDER OUT OUTER PASSWORD PRIMARY PROCEDURE REFERENCES RENAME REPLACE RETURN RETURNS REVOKE RIGHT ROLLBACK ROW SELECT SET SHOW START TABLE TABLES THEN TO TRANSACTION TRUE TRIGGER TRUNCATE UNION UNIQUE UNLOCK UPDATE USE USER USING VALUES VIEW WHEN WHERE WITH'.split(' ');
+/* The highlighter recognizes the same syntax vocabulary as completion. */
+SQL_COMPLETION_KEYWORDS.forEach(function (word) { SQL_KEYWORDS.add(word.toLowerCase()); });
+SQL_TYPES.forEach(function (type) { SQL_KEYWORDS.add(type); });
+SQL_FUNCTIONS.forEach(function (functionName) { SQL_KEYWORDS.add(functionName); });
+var sqlCompletionState = { open: false, items: [], active: 0, start: 0, end: 0 };
+var sqlCompletionCanvas = null;
+function sqlCompletionIcon(kind) {
+  if (kind === 'column') return '⊟';
+  if (kind === 'table') return '▤';
+  if (kind === 'view') return '◫';
+  if (kind === 'function') return 'ƒ';
+  if (kind === 'type') return 'T';
+  if (kind === 'database') return '●';
+  return '›';
+}
+function sqlCompletionIdentifier(name) {
+  var text = String(name || '');
+  return /^[A-Za-z_][\w$]*$/.test(text) ? text : '`' + text.replace(/`/g, '``') + '`';
+}
+function sqlCompletionRelation(name) {
+  var db = sandbox.dbs && sandbox.dbs[currentDbName()] || {};
+  var viewsForDb = sandbox.views && sandbox.views[currentDbName()] || {};
+  var lowered = String(name || '').toLowerCase();
+  var tableNames = Object.keys(db);
+  var viewNames = Object.keys(viewsForDb);
+  var index;
+  for (index = 0; index < tableNames.length; index += 1) {
+    if (tableNames[index].toLowerCase() === lowered) return { kind: 'table', name: tableNames[index], value: db[tableNames[index]] };
+  }
+  for (index = 0; index < viewNames.length; index += 1) {
+    if (viewNames[index].toLowerCase() === lowered) return { kind: 'view', name: viewNames[index], value: viewsForDb[viewNames[index]] };
+  }
+  return null;
+}
+function sqlCompletionAliases(statement) {
+  var aliases = {};
+  var pattern = /\b(?:from|join|update|into|table|references)\s+(`[^`]+`|[A-Za-z_][\w$]*)(?:\s+(?:as\s+)?([A-Za-z_][\w$]*))?/gi;
+  var match;
+  while ((match = pattern.exec(statement))) {
+    var relationName = match[1].replace(/^`|`$/g, '');
+    var relation = sqlCompletionRelation(relationName);
+    var alias = match[2] && match[2].toLowerCase();
+    if (!relation) continue;
+    aliases[relationName.toLowerCase()] = relation;
+    if (alias && !SQL_KEYWORDS.has(alias)) aliases[alias] = relation;
+  }
+  return aliases;
+}
+function sqlCompletionInsideLiteral(text) {
+  var quote = '';
+  var blockComment = false;
+  var index;
+  for (index = 0; index < text.length; index += 1) {
+    var char = text[index];
+    var next = text[index + 1];
+    if (blockComment) {
+      if (char === '*' && next === '/') { blockComment = false; index += 1; }
+      continue;
+    }
+    if (quote) {
+      if (char === '\\') { index += 1; continue; }
+      if (char === quote) {
+        if (next === quote && quote !== '`') { index += 1; continue; }
+        quote = '';
+      }
+      continue;
+    }
+    if (char === '/' && next === '*') { blockComment = true; index += 1; continue; }
+    if (char === '-' && next === '-') { var lineEnd = text.indexOf('\n', index + 2); index = lineEnd < 0 ? text.length : lineEnd; continue; }
+    if (char === '#') { var hashEnd = text.indexOf('\n', index + 1); index = hashEnd < 0 ? text.length : hashEnd; continue; }
+    if (char === "'" || char === '"' || char === '`') quote = char;
+  }
+  return Boolean(quote || blockComment);
+}
+function sqlCompletionToken() {
+  var caret = sqlInput.selectionStart === undefined || sqlInput.selectionStart === null ? sqlInput.value.length : sqlInput.selectionStart;
+  var before = sqlInput.value.slice(0, caret);
+  var match = /([A-Za-z_][\w$]*)$/.exec(before);
+  var prefix = match ? match[1] : '';
+  var start = caret - prefix.length;
+  var statementStart = before.lastIndexOf(';') + 1;
+  var statement = before.slice(statementStart);
+  return { caret: caret, start: start, prefix: prefix, statement: statement, qualified: /([A-Za-z_][\w$]*)\.\s*([A-Za-z_][\w$]*)?$/.exec(statement), beforeToken: before.slice(statementStart, start) };
+}
+function sqlCompletionAdd(items, label, insert, kind, detail) {
+  var key = String(kind + ':' + label).toLowerCase();
+  var index;
+  for (index = 0; index < items.length; index += 1) if (String(items[index].kind + ':' + items[index].label).toLowerCase() === key) return;
+  items.push({ label: label, insert: insert, kind: kind, detail: detail || '' });
+}
+function sqlCompletionColumns(items, relation) {
+  var columns = relation && relation.value && relation.value.columns || [];
+  var index;
+  for (index = 0; index < columns.length; index += 1) {
+    var column = columns[index];
+    sqlCompletionAdd(items, String(column.name), sqlCompletionIdentifier(column.name), 'column', String(column.type || 'TEXT'));
+  }
+}
+function sqlCompletionItems(token) {
+  var prefix = token.prefix.toLowerCase();
+  var items = [];
+  var aliases = sqlCompletionAliases(token.statement);
+  var qualifier = token.qualified && token.qualified[1] && token.qualified[1].toLowerCase();
+  var index;
+  if (qualifier) {
+    sqlCompletionColumns(items, aliases[qualifier] || sqlCompletionRelation(qualifier));
+  } else {
+    var context = token.beforeToken.trim();
+    var wantsRelation = /\b(?:from|join|update|into|table|describe|desc|truncate)\s*$/i.test(context) || /\b(?:create|drop)\s+(?:unique\s+)?index\b[\s\S]*\bon\s*$/i.test(context) || /\b(?:create|drop)\s+trigger\b[\s\S]*\bon\s*$/i.test(context);
+    var wantsDatabase = /\b(?:use|database)\s*$/i.test(context);
+    var db = sandbox.dbs && sandbox.dbs[currentDbName()] || {};
+    var viewsForDb = sandbox.views && sandbox.views[currentDbName()] || {};
+    if (wantsDatabase) {
+      var dbNames = visibleDbNames(sandbox);
+      for (index = 0; index < dbNames.length; index += 1) sqlCompletionAdd(items, dbNames[index], sqlCompletionIdentifier(dbNames[index]), 'database', 'database');
+    } else if (wantsRelation) {
+      var tableNames = Object.keys(db);
+      var viewNames = Object.keys(viewsForDb);
+      for (index = 0; index < tableNames.length; index += 1) sqlCompletionAdd(items, tableNames[index], sqlCompletionIdentifier(tableNames[index]), 'table', 'table');
+      for (index = 0; index < viewNames.length; index += 1) sqlCompletionAdd(items, viewNames[index], sqlCompletionIdentifier(viewNames[index]), 'view', 'view');
+    } else {
+      var relationNames = Object.keys(db);
+      for (index = 0; index < relationNames.length; index += 1) sqlCompletionColumns(items, { value: db[relationNames[index]] });
+      SQL_FUNCTIONS.forEach(function (name) { sqlCompletionAdd(items, name.toUpperCase(), name.toUpperCase() + '()', 'function', 'function'); });
+      SQL_TYPES.forEach(function (type) { sqlCompletionAdd(items, type.toUpperCase(), type.toUpperCase(), 'type', 'type'); });
+      for (index = 0; index < SQL_COMPLETION_KEYWORDS.length; index += 1) sqlCompletionAdd(items, SQL_COMPLETION_KEYWORDS[index], SQL_COMPLETION_KEYWORDS[index], 'keyword', 'keyword');
+    }
+  }
+  function rank(item) {
+    var label = item.label.toLowerCase();
+    if (!prefix) return 1;
+    if (label.indexOf(prefix) === 0) return 0;
+    return label.indexOf(prefix) !== -1 ? 2 : 9;
+  }
+  return items.filter(function (item) { return rank(item) < 9; }).sort(function (a, b) { return rank(a) - rank(b) || a.label.localeCompare(b.label); }).slice(0, 18);
+}
+function positionSqlCompletions() {
+  if (!sqlCompletionState.open) return;
+  var caret = sqlCompletionState.end;
+  var lineStart = sqlInput.value.lastIndexOf('\n', caret - 1) + 1;
+  var line = sqlInput.value.slice(lineStart, caret).replace(/\t/g, '    ');
+  var lineNumber = sqlInput.value.slice(0, lineStart).split('\n').length - 1;
+  sqlCompletionCanvas = sqlCompletionCanvas || document.createElement('canvas');
+  var style = getComputedStyle(sqlInput);
+  var context = sqlCompletionCanvas.getContext('2d');
+  context.font = style.fontSize + ' ' + style.fontFamily;
+  var left = Math.max(4, Math.min(sqlInput.clientWidth - 424, 14 + context.measureText(line).width - sqlInput.scrollLeft));
+  var naturalTop = 12 + (lineNumber + 1) * SQL_EDITOR_LINE_HEIGHT - sqlInput.scrollTop;
+  var top = naturalTop + 272 > sqlInput.clientHeight ? Math.max(4, naturalTop - 278) : naturalTop;
+  sqlCompletions.style.left = left + 'px';
+  sqlCompletions.style.top = top + 'px';
+}
+function closeSqlCompletions() {
+  sqlCompletionState = { open: false, items: [], active: 0, start: 0, end: 0 };
+  sqlCompletions.hidden = true;
+  sqlCompletions.textContent = '';
+}
+function renderSqlCompletions() {
+  var index;
+  sqlCompletions.textContent = '';
+  for (index = 0; index < sqlCompletionState.items.length; index += 1) (function (item, itemIndex) {
+    var button = document.createElement('button');
+    var icon = document.createElement('span');
+    var label = document.createElement('span');
+    var detail = document.createElement('span');
+    button.type = 'button';
+    button.className = 'sql-completion' + (itemIndex === sqlCompletionState.active ? ' active' : '');
+    button.setAttribute('role', 'option');
+    button.setAttribute('aria-selected', String(itemIndex === sqlCompletionState.active));
+    icon.className = 'sql-completion-icon'; icon.textContent = sqlCompletionIcon(item.kind);
+    label.className = 'sql-completion-label'; label.textContent = item.label;
+    detail.className = 'sql-completion-detail'; detail.textContent = item.detail;
+    button.appendChild(icon); button.appendChild(label); button.appendChild(detail);
+    button.addEventListener('mousedown', function (event) { event.preventDefault(); applySqlCompletion(itemIndex); });
+    sqlCompletions.appendChild(button);
+  }(sqlCompletionState.items[index], index));
+  sqlCompletions.hidden = false;
+  positionSqlCompletions();
+  if (sqlCompletions.children[sqlCompletionState.active] && sqlCompletions.children[sqlCompletionState.active].scrollIntoView) sqlCompletions.children[sqlCompletionState.active].scrollIntoView(false);
+}
+function updateSqlCompletions(force) {
+  if (force === undefined) force = false;
+  var caret = sqlInput.selectionStart === undefined || sqlInput.selectionStart === null ? 0 : sqlInput.selectionStart;
+  if (sqlEditorMetrics.large || sqlCompletionInsideLiteral(sqlInput.value.slice(0, caret))) { closeSqlCompletions(); return; }
+  var token = sqlCompletionToken();
+  var contextExpected = /\b(?:select|from|join|where|on|set|values|show|use|create|alter|drop)\s*$/i.test(token.statement);
+  if (!force && !token.prefix && !token.qualified && !contextExpected) { closeSqlCompletions(); return; }
+  var items = sqlCompletionItems(token);
+  if (!items.length) { closeSqlCompletions(); return; }
+  sqlCompletionState = { open: true, items: items, active: 0, start: token.start, end: token.caret };
+  renderSqlCompletions();
+}
+function applySqlCompletion(index) {
+  if (index === undefined) index = sqlCompletionState.active;
+  var item = sqlCompletionState.items[index];
+  if (!item) { closeSqlCompletions(); return; }
+  var before = sqlInput.value.slice(0, sqlCompletionState.start);
+  var after = sqlInput.value.slice(sqlCompletionState.end);
+  sqlInput.value = before + item.insert + after;
+  var caret = before.length + item.insert.length - (item.kind === 'function' ? 1 : 0);
+  sqlInput.setSelectionRange(caret, caret);
+  updateSqlEditor();
+  scheduleSqlAnalysis();
+  closeSqlCompletions();
+}
 var SQL_INDENT = '\t';
 var SQL_CORRECTIONS = {
   addcolumn: 'ADD COLUMN',
@@ -1600,7 +1808,7 @@ function highlightSql(sql) {
       while (i < sql.length && /[\w$]/.test(sql[i])) i += 1;
       var word = sql.slice(_start, i);
       var lower = word.toLowerCase();
-      var _cls = SQL_KEYWORDS.has(lower) ? 'sql-keyword' : SQL_TYPES.has(lower) ? 'sql-type' : SQL_FUNCTIONS.has(lower) ? 'sql-function' : 'sql-identifier';
+      var _cls = SQL_TYPES.has(lower) ? 'sql-type' : SQL_FUNCTIONS.has(lower) ? 'sql-function' : SQL_KEYWORDS.has(lower) ? 'sql-keyword' : 'sql-identifier';
       html += `<span class="${_cls}">${escapeHtml(word)}</span>`;
       continue;
     }
@@ -1937,7 +2145,7 @@ function analyzeSqlClient(sql) {
   } finally {
     _iterator3.f();
   }
-  var supported = /^(create|use|drop|truncate|insert|select|describe|desc|show|update|delete|alter|explain)\b/i;
+  var supported = /^(create|use|drop|truncate|insert|select|describe|desc|show|update|delete|alter|explain|begin|start|commit|rollback|lock|unlock|grant|revoke|login)\b/i;
   var _iterator4 = _createForOfIteratorHelper(splitStatementsDetailed(sql)),
     _step4;
   try {
@@ -2110,6 +2318,7 @@ function syncSqlScroll() {
     });
   }
   sqlLineNumbers.scrollTop = sqlInput.scrollTop;
+  positionSqlCompletions();
 }
 function sqlCaretScrollTarget() {
   var _sqlInput$selectionSt2;
@@ -2152,12 +2361,14 @@ function setSqlText(text) {
   var analyze = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : true;
   sqlInput.value = text;
   updateSqlEditor();
+  closeSqlCompletions();
   if (analyze) scheduleSqlAnalysis();
 }
 function scheduleSqlAnalysis() {
   clearTimeout(sqlAnalyzeTimer);
+  /* Reject an old backend response before the debounce delay begins. */
+  sqlAnalyzeRequest += 1;
   if (sqlEditorMetrics.large) {
-    sqlAnalyzeRequest += 1;
     setSqlDiagnostics([]);
     return;
   }
@@ -8652,14 +8863,48 @@ sqlInput.addEventListener('input', function (event) {
     persistScroll: pasted
   });
   scheduleSqlAnalysis();
+  updateSqlCompletions();
 });
 sqlInput.addEventListener('scroll', syncSqlScroll);
 sqlInput.addEventListener('keydown', function (event) {
+  if (sqlCompletionState.open) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      var direction = event.key === 'ArrowDown' ? 1 : -1;
+      sqlCompletionState.active = (sqlCompletionState.active + direction + sqlCompletionState.items.length) % sqlCompletionState.items.length;
+      renderSqlCompletions();
+      return;
+    }
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      applySqlCompletion();
+      return;
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSqlCompletions();
+      return;
+    }
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key === ' ') {
+    event.preventDefault();
+    updateSqlCompletions(true);
+    return;
+  }
   if (handleSqlIndentKey(event)) return;
   if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
     event.preventDefault();
     runSql();
   }
+});
+sqlInput.addEventListener('click', function () {
+  updateSqlCompletions();
+});
+sqlInput.addEventListener('keyup', function (event) {
+  if (['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].indexOf(event.key) === -1) updateSqlCompletions();
+});
+sqlInput.addEventListener('blur', function () {
+  setTimeout(closeSqlCompletions, 120);
 });
 runBtn.addEventListener('click', runSql);
 languageSwitcher === null || languageSwitcher === void 0 || languageSwitcher.addEventListener('click', function (event) {

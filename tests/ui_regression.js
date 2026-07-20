@@ -61,6 +61,41 @@ for (const requiredKey of [
 assert.match(app, /addEventListener\('paste'/, 'SQL editor must handle paste explicitly');
 assert.match(app, /insertFromPaste/, 'SQL editor must recognize paste input events');
 assert.match(app, /restoreSqlViewport/, 'SQL editor must restore its viewport after rerender');
+assert.match(html, /id="sqlCompletions"[^>]+role="listbox"/, 'SQL editor must expose an accessible autocomplete list');
+assert.match(css, /\.sql-completions\s*\{/, 'SQL autocomplete popup styling is missing');
+for (const bundle of [app, legacyApp]) {
+  assert.match(bundle, /SQL_COMPLETION_KEYWORDS/, 'SQL autocomplete must cover AsaDB statement keywords');
+  assert.match(bundle, /sqlCompletionAliases/, 'SQL autocomplete must resolve FROM and JOIN aliases');
+  assert.match(bundle, /sqlCompletionRelation/, 'SQL autocomplete must use the current catalog');
+  assert.match(bundle, /updateSqlCompletions/, 'SQL autocomplete update path is missing');
+  assert.match(bundle, /applySqlCompletion/, 'SQL autocomplete insertion path is missing');
+}
+assert.match(app, /concat.*substr.*substring.*coalesce/, 'SQL function completion must include AsaDB scalar functions');
+assert.match(legacyApp, /AUTO_INCREMENT.*COMMENT.*ENGINE.*RETURNS/, 'legacy autocomplete must include AsaDB DDL/routine keywords');
+const lexerKeywords = [...webBackend.matchAll(/(?:^|\s)keyword\(([a-z_]+)\)\./gm)].map(match => match[1]);
+const completionSources = [
+  app.slice(app.indexOf('const SQL_TYPES'), app.indexOf('const SQL_INDENT')),
+  legacyApp.slice(legacyApp.indexOf('var SQL_TYPES'), legacyApp.indexOf('var SQL_INDENT')),
+];
+for (const keyword of lexerKeywords) {
+  for (const completionSource of completionSources) {
+    assert.ok(completionSource.toUpperCase().includes(keyword.toUpperCase()),
+      `SQL completion is missing lexer token ${keyword}`);
+  }
+}
+const highlightSources = [
+  app.slice(app.indexOf('const SQL_TYPES'), app.indexOf('function sqlCompletionIcon')),
+  legacyApp.slice(legacyApp.indexOf('var SQL_TYPES'), legacyApp.indexOf('function sqlCompletionIcon')),
+];
+for (const keyword of lexerKeywords) {
+  for (const highlightSource of highlightSources) {
+    assert.ok(highlightSource.toUpperCase().includes(keyword.toUpperCase()),
+      `SQL highlighter is missing lexer token ${keyword}`);
+  }
+}
+assert.match(app, /SQL_TYPES\.has\(lower\).*SQL_FUNCTIONS\.has\(lower\).*SQL_KEYWORDS\.has\(lower\)/s,
+  'SQL highlighter must preserve distinct type/function/keyword colours');
+assert.match(css, /--font-main:\s*"AsaDB Noto Sans JP"/, 'ID and EN must use the bundled Noto Sans JP font');
 assert.match(app, /executeBackendSqlPage/, 'SQL result paging request helper is missing');
 assert.match(app, /loadMoreResultPage/, 'SQL result Show-more handler is missing');
 assert.match(app, /IntersectionObserver/, 'table chooser must reveal more rows at the scroll boundary');

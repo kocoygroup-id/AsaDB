@@ -3468,6 +3468,13 @@ ensure_persistent_btree(DB, Table, StoreId, Col, File) :-
     retractall(asadb_btree_cache(DB, Table, CacheCol, _)),
     assertz(asadb_btree_cache(DB, Table, CacheCol, persistent(File))).
 
+% `ORDER BY *` is accepted for compatibility.  The wildcard evaluates to the
+% same marker for every row, so sorting cannot change the scan order.  Treat
+% it as a no-op before entering the top-N sorter, which otherwise rescans and
+% repeatedly sorts large page-backed result sets for no visible benefit.
+storage_collect_rows(Generator, Row, Where, Order, Limit, Rows) :-
+    order_is_noop(Order), !,
+    storage_collect_rows(Generator, Row, Where, none, Limit, Rows).
 storage_collect_rows(Generator, Row, Where, none, Limit, Rows) :- !,
     result_window(Limit, Offset, Count),
     Fetch is Offset + Count,
@@ -4152,8 +4159,11 @@ compare_atom_order(<, A, B) :- A @< B.
 compare_atom_order(>=, A, B) :- (A @> B ; A == B).
 compare_atom_order(<=, A, B) :- (A @< B ; A == B).
 
+order_is_noop(order([])).
+order_is_noop(order([order(all, _)])).
+
 apply_order(none, Rows, Rows) :- !.
-apply_order(order([]), Rows, Rows) :- !.
+apply_order(Order, Rows, Rows) :- order_is_noop(Order), !.
 apply_order(order(Items), Rows, Ordered) :-
     numbered_rows(Rows, 0, Numbered),
     predsort(compare_numbered_rows(Items), Numbered, Sorted),

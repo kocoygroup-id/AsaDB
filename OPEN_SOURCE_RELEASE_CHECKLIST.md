@@ -35,7 +35,7 @@ publishing a GPL binary release.
 - [ ] Run `node tests/ui_regression.js`.
 - [ ] Run `scripts/check_linux_runtime.sh` on the target Linux system.
 - [ ] Run `make test-package` and verify
-      `AsaDB-1.3.0-linux-x86_64.tar.Z.sha256` before publishing both files.
+      `AsaDB-1.3.1-linux-x86_64.tar.Z.sha256` before publishing both files.
 - [ ] Run the runtime and regression checks on an actual 4MLinux x86_64 host
       before changing its compatibility status from conditional.
 - [ ] Run the storage benchmark for changes touching pages, records, indexes,

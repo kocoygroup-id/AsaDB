@@ -1,15 +1,15 @@
 # AsaDB
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Release: 1.3.0 STABLE](https://img.shields.io/badge/release-1.3.0%20STABLE-1f8a70.svg)](RELEASE_NOTES.md)
+[![Release: 1.3.1 Release Candidate](https://img.shields.io/badge/release-1.3.1%20Release%20Candidate-e0a400.svg)](RELEASE_NOTES.md)
 [![Runtime: SWI-Prolog](https://img.shields.io/badge/runtime-SWI--Prolog-E61B23.svg)](https://www.swi-prolog.org/)
 
 AsaDB is a local SQL database experiment powered by SWI-Prolog. It ships with
 AsAPanel, a small local web workspace for creating databases, running SQL,
 importing/exporting data, and inspecting tables without a cloud server.
 
-Current release: **v1.3.0 STABLE**. The publication artifact
-`AsaDB-1.3.0-linux-x86_64.tar.Z` is a complete open-source distribution
+Current release: **v1.3.1 Release Candidate**. The publication artifact
+`AsaDB-1.3.1-linux-x86_64.tar.Z` is a complete open-source distribution
 validated for Linux x86_64. It does not bundle SWI-Prolog; see
 [RELEASE.md](RELEASE.md) and [COMPATIBILITY.md](COMPATIBILITY.md).
 
@@ -24,9 +24,45 @@ welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
 - Local `.asa` database files with journal-style persistence.
 - A durable Reservoir bridge spools writes before the backend pulls bounded
   batches, preventing duplicate submissions and unbounded browser pressure.
-- One Windows launcher: `AsaDB.exe` starts the backend and panel together.
+- Windows source launchers run the same backend through an installed
+  SWI-Prolog; the separately embedded portable executable is rebuilt on Windows.
 - AsAPanel runs on `127.0.0.1` and auto-selects a free port.
 - Browser UI stays usable for big SQL files by sending imports to the Prolog backend.
+- Asa Process Guardian is an opt-in source-mirror and process-supervision tool;
+  it is isolated from SQL execution and the database storage path.
+
+## v1.3.1 Highlights
+
+v1.3.1 adds editor guidance and removes a costly no-op execution path:
+
+- The SQL editor offers lightweight schema-aware completion for AsaDB keywords,
+  supported types and functions, local database/table/view names, declared
+  aliases, and table columns. It uses the local catalog and no editor framework.
+- SQL coloring recognizes the supported lexer surface consistently in the
+  modern and Firefox-38-compatible bundles; ID, JP, and EN now share the same
+  Noto Sans JP family for a consistent interface.
+- `ORDER BY *` keeps its established no-op meaning without materializing and
+  sorting every matching row, so a bounded result query can stop at its result
+  window. Semicolon diagnostics are invalidated immediately while a query is
+  being edited, preventing stale "missing ;" feedback.
+- Asa Process Guardian provides an opt-in, SQL-isolated SHA-256 source mirror
+  and bounded process supervision for operators who want launcher health and
+  recovery records.
+- The release set now includes a checksummed Windows source-launcher ZIP with
+  the same source revision and batch launchers for an installed SWI-Prolog.
+
+## 1.3.1 Package Contents
+
+Every 1.3.1 source package includes the SQL engine, page storage, B+Tree and
+metadata layers, Reservoir bridge, AsAPanel modern and compatibility bundles,
+ID/JP/EN assets, tests, build scripts, Linux/POSIX launchers, Windows batch
+launchers, operational guardian, and GPL notices. The Linux and main-source
+archives are gzip-compressed tar streams under `.tar.Z`; the Windows
+source-launcher is a ZIP with its own SHA-256 file.
+
+The Windows ZIP is a source/runtime-launcher package, not a relabelled native
+executable: install SWI-Prolog first. The portable executable remains a
+separate Windows-native build target.
 
 ## v1.3.0 Highlights
 
@@ -138,9 +174,9 @@ with its matching `.asa.store` directory when moving a database.
 Verify and extract the publication files:
 
 ```sh
-sha256sum -c AsaDB-1.3.0-linux-x86_64.tar.Z.sha256
-tar -xzf AsaDB-1.3.0-linux-x86_64.tar.Z
-cd AsaDB-1.3.0-linux-x86_64
+sha256sum -c AsaDB-1.3.1-linux-x86_64.tar.Z.sha256
+tar -xzf AsaDB-1.3.1-linux-x86_64.tar.Z
+cd AsaDB-1.3.1-linux-x86_64
 ./scripts/check_linux_runtime.sh
 ./scripts/run_panel.sh data.asa 8088
 ```

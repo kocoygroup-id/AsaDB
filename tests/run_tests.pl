@@ -14,6 +14,7 @@ main :-
     run_alter_order_assertions,
     run_auto_increment_assertions,
     run_order_by_duplicate_assertions,
+    run_order_by_wildcard_assertions,
     run_delete_where_safety_assertions,
     run_duplicate_column_assertions,
     run_bare_identifier_insert_assertions,
@@ -81,7 +82,7 @@ run_metadata_persistence_assertions :-
     ),
     asadb_database_metadata(Before),
     DatabaseId = Before.database_id,
-    ( Before.engine_version == '1.3.0',
+    ( Before.engine_version == '1.3.1',
       Before.storage_format =:= 3,
       Before.summary.row_count =:= 3 ->
         true
@@ -164,6 +165,33 @@ run_order_by_duplicate_assertions :-
     ),
     expect_sql('SELECT ID, Gaji FROM TextNums WHERE Gaji > 50 ORDER BY Gaji;',
                table(['ID','Gaji'], [[3,'90'],[1,'100']])),
+    asadb_shutdown,
+    cleanup.
+
+run_order_by_wildcard_assertions :-
+    cleanup,
+    asadb_boot('tests/testdata.asa'),
+    Setup = 'CREATE DATABASE wildcard_order_assert; USE wildcard_order_assert; CREATE TABLE Double_Company (id INT, sales_yen INT); INSERT INTO Double_Company VALUES (3, 120), (1, 90), (2, 110);',
+    asadb_exec_sql(Setup, SetupResult),
+    ( result_has_error(SetupResult) ->
+        asadb_format_result(SetupResult),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ; true
+    ),
+    % AsaDB has historically accepted ORDER BY *.  It cannot order rows by a
+    % wildcard scalar, so it must preserve scan order without invoking a sort.
+    expect_sql('SELECT * FROM Double_Company WHERE sales_yen < 32007290 ORDER BY *;',
+               table([id,sales_yen], [[3,120],[1,90],[2,110]])),
+    asadb_analyze_sql('SELECT * FROM Double_Company WHERE sales_yen < 32007290 ORDER BY *;', diagnostics(Diagnostics)),
+    ( Diagnostics == [] ->
+        true
+    ;   format('ASSERTION FAILED: a terminated ORDER BY * query has diagnostics: ~w.~n', [Diagnostics]),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ),
     asadb_shutdown,
     cleanup.
 

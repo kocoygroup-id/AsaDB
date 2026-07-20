@@ -29,8 +29,8 @@
   --ok: #087f5b;
   --warn: #8c6506;
   --shadow: 0 14px 32px rgba(32, 28, 18, .08);
-  --font-main: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-  --font-mono: "Cascadia Mono", Consolas, "Courier New", monospace;
+  --font-main: "AsaDB Noto Sans JP", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  --font-mono: "AsaDB Noto Sans JP", "Cascadia Mono", Consolas, "Courier New", monospace;
 }
 
 /* Minimal Linux installs often ship no Japanese font at all. */
@@ -998,6 +998,70 @@ th {
   outline: none;
 }
 
+.sql-completions {
+  position: absolute;
+  z-index: 12;
+  width: 420px;
+  max-width: calc(100% - 8px);
+  max-height: 272px;
+  overflow: auto;
+  border: 1px solid #c8c5bc;
+  border-radius: 5px;
+  background: #fff;
+  box-shadow: 0 9px 22px rgba(47, 43, 35, .18);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.sql-completions[hidden] {
+  display: none;
+}
+
+.sql-completion {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  min-height: 28px;
+  border: 0;
+  border-bottom: 1px solid #f1efe9;
+  padding: 4px 8px;
+  background: #fff;
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sql-completion:last-child {
+  border-bottom: 0;
+}
+
+.sql-completion:hover,
+.sql-completion.active {
+  background: #eeeef0;
+}
+
+.sql-completion-icon {
+  color: #827a68;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.sql-completion-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sql-completion-detail {
+  margin-left: 16px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .db-metadata {
   margin-top: 14px;
   border-top: 1px solid var(--line);
@@ -1080,7 +1144,7 @@ th {
 .sql-number { color: #098658; }
 .sql-comment { color: #12805c; font-style: italic; }
 .sql-operator { color: #5d6675; }
-.sql-identifier { color: var(--text); }
+.sql-identifier { color: #475569; }
 
 .sql-diagnostics {
   display: grid;

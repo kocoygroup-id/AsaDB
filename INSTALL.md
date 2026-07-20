@@ -4,7 +4,7 @@
 
 1. Install SWI-Prolog.
 2. Pastikan `swipl` masuk PATH.
-3. Extract `AsaDB.zip`.
+3. Extract `AsaDB-1.3.1-windows-source.zip`.
 4. Buka PowerShell/CMD di folder `AsaDB`.
 5. Jalankan demo:
 
@@ -17,6 +17,9 @@ scripts\run_asadb.bat data.asa examples\demo.sql
 ```powershell
 scripts\run_panel.bat data.asa 8088
 ```
+
+This ZIP contains AsaDB source and Windows batch launchers; it does not bundle
+SWI-Prolog or a prebuilt executable.
 
 Buka browser:
 
@@ -32,9 +35,9 @@ launchers use POSIX `/bin/sh`; Bash is not required.
 For the published Linux x86_64 package:
 
 ```sh
-sha256sum -c AsaDB-1.3.0-linux-x86_64.tar.Z.sha256
-tar -xzf AsaDB-1.3.0-linux-x86_64.tar.Z
-cd AsaDB-1.3.0-linux-x86_64
+sha256sum -c AsaDB-1.3.1-linux-x86_64.tar.Z.sha256
+tar -xzf AsaDB-1.3.1-linux-x86_64.tar.Z
+cd AsaDB-1.3.1-linux-x86_64
 ```
 
 The `.tar.Z` suffix is retained for release naming compatibility, but the file
@@ -71,7 +74,7 @@ local build or a separately supplied installation—and make `swipl` visible on
 After extracting AsaDB:
 
 ```sh
-cd AsaDB-1.3.0-linux-x86_64
+cd AsaDB-1.3.1-linux-x86_64
 chmod +x bin/asadb scripts/*.sh
 ./scripts/check_linux_runtime.sh
 ./scripts/run_panel.sh data.asa 8088
@@ -87,6 +90,26 @@ loads a Firefox-38-compatible UI bundle; no Node.js or browser build step is
 needed on 4MLinux. If a visible "AsAPanel gagal memuat antarmuka" notice ever
 appears, first press `Ctrl+Shift+R`; if it remains, open Firefox Console with
 `Ctrl+Shift+K` and keep the error text for a bug report.
+
+## Asa Process Guardian
+
+Asa Process Guardian is opt-in: it never changes SQL execution. It keeps a
+small rolling mirror of AsaDB source/launcher files and can supervise a child
+process with bounded restart and heartbeat auditing.
+
+```sh
+# One verified snapshot only
+./scripts/asadb_guardian.sh --once
+
+# Supervise the normal panel launcher
+./scripts/asadb_guardian.sh --heartbeat-file /tmp/asadb.heartbeat -- \
+  ./scripts/run_panel.sh data.asa 8088
+```
+
+The default mirror is `.asa-guardian/`; it contains `current/`, a SHA-256
+manifest, state JSON, and a bounded log. On Unix, a stalled child may receive
+a `CONT` nudge before the configured bounded restart policy applies. On
+Windows, that nudge is skipped while snapshotting remains available.
 
 `check_linux_runtime.sh` is a capability check, not only a version check. It
 rejects the wrong OS/CPU and verifies the SWI-Prolog HTTP, crypto, UUID, thread,

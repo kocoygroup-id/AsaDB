@@ -1,10 +1,65 @@
-# AsaDB v1.3.0 Release Notes
+# AsaDB v1.3.1 Release Candidate Notes
 
-Released: 2026-07-19
-Status: **STABLE**
+Released: 2026-07-21
+Status: **Release Candidate** (Linux, source, and Windows source-launcher archives verified; portable Windows executable rebuild pending)
 
 Publication summary: [RELEASE.md](RELEASE.md)  
 Compatibility matrix: [COMPATIBILITY.md](COMPATIBILITY.md)
+
+## 1.3.1 editor completion and query stability
+
+### What changed from 1.3.0
+
+| Area | 1.3.0 baseline | 1.3.1 improvement | Why it matters |
+| --- | --- | --- | --- |
+| SQL authoring | Users had to remember spelling and local schema names. | The editor proposes supported keywords, types, functions, database/table/view names, aliases, and columns from the local catalog. | Fewer avoidable syntax and identifier mistakes without an external editor dependency. |
+| Syntax feedback | Some supported token classes remained plain, and analysis could briefly show an obsolete semicolon warning. | Modern and legacy bundles share complete supported-syntax coloring; an edit invalidates stale analysis immediately. | The editor gives a consistent, current explanation of what AsaDB will parse. |
+| Interface typography | ID and EN could use a different family from JP. | ID, JP, and EN use the same Noto Sans JP family. | Labels, SQL-adjacent feedback, and CJK text align consistently across language changes. |
+| Bounded query window | `ORDER BY *` performed needless whole-result sorting even though it has compatible no-op semantics. | The executor recognizes it as a no-op before materialization/sort work. | A limited result can stop at its window instead of spending time sorting rows that will never be shown. |
+| Operational resilience | Source snapshots and a supervised external command required manual tooling. | Asa Process Guardian adds opt-in SHA-256 mirrors, state/log records, heartbeat auditing, and bounded recovery. | Operations can observe and recover a launcher process without changing the SQL executor or storage engine. |
+| Windows access | A native executable rebuild requires a Windows toolchain. | A checksummed Windows source-launcher ZIP now ships the same source and `.bat` launchers. | Windows users can run the current source with an installed SWI-Prolog while the embedded executable remains a separate native build. |
+
+### What is in the 1.3.1 set
+
+- Linux x86_64 source/runtime-target archive with SHA-256.
+- Windows source-launcher ZIP with SHA-256, `run_asadb.bat`, and
+  `run_panel.bat`; it requires a compatible SWI-Prolog on `PATH`.
+- Main-repository source archive with SHA-256 and an unpacked source tree.
+- Core SQL, storage, Reservoir, browser bundles, localization assets, tests,
+  POSIX launchers, Windows batch launchers, build scripts, GPL notices, and
+  the opt-in Asa Process Guardian launcher.
+
+### Why the release is stronger
+
+The editor improvements reuse existing catalog data and checked-in browser
+bundles rather than adding a heavyweight framework or a request per keystroke.
+The executor fix removes work that cannot affect the result, while the
+operational companion is deliberately outside the database execution path.
+Together, the changes improve guidance and observability without widening the
+SQL/storage compatibility contract.
+
+v1.3.1 adds a lightweight schema-aware SQL completion
+popup to AsAPanel. It reuses the already-refreshed local catalog rather than
+adding an editor framework or a network request per keystroke. Completion
+covers the AsaDB lexer keywords, supported types, scalar/aggregate functions,
+database/table/view names, table columns, and aliases declared in `FROM` and
+`JOIN`. Keyboard selection uses Up/Down, Enter or Tab; `Esc` closes it and
+`Ctrl+Space` opens it on demand. The checked-in Firefox-38 bundle contains the
+same implementation and the UI regression gate covers both bundles. It also
+aligns ID/JP/EN interface font selection to Noto Sans JP, completes lexer-based
+syntax coloring across the supported command surface, treats `ORDER BY *` as
+the historical no-op without sorting the full result set, and invalidates stale
+semicolon diagnostics as soon as the SQL text changes.
+
+Asa Process Guardian is now available as an opt-in operational companion. It
+creates a SHA-256-tracked rolling source mirror, preserves a bounded audit log,
+and can supervise an external child process with heartbeat checks and bounded
+crash recovery. It remains outside the SQL execution path.
+
+The Windows source-launcher ZIP now ships the same 1.3.1 source tree with
+`run_asadb.bat` and `run_panel.bat`, plus its own SHA-256 file. It requires an
+installed compatible SWI-Prolog; the separately embedded portable executable
+remains pending a native Windows rebuild.
 
 ## 1.3.0 cumulative release validation
 
