@@ -1,6 +1,7 @@
 % Copyright (C) 2026 Kocoy Group and AsaDB contributors
 % SPDX-License-Identifier: GPL-3.0-only
 :- use_module('../src/asadb_core.pl').
+:- use_module('../src/asadb_mysql55_compat.pl').
 :- use_module(library(filesex)).
 :- initialization(main, main).
 
@@ -25,6 +26,7 @@ main :-
     run_drop_table_cleanup_assertions,
     run_catalog_multitable_assertions,
     run_critical_select_assertions,
+    run_mysql55_manifest_assertions,
     cleanup,
     halt(0).
 
@@ -82,7 +84,7 @@ run_metadata_persistence_assertions :-
     ),
     asadb_database_metadata(Before),
     DatabaseId = Before.database_id,
-    ( Before.engine_version == '1.3.1',
+    ( Before.engine_version == '1.4.0',
       Before.storage_format =:= 3,
       Before.summary.row_count =:= 3 ->
         true
@@ -515,6 +517,17 @@ run_critical_select_assertions :-
                ok(dropped_function(hello))),
     asadb_shutdown,
     cleanup.
+
+run_mysql55_manifest_assertions :-
+    ( mysql55_feature_status(replace, planned),
+      mysql55_feature_status(type(varchar), implemented),
+      asadb_parse_sql('REPLACE INTO t VALUES (1);',
+                      [unsupported_mysql55(replace, raw(_))]) ->
+        true
+    ;   format('ASSERTION FAILED: MySQL compatibility manifest is not wired to parser fallback.~n', []),
+        cleanup,
+        halt(1)
+    ).
 
 expect_sql(SQL, Expected) :-
     asadb_exec_sql(SQL, Result),

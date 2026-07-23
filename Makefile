@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Kocoy Group and AsaDB contributors
 # SPDX-License-Identifier: GPL-3.0-only
-.PHONY: run panel test test-ui test-join test-launchers test-guardian test-windows-source test-package test-all check-linux clean release release-linux release-source windows-exe
+.PHONY: run panel test test-ui test-join test-backup test-launchers test-guardian test-windows-source test-package test-all check-linux clean release release-linux release-source windows-exe
 
 DB ?= data.asa
 SQL ?= examples/demo.sql
@@ -25,6 +25,10 @@ test-ui:
 test-join:
 	swipl -q -s tests/join_15000_regression.pl
 
+test-backup:
+	swipl -q -s tests/production_backup_regression.pl
+	./tests/production_backup_http_regression.sh
+
 test-launchers:
 	./tests/launcher_regression.sh
 
@@ -37,7 +41,7 @@ test-windows-source:
 test-package:
 	./tests/release_package_regression.sh
 
-test-all: test test-ui test-join test-launchers test-guardian test-windows-source test-package
+test-all: test test-ui test-join test-backup test-launchers test-guardian test-windows-source test-package
 
 check-linux:
 	./scripts/check_linux_runtime.sh

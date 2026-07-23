@@ -32,6 +32,11 @@
     asadb_analyze_sql/2,
     asadb_current_database/1,
     asadb_get_state/1,
+    asadb_backup_transaction_active/0,
+    asadb_backup_capture_current_database/1,
+    asadb_backup_restore_current_database/1,
+    asadb_backup_stage_catalog_objects/5,
+    asadb_backup_restore_catalog_objects/5,
     asadb_storage_stats/1,
     asadb_database_metadata/1,
     asadb_analysis_json/2,
@@ -55,6 +60,7 @@
 :- use_module('asadb_config.pl').
 :- use_module('asadb_record_manager.pl').
 :- use_module('asadb_metadata.pl').
+:- use_module('asadb_mysql55_compat.pl').
 
 :- dynamic asadb_state/1.
 :- dynamic asadb_file/1.
@@ -326,6 +332,87 @@ mark_state_upgrade(_).
 
 asadb_get_state(State) :-
     with_mutex(asadb_write, asadb_state(State)).
+
+% Production backups must never claim a transaction snapshot that has not
+% committed.  The web backup path checks this before walking record pages.
+asadb_backup_transaction_active :-
+    with_mutex(asadb_write, asadb_tx_snapshot(_)).
+
+% USE inside a streamed backup changes the selected database outside the row
+% transaction snapshot.  The web importer captures it before BEGIN and uses
+% this helper on rollback so a failed restore cannot redirect later queries.
+asadb_backup_capture_current_database(Database) :-
+    with_mutex(asadb_write, asadb_current_database(Database)).
+
+asadb_backup_restore_current_database(none) :- !,
+    with_mutex(asadb_write,
+               ( retractall(asadb_current_db(_)),
+                 clear_persisted_current_db
+               )).
+asadb_backup_restore_current_database(Database) :-
+    with_mutex(asadb_write,
+               asadb_backup_restore_current_database_locked(Database)).
+
+asadb_backup_restore_current_database_locked(Database) :-
+    asadb_state(State),
+    ( db_exists(State, Database) ->
+        retractall(asadb_current_db(_)),
+        assertz(asadb_current_db(Database)),
+        persist_current_db(Database)
+    ; throw(error(existence_error(database, Database), _))
+    ).
+
+% A verified production backup stages catalog-only objects in the same
+% transaction snapshot as its SQL rows.  If the streaming restore fails, the
+% normal transaction rollback restores both the rows and these objects.
+asadb_backup_stage_catalog_objects(Database, Views, Functions, Procedures, Triggers) :-
+    with_mutex(asadb_write,
+               asadb_backup_stage_catalog_objects_locked(Database, Views,
+                                                          Functions, Procedures,
+                                                          Triggers)).
+
+asadb_backup_stage_catalog_objects_locked(Database, Views, Functions, Procedures, Triggers) :-
+    ( asadb_tx_snapshot(_) -> true
+    ; throw(error(permission_error(restore, production_backup, no_active_transaction), _))
+    ),
+    asadb_state(State0),
+    ( backup_catalog_database_exists(Database, State0) -> true
+    ; throw(error(existence_error(database, Database), _))
+    ),
+    transform_db(Database, State0,
+                 replace_backup_catalog_objects(Views, Functions, Procedures, Triggers),
+                 State),
+    retractall(asadb_state(_)),
+    assertz(asadb_state(State)).
+
+backup_catalog_database_exists(Database, state(_, DBs)) :-
+    member(DB, DBs),
+    backup_catalog_db_name(DB, Name),
+    same_identifier(Name, Database), !.
+
+backup_catalog_db_name(db(Name, _, _, _, _, _), Name) :- !.
+backup_catalog_db_name(db(Name, _), Name).
+
+% This committed form remains available to the direct core API.  The HTTP
+% backup importer uses asadb_backup_stage_catalog_objects/5 before COMMIT.
+asadb_backup_restore_catalog_objects(Database, Views, Functions, Procedures, Triggers) :-
+    with_mutex(asadb_write,
+               asadb_backup_restore_catalog_objects_locked(Database, Views,
+                                                            Functions, Procedures,
+                                                            Triggers)).
+
+asadb_backup_restore_catalog_objects_locked(Database, Views, Functions, Procedures, Triggers) :-
+    ( asadb_tx_snapshot(_) ->
+        throw(error(permission_error(restore, production_backup, active_transaction), _))
+    ; true
+    ),
+    asadb_state(State0),
+    transform_db(Database, State0,
+                 replace_backup_catalog_objects(Views, Functions, Procedures, Triggers),
+                 State),
+    retractall(asadb_state(_)),
+    assertz(asadb_state(State)),
+    asadb_save_locked.
 
 asadb_storage_stats(storage{config:Config,pager:PagerStats,btree_cache:btree_cache{entries:CacheEntries},planner:Planner}) :-
     asadb_config_snapshot(Config),
@@ -874,9 +961,16 @@ unsupported_statement(unsupported_mysql55(_, _)).
 unsupported_statement(unsupported_mysql55(_)).
 
 unsupported_message(unsupported_mysql55(Feature, _), Message) :- !,
+    mysql55_unsupported_message(Feature, Message).
+unsupported_message(unsupported_mysql55(_), 'Statement MySQL 5.5 belum aktif di AsaDB.').
+
+mysql55_unsupported_message(Feature, Message) :-
+    mysql55_feature_status(Feature, Status), !,
+    term_atom_safe(Feature, FeatureAtom),
+    format(atom(Message), 'Fitur MySQL 5.5 ~w: ~w.', [Status, FeatureAtom]).
+mysql55_unsupported_message(Feature, Message) :-
     term_atom_safe(Feature, FeatureAtom),
     atom_concat('Fitur MySQL 5.5 belum aktif: ', FeatureAtom, Message).
-unsupported_message(unsupported_mysql55(_), 'Statement MySQL 5.5 belum aktif di AsaDB.').
 
 correction_diagnostic(_, [], []) :- !.
 correction_diagnostic(Line, Tokens, Diagnostics) :-
@@ -1005,8 +1099,21 @@ parse_statements([[]|Rest], Statements) :- !, parse_statements(Rest, Statements)
 parse_statements([Tokens|Rest], [Stmt|Statements]) :-
     parse_statement(Tokens, Stmt), !,
     parse_statements(Rest, Statements).
+parse_statements([Tokens|Rest], [unsupported_mysql55(Feature, raw(Tokens))|Statements]) :-
+    mysql55_unsupported_feature(Tokens, Feature), !,
+    parse_statements(Rest, Statements).
 parse_statements([Tokens|Rest], [unsupported_mysql55(raw(Tokens))|Statements]) :-
     parse_statements(Rest, Statements).
+
+% Keep the compatibility manifest operational: an unimplemented but known
+% MySQL statement gets a precise status rather than being reported as a vague
+% parser failure.  Supported AsaDB statements are handled by parse_statement/2
+% above, so this branch is only reached for an actual fallback.
+mysql55_unsupported_feature([Token|_], Feature) :-
+    token_name(Token, RawFeature),
+    downcase_atom(RawFeature, Feature),
+    mysql55_feature_status(Feature, Status),
+    Status \= implemented.
 
 /* -------------------------------------------------------------------------
    Lexer
@@ -1059,6 +1166,13 @@ take_until(Q, [Q|Rest], [], Rest) :- !.
 take_until(Q, [C|Cs], [C|Out], Rest) :- take_until(Q, Cs, Out, Rest).
 
 take_string(_, [], [], []).
+% Preserve conventional SQL escapes so production backups can round-trip
+% quotes, literal backslashes, and multiline text without emitting physical
+% newlines into the SQL stream.
+take_string(Q, [92,92|Cs], [92|Out], Rest) :- !, take_string(Q, Cs, Out, Rest).
+take_string(Q, [92,110|Cs], [10|Out], Rest) :- !, take_string(Q, Cs, Out, Rest).
+take_string(Q, [92,114|Cs], [13|Out], Rest) :- !, take_string(Q, Cs, Out, Rest).
+take_string(Q, [92,116|Cs], [9|Out], Rest) :- !, take_string(Q, Cs, Out, Rest).
 take_string(Q, [92,Q|Cs], [Q|Out], Rest) :- !, take_string(Q, Cs, Out, Rest).
 take_string(Q, [Q|Rest], [], Rest) :- !.
 take_string(Q, [C|Cs], [C|Out], Rest) :- take_string(Q, Cs, Out, Rest).
@@ -1066,9 +1180,27 @@ take_string(Q, [C|Cs], [C|Out], Rest) :- take_string(Q, Cs, Out, Rest).
 take_digits([C|Cs], [C|Ds], Rest) :- is_digit_code(C), !, take_digits(Cs, Ds, Rest).
 take_digits(Rest, [], Rest).
 
-take_number(Cs, Ds, Rest) :- take_digits(Cs, Int, Rest0), take_fraction(Rest0, Frac, Rest), append(Int, Frac, Ds).
+take_number(Cs, Ds, Rest) :-
+    take_digits(Cs, Int, Rest0),
+    take_fraction(Rest0, Frac, Rest1),
+    take_exponent(Rest1, Exponent, Rest),
+    append(Int, Frac, Decimal),
+    append(Decimal, Exponent, Ds).
 take_fraction([46,C|Cs], [46,C|Ds], Rest) :- is_digit_code(C), !, take_digits(Cs, Ds, Rest).
 take_fraction(Rest, [], Rest).
+
+% Backup output uses number_codes/2 for reversible floating-point literals.
+% Accept scientific notation as well as ordinary integer/decimal SQL values.
+take_exponent([E,C|Cs], [E,C|Ds], Rest) :-
+    memberchk(E, [69,101]),
+    is_digit_code(C), !,
+    take_digits(Cs, Ds, Rest).
+take_exponent([E,Sign,C|Cs], [E,Sign,C|Ds], Rest) :-
+    memberchk(E, [69,101]),
+    memberchk(Sign, [43,45]),
+    is_digit_code(C), !,
+    take_digits(Cs, Ds, Rest).
+take_exponent(Rest, [], Rest).
 
 take_ident([C|Cs], [C|More], Rest) :- is_ident_code(C), !, take_ident(Cs, More, Rest).
 take_ident(Rest, [], Rest).
@@ -3228,6 +3360,9 @@ apply_db_action(create_trigger_in_db(Name, Event, Timing, Table, Body), db(DB, T
     NewTriggers = [trigger(Name, Event, Timing, Table, Body, Time)|Triggers].
 apply_db_action(drop_trigger_in_db(Name), db(DB, Tables, V, F, P, Triggers), db(DB, Tables, V, F, P, NewTriggers)) :-
     remove_trigger(Name, Triggers, NewTriggers).
+apply_db_action(replace_backup_catalog_objects(Views, Functions, Procedures, Triggers),
+                db(DB, Tables, _, _, _, _),
+                db(DB, Tables, Views, Functions, Procedures, Triggers)).
 
 replace_table(Name, New, [T|Ts], [New|Ts]) :- table_has_name(T, Name), !.
 replace_table(Name, New, [T|Ts], [T|Out]) :- replace_table(Name, New, Ts, Out).

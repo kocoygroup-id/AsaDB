@@ -159,7 +159,7 @@
             </div>
             <div class="source-control-row">
               <label class="source-label" for="importFileInput" data-i18n="common.file">File</label>
-              <input id="importFileInput" type="file" multiple accept=".asa,.asadb,.json,.csv,.xlsx,.xls,.sql,.pgsql,.psql,.postgres,.mysql,.gz,text/csv,application/sql,text/plain" />
+              <input id="importFileInput" type="file" multiple accept=".asb,.asa,.asadb,.json,.csv,.xlsx,.xls,.sql,.pgsql,.psql,.postgres,.mysql,.gz,text/csv,application/sql,text/plain" />
               <button id="importExecuteBtn" class="flat-primary" type="button" data-i18n="import.execute">Eksekusi</button>
             </div>
           </section>
@@ -239,17 +239,12 @@
             <div id="exportOutputGroup" class="option-control radio-line">
               <label><input type="radio" name="exportOutput" value="save" checked /> <span data-i18n="export.download">Unduh</span></label>
               <label><input type="radio" name="exportOutput" value="open" /> <span data-i18n="export.openPreview">Buka pratinjau</span></label>
-              <label><input type="radio" name="exportOutput" value="gzip" /> Gzip</label>
             </div>
           </div>
           <div class="option-row">
             <div class="option-label" data-i18n="common.format">Format</div>
             <div id="exportFormatGroup" class="option-control radio-line">
-              <label><input type="radio" name="exportFormat" value="asadb" checked /> AsaDB</label>
-              <label><input type="radio" name="exportFormat" value="csv" /> CSV</label>
-              <label><input type="radio" name="exportFormat" value="xlsx" /> XLSX</label>
-              <label><input type="radio" name="exportFormat" value="postgresql" /> PostgreSQL</label>
-              <label><input type="radio" name="exportFormat" value="mysql" /> MySQL</label>
+              <label><input type="radio" name="exportFormat" value="asadb" checked /> AsaDB Backup</label>
             </div>
           </div>
           <div class="option-row">
@@ -285,6 +280,8 @@
         <div class="export-actions">
           <button id="exportRunBtn" class="flat-primary export-submit" type="button" data-i18n="nav.export">Ekspor</button>
         </div>
+
+        <p class="export-production-note">AsaDB Backup selalu dibuat dari storage backend yang terkunci dan mencakup seluruh tabel, data, indeks, serta objek katalog database aktif.</p>
 
         <div class="export-grid">
           <table class="table-pick export-table-pick">

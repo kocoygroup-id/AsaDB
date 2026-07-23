@@ -7,6 +7,7 @@
 *.asa.meta.tmp
 *.asa.wal
 *.asa.store/
+asadb.port
 
 # Generated tests and releases
 tests/*_generated.sql

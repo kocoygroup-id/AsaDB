@@ -8,7 +8,11 @@
   roadmap for expanding AsaDB toward a fuller MySQL 5.5 dialect.
 */
 
-:- module(asadb_mysql55_compat, [mysql55_statement/3, mysql55_type/2]).
+:- module(asadb_mysql55_compat, [
+    mysql55_statement/3,
+    mysql55_type/2,
+    mysql55_feature_status/2
+]).
 
 % mysql55_statement(Category, Statement, Status).
 % Status: implemented | metadata_stub | parsed_stub | planned
@@ -100,3 +104,15 @@ mysql55_type(time, implemented).
 mysql55_type(datetime, implemented).
 mysql55_type(timestamp, implemented).
 mysql55_type(year, implemented).
+
+% Shared lookup used by the parser diagnostics and by tools that need to
+% distinguish a planned MySQL feature from an AsaDB syntax mistake.  Keeping
+% this lookup beside the manifest prevents a second, drifting status table in
+% the SQL engine.
+mysql55_feature_status(Feature, Status) :-
+    atom(Feature),
+    mysql55_statement(_, Feature, Status), !.
+mysql55_feature_status(statement(Category, Statement), Status) :-
+    mysql55_statement(Category, Statement, Status), !.
+mysql55_feature_status(type(Type), Status) :-
+    mysql55_type(Type, Status), !.
