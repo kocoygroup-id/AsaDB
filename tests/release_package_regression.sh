@@ -35,10 +35,10 @@ for required in \
   bin/asadb scripts/run_asadb.sh scripts/run_panel.sh scripts/asadb_guardian.sh scripts/check_linux_runtime.sh scripts/build_legacy_frontend.sh scripts/build_windows_source_release.sh \
   scripts/build_windows_exe.ps1 scripts/check_realtime_release.sh scripts/check_realtime_release.ps1 \
   scripts/realtime_release_contract.txt \
-  src/asadb_core.pl src/bridge/karyawan.pl src/bridge/reservoir.pl src/bridge/horsemen/contract/war/here/yoru_the_wardevil.pl web/index.html web/assets/app.js \
+  src/asadb_core.pl src/asadb_backup.pl src/asadb_pager.pl src/bridge/karyawan.pl src/bridge/reservoir.pl src/bridge/horsemen/contract/war/here/yoru_the_wardevil.pl web/index.html web/assets/app.js \
   web/assets/app.legacy.js web/assets/app-loader.js \
   web/assets/fonts/noto-sans-jp-japanese-400-normal.woff2 web/assets/fonts/noto-sans-jp-japanese-400-normal.woff \
-  tests/run_tests.pl tests/join_15000_regression.pl tests/guardian_regression.sh tests/windows_source_package_regression.sh tests/ui_regression.js \
+  tests/run_tests.pl tests/join_15000_regression.pl tests/production_backup_regression.pl tests/production_backup_http_regression.sh tests/guardian_regression.sh tests/windows_source_package_regression.sh tests/ui_regression.js \
   tests/launcher_regression.sh tests/release_package_regression.sh
 do
   if ! grep -Fx "$NAME/$required" "$LIST_FILE" >/dev/null; then

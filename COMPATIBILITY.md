@@ -1,12 +1,13 @@
-# AsaDB 1.3.1 Release Candidate Compatibility Matrix
+# AsaDB 1.4.0 Stable Compatibility Matrix
 
 This document separates validated behavior from conditional compatibility.
-`Release Candidate` means the documented candidate gates pass; it does not
-mean every SQL dialect, operating system, or third-party runtime is supported.
+`Stable` applies to the documented Linux/PCLinuxOS backend and source-package
+scope; it does not mean every SQL dialect, operating system, or third-party
+runtime is supported.
 
-The 1.3.1 Release Candidate has passed the available Linux runtime and core/Reservoir
+The 1.4.0 Stable release has passed the available Linux runtime and core/Reservoir
 regressions. A Windows portable executable must be rebuilt on Windows before
-this matrix can claim a 1.3.1 Windows validation result.
+this matrix can claim a 1.4.0 Windows validation result.
 
 ## Release validation host
 
@@ -14,6 +15,20 @@ The 1.3.0 release gates were executed on 4MLinux 51.2 (Linux 6.12.94,
 x86_64), Intel Core i5-6300U, with 8 GB RAM. This records the actual machine
 profile used for the release; the capability probe remains the authoritative
 check when moving the package to another host.
+
+## PCLinuxOS 1.4.0 Stable verification
+
+The current 1.4.0 Stable audit was run on **PCLinuxOS 2026**, Linux
+`6.18.37-pclos1`, x86_64, with SWI-Prolog `10.0.2`. The runtime capability
+probe, core SQL suite, Reservoir suite, 15,000-row indexed JOIN, production
+backup/restore checks, Guardian, POSIX launchers, and Linux/Windows-source
+package checks passed. The storage stress suite also completed its 100,000-row
+import, indexed lookup, ordered limit, update, delete, bounded-result, and
+restart-persistence assertions; the measured import stage was 27,309 ms.
+
+This is a real target-host validation record, not a portability promise for
+every PCLinuxOS installation: run the same capability and release gates after
+changing SWI-Prolog, filesystem, or configuration.
 
 ## Platform matrix
 
@@ -25,10 +40,12 @@ check when moving the package to another host.
 | SWI-Prolog core | Validated | Core assertions and the JOIN workload pass on the available SWI-Prolog WASM runtime; native Linux is a CI and target-host gate. |
 | Native HTTP/Reservoir backend | Runtime-gated | `check_linux_runtime.sh` loads required HTTP, crypto, UUID, thread, core, Reservoir, and web modules before use. |
 | Asa Process Guardian | Validated on Linux | Standalone rolling source mirror and child-process supervision. It uses atomic per-file replacement, SHA-256 manifests, bounded logs, heartbeat auditing, Unix `CONT` nudges, and bounded crash restart. It is opt-in and never participates in SQL execution. |
-| AsAPanel browser bundle | Covered | `app-loader.js` loads a checked-in Firefox 38 syntax-compatible bundle and polyfills `NodeList.forEach`, `Element.append`, and other small APIs needed at boot. It also ships Noto Sans JP in WOFF2 plus WOFF for JP text on browsers without system CJK fonts. Current Firefox is recommended. |
+| AsaDB production backup (`.asb`) | Covered on Linux | Authenticated backend download scans paged record storage; tampering, active transactions, and full restore row/table totals are regression-tested. It is a logical backup, not a filesystem hot copy. |
+| AsAPanel browser bundle | Static contract checked; Node gate pending on this host | `app-loader.js` loads a checked-in Firefox 38 syntax-compatible bundle and polyfills `NodeList.forEach`, `Element.append`, and other small APIs needed at boot. It also ships Noto Sans JP in WOFF2 plus WOFF for JP text on browsers without system CJK fonts. Run `make test-ui` on a host with Node.js before publication. |
 | 4MLinux x86_64 | Validated on release host | Paths and shell syntax were exercised on the recorded 4MLinux host; a compatible feature-complete `swipl` is still required on any other host. |
-| Windows source-launcher ZIP | Package-checked | Includes the same 1.3.1 source tree plus `run_asadb.bat` and `run_panel.bat`; install a compatible SWI-Prolog on Windows and place `swipl` on `PATH`. Native Windows execution has not been run on this Linux host. |
-| Windows x86 portable executable | Pending 1.3.1 rebuild | The historical 1.3.0 executable was Wine-validated, but it is not relabelled as 1.3.1. Rebuild it with Windows PowerShell and SWI-Prolog to validate the embedded backend. |
+| PCLinuxOS 2026 x86_64 | Validated for 1.4.0 Stable | Linux 6.18.37-pclos1 / SWI-Prolog 10.0.2; backend/package gates and the 100,000-row storage stress suite passed. |
+| Windows source-launcher ZIP | Package-checked | Includes the same 1.4.0 source tree plus `run_asadb.bat` and `run_panel.bat`; install a compatible SWI-Prolog on Windows and place `swipl` on `PATH`. Native Windows execution has not been run on this Linux host. |
+| Windows x86 portable executable | Pending 1.4.0 rebuild | The historical executable is not relabelled as 1.4.0. Rebuild it with Windows PowerShell and SWI-Prolog to validate the embedded backend. |
 | macOS or non-x86_64 Linux | Not release-tested | Source may be portable, but it is outside this artifact's validation label. |
 
 ## Runtime requirements
@@ -64,13 +81,14 @@ the capability probe is authoritative:
 | v1.2.1 -> v1.3.0 storage stress | Measured | On 4MLinux 6.12.94 / i5-6300U / 8 GB, 10k, 50k, and 100k scenarios passed; 100k completed in 59.21 s wall-clock. |
 | Filtered JOIN + VIEW multi-statement query | Covered | Source-local predicate pushdown, unique-key lookup, and two result sets are regression-tested; the 250,000-row Double_Company-shaped repro completed in ~0.36 s on the release host. |
 | Complex `ON` expression | Compatible fallback | Nested loop; potentially expensive. |
-| ID / JP / EN UI | Covered | All localization keys plus interactive language and dynamic Asa output checks. |
-| Long SQL paste | Covered | 6,000-line caret/scroll retention scenario. |
+| ID / JP / EN UI | Node gate pending on this host | `tests/ui_regression.js` covers localization keys, interactive language, and dynamic Asa output; run it on a host with Node.js before publication. |
+| Long SQL paste | Node gate pending on this host | `tests/ui_regression.js` covers the 6,000-line caret/scroll retention scenario; run it on a host with Node.js before publication. |
 | Startup overlay | Covered | A non-interactive 650 ms visual cue replaces the 3.5-second wait and never repeats backend warmup. |
-| Browser bootstrap / buttons | Covered | Loader-to-legacy-bundle interaction test confirms language and database buttons attach even while the backend request is stalled. |
+| Browser bootstrap / buttons | Node gate pending on this host | The loader-to-legacy-bundle interaction test confirms language and database buttons attach even while the backend request is stalled; run it with Node.js before publication. |
 | Reservoir queue/spool | Covered by source tests | Full native execution requires thread, crypto, UUID, and HTTP-capable SWI-Prolog. |
-| Reservoir reload/cancel/live metadata | Covered | Active jobs are rediscovered after reload without replay, receiving/queued/processing cancellation is regression-tested, and metadata uses adaptive no-cache polling while visible. Modern and legacy bundles share a build preflight contract. |
+| Reservoir reload/cancel/live metadata | Source covered; Node UI gate pending | Active jobs are rediscovered after reload without replay, receiving/queued/processing cancellation is regression-tested, and metadata uses adaptive no-cache polling while visible. Modern and legacy bundles share a static build preflight contract; run the Node UI regression before publication. |
 | Asa Process Guardian | Covered on Linux | `tests/guardian_regression.sh` verifies a one-shot rolling mirror, SHA-256 manifest, exclusion rules, captured child output, and clean child completion. Windows can use the mirror and generic process APIs, but its Unix-specific `CONT` nudge is intentionally skipped. |
+| Production backup and restore | Covered on Linux | `tests/production_backup_regression.pl` scans/restores 6,141 backend rows; `tests/production_backup_http_regression.sh` checks authentication, tampering, active transactions, and clean HTTP restore. |
 | SQL/table paging beyond 500 rows | Covered | `/api/query` serves bounded pages; SQL results, table previews, and the searchable sidebar expose unobtrusive Show-more controls. |
 | Karyawan Reservoir adviser | Covered | `src/bridge/karyawan.pl` is pure Prolog, reports single-worker pressure/health, and is exercised through Reservoir snapshots and stats; no R runtime is required. |
 | Large SQL paste / stress import | Covered | The line-number gutter remains visible for large scripts; 256-statement import batches use bounded 8,192-row storage chunks and the Linux stress-file resolver is case-tolerant. |
@@ -91,7 +109,7 @@ Run these checks on the actual target machine; passing on another Linux
 distribution cannot prove its libc or locally built SWI-Prolog compatibility:
 
 ```sh
-cd AsaDB-1.3.1-linux-x86_64
+cd AsaDB-1.4.0-linux-x86_64
 ./scripts/check_linux_runtime.sh
 make test
 make test-join

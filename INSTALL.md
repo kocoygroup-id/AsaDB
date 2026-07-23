@@ -4,7 +4,7 @@
 
 1. Install SWI-Prolog.
 2. Pastikan `swipl` masuk PATH.
-3. Extract `AsaDB-1.3.1-windows-source.zip`.
+3. Extract `AsaDB-1.4.0-windows-source.zip`.
 4. Buka PowerShell/CMD di folder `AsaDB`.
 5. Jalankan demo:
 
@@ -35,9 +35,9 @@ launchers use POSIX `/bin/sh`; Bash is not required.
 For the published Linux x86_64 package:
 
 ```sh
-sha256sum -c AsaDB-1.3.1-linux-x86_64.tar.Z.sha256
-tar -xzf AsaDB-1.3.1-linux-x86_64.tar.Z
-cd AsaDB-1.3.1-linux-x86_64
+sha256sum -c AsaDB-1.4.0-linux-x86_64.tar.Z.sha256
+tar -xzf AsaDB-1.4.0-linux-x86_64.tar.Z
+cd AsaDB-1.4.0-linux-x86_64
 ```
 
 The `.tar.Z` suffix is retained for release naming compatibility, but the file
@@ -74,7 +74,7 @@ local build or a separately supplied installation—and make `swipl` visible on
 After extracting AsaDB:
 
 ```sh
-cd AsaDB-1.3.1-linux-x86_64
+cd AsaDB-1.4.0-linux-x86_64
 chmod +x bin/asadb scripts/*.sh
 ./scripts/check_linux_runtime.sh
 ./scripts/run_panel.sh data.asa 8088
@@ -110,6 +110,19 @@ The default mirror is `.asa-guardian/`; it contains `current/`, a SHA-256
 manifest, state JSON, and a bounded log. On Unix, a stalled child may receive
 a `CONT` nudge before the configured bounded restart policy applies. On
 Windows, that nudge is skipped while snapshotting remains available.
+
+To validate and include externally retained AsaDB production backup artifacts
+in the Guardian mirror, point it to a separate directory. Each `.asb` is
+verified before it is mirrored:
+
+```sh
+./scripts/asadb_guardian.sh --backup-artifacts /path/to/backup-artifacts --once
+```
+
+Do not place that artifact directory inside `.asa-guardian/`, or vice versa.
+For normal panel backups, use **Export → AsaDB Backup** while the backend is
+online. AsaDB writes a complete backend `.asb` logical backup; importing it
+verifies integrity before restore.
 
 `check_linux_runtime.sh` is a capability check, not only a version check. It
 rejects the wrong OS/CPU and verifies the SWI-Prolog HTTP, crypto, UUID, thread,

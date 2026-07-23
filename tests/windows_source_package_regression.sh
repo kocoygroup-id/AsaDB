@@ -24,7 +24,7 @@ unzip -Z1 "$ARCHIVE" > "$LIST"
 for required in \
   LICENSE README.md INSTALL.md SOURCE_CODE.md VERSION \
   scripts/run_asadb.bat scripts/run_panel.bat scripts/asadb_guardian.sh \
-  src/asadb.pl src/asadb_web.pl src/bridge/reservoir.pl \
+  src/asadb.pl src/asadb_web.pl src/asadb_backup.pl src/asadb_pager.pl src/bridge/reservoir.pl \
   web/index.html web/assets/app.js
 do
   if ! grep -Fx "$NAME/$required" "$LIST" >/dev/null; then

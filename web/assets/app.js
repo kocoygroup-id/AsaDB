@@ -103,6 +103,8 @@ const I18N = {
     'export.download': 'Unduh',
     'export.openPreview': 'Buka pratinjau',
     'export.noTables': 'Belum ada tabel dipilih.',
+    'export.productionReady': 'Backup produksi {name} sedang disiapkan langsung dari storage backend. Unduhan akan dimulai dari browser.',
+    'export.backendRequired': 'Backup produksi membutuhkan backend AsaDB yang sedang online. Ekspor dari cache browser sengaja diblokir agar data tidak bisa terpotong.',
     'table.selectData': 'Pilih data',
     'table.showStructure': 'Lihat struktur',
     'table.alter': 'Ubah tabel',
@@ -315,6 +317,8 @@ const I18N = {
     'export.download': 'Download',
     'export.openPreview': 'Open preview',
     'export.noTables': 'No tables selected.',
+    'export.productionReady': 'Production backup {name} is being prepared directly from backend storage. The browser download will start shortly.',
+    'export.backendRequired': 'Production backup requires an online AsaDB backend. Browser-cache export is deliberately blocked so data cannot be truncated.',
     'table.selectData': 'Select data',
     'table.showStructure': 'Show structure',
     'table.alter': 'Alter table',
@@ -527,6 +531,8 @@ const I18N = {
     'export.download': 'ダウンロード',
     'export.openPreview': 'プレビューを開く',
     'export.noTables': 'テーブルが選択されていません。',
+    'export.productionReady': '本番バックアップ {name} をバックエンドストレージから直接作成しています。ブラウザーのダウンロードがまもなく始まります。',
+    'export.backendRequired': '本番バックアップにはオンラインの AsaDB バックエンドが必要です。データ切り詰めを防ぐため、ブラウザーキャッシュからのエクスポートはブロックされています。',
     'table.selectData': 'データを表示',
     'table.showStructure': '構造を表示',
     'table.alter': 'テーブル変更',
@@ -4847,6 +4853,7 @@ async function saveCreateTable(event) {
 
 function detectImportFormat(fileName, bytes, textHint = '') {
   const name = fileName.toLowerCase().replace(/\.gz$/, '');
+  if (name.endsWith('.asb')) return 'asadb';
   if (name.endsWith('.asa') || name.endsWith('.asadb') || name.endsWith('.json')) return 'asadb';
   if (name.endsWith('.csv')) return 'csv';
   if (name.endsWith('.xlsx') || name.endsWith('.xls')) return 'xlsx';
@@ -4943,9 +4950,10 @@ async function importFromServerFileOnce() {
 function shouldUseBackendFileImport(path, selectedFormat) {
   const clean = String(path || '').replace(/\\/g, '/').replace(/^\/+/, '');
   if (/\.gz$/i.test(clean)) return false;
+  const productionBackup = /\.asb$/i.test(clean);
   const sqlPath = /\.(sql|mysql|pgsql|psql|postgres)$/i.test(clean);
   const sqlFormat = selectedFormat === 'auto' || selectedFormat === 'mysql' || selectedFormat === 'postgresql';
-  return sqlPath && sqlFormat;
+  return productionBackup || (sqlPath && sqlFormat);
 }
 
 function shouldUploadFileToBackend(file) {
@@ -5059,6 +5067,9 @@ async function importFromBuffer(name, rawBuffer, selectedFormat) {
   noteArchiveImportStart(name, rawBuffer.byteLength || buffer.byteLength || 0);
 
   if (format === 'asadb') {
+    if (/\.asb$/i.test(cleanName)) {
+      throw new Error(t('export.backendRequired'));
+    }
     const imported = parseAsaDbBuffer(buffer);
     mergeSandbox(imported, mode === 'replace');
     saveSandbox();
@@ -5309,6 +5320,26 @@ function convertCopyBlocks(sql) {
 async function exportDatabase() {
   const format = checkedValue('exportFormat');
   const output = checkedValue('exportOutput');
+  if (backendOnline) {
+    try {
+      exportDatabaseFromBackend(output);
+    } catch (err) {
+      exportPreview.textContent = `${ASA_ERROR_LABEL}: ${asaErrorCopy(err.message)}`;
+      log(t('log.exportFailed', { error: err.message }));
+    }
+    return;
+  }
+
+  // The old browser exporter only knows the sandbox cache.  It remains useful
+  // for small offline interchange formats, but it must never impersonate a
+  // native AsaDB backup because paged backend rows are not in that cache.
+  if (format === 'asadb') {
+    const message = t('export.backendRequired');
+    exportPreview.textContent = `${ASA_ERROR_LABEL}: ${message}`;
+    log(t('log.exportFailed', { error: message }));
+    return;
+  }
+
   try {
     const pkg = await buildExportPackage(format);
     let blob = pkg.blob;
@@ -5329,6 +5360,35 @@ async function exportDatabase() {
     exportPreview.textContent = `${ASA_ERROR_LABEL}: ${asaErrorCopy(err.message)}`;
     log(t('log.exportFailed', { error: err.message }));
   }
+}
+
+function exportDatabaseFromBackend(output) {
+  const db = ensureCurrentDb('export');
+  if (!db) throw new Error(t('database.selectFirst'));
+
+  // A normal form submission keeps a large artifact out of JavaScript heap
+  // and lets the browser stream Content-Disposition directly to disk.  The
+  // authenticated same-origin cookie is sent automatically.
+  const form = document.createElement('form');
+  form.method = 'post';
+  form.action = '/api/backup';
+  form.style.display = 'none';
+  if (output === 'open') form.target = '_blank';
+
+  for (const [name, value] of Object.entries({ database: db, output: output === 'open' ? 'open' : 'save' })) {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  }
+
+  document.body.appendChild(form);
+  form.submit();
+  window.setTimeout(() => form.remove(), 0);
+  const filename = `${db}.asb`;
+  exportPreview.textContent = t('export.productionReady', { name: filename });
+  log(t('export.productionReady', { name: filename }));
 }
 
 async function buildExportPackage(format) {

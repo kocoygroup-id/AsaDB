@@ -1584,6 +1584,18 @@ th {
   min-width: 104px;
 }
 
+.export-production-note {
+  width: min(1120px, 100%);
+  margin: -2px 0 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .export-grid {
   display: grid;
   grid-template-columns: minmax(320px, 440px) minmax(0, 1fr);

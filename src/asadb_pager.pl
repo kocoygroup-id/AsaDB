@@ -30,9 +30,10 @@ asadb_pager_read_page(File, PageNo, Bytes) :-
 
 asadb_pager_scan_page(File, PageNo, Bytes) :-
     exists_file(File),
-    size_file(File, Size),
-    asadb_pager_page_size(PageSize),
-    PageCount is Size // PageSize,
+    % A streaming restore validates rows before COMMIT.  Newly appended pages
+    % can still be dirty in the buffer pool, so disk size alone would scan
+    % only a prefix of the database and make an intact backup look truncated.
+    asadb_pager_page_count(File, PageCount),
     PageCount > 0,
     LastPage is PageCount - 1,
     setup_call_cleanup(

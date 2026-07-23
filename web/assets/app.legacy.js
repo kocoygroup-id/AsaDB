@@ -131,6 +131,8 @@ var I18N = {
     'export.download': 'Unduh',
     'export.openPreview': 'Buka pratinjau',
     'export.noTables': 'Belum ada tabel dipilih.',
+    'export.productionReady': 'Backup produksi {name} sedang disiapkan langsung dari storage backend. Unduhan akan dimulai dari browser.',
+    'export.backendRequired': 'Backup produksi membutuhkan backend AsaDB yang sedang online. Ekspor dari cache browser sengaja diblokir agar data tidak bisa terpotong.',
     'table.selectData': 'Pilih data',
     'table.showStructure': 'Lihat struktur',
     'table.alter': 'Ubah tabel',
@@ -343,6 +345,8 @@ var I18N = {
     'export.download': 'Download',
     'export.openPreview': 'Open preview',
     'export.noTables': 'No tables selected.',
+    'export.productionReady': 'Production backup {name} is being prepared directly from backend storage. The browser download will start shortly.',
+    'export.backendRequired': 'Production backup requires an online AsaDB backend. Browser-cache export is deliberately blocked so data cannot be truncated.',
     'table.selectData': 'Select data',
     'table.showStructure': 'Show structure',
     'table.alter': 'Alter table',
@@ -555,6 +559,8 @@ var I18N = {
     'export.download': 'ダウンロード',
     'export.openPreview': 'プレビューを開く',
     'export.noTables': 'テーブルが選択されていません。',
+    'export.productionReady': '本番バックアップ {name} をバックエンドストレージから直接作成しています。ブラウザーのダウンロードがまもなく始まります。',
+    'export.backendRequired': '本番バックアップにはオンラインの AsaDB バックエンドが必要です。データ切り詰めを防ぐため、ブラウザーキャッシュからのエクスポートはブロックされています。',
     'table.selectData': 'データを表示',
     'table.showStructure': '構造を表示',
     'table.alter': 'テーブル変更',
@@ -6720,6 +6726,7 @@ function _saveCreateTable() {
 function detectImportFormat(fileName, bytes) {
   var textHint = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : '';
   var name = fileName.toLowerCase().replace(/\.gz$/, '');
+  if (name.endsWith('.asb')) return 'asadb';
   if (name.endsWith('.asa') || name.endsWith('.asadb') || name.endsWith('.json')) return 'asadb';
   if (name.endsWith('.csv')) return 'csv';
   if (name.endsWith('.xlsx') || name.endsWith('.xls')) return 'xlsx';
@@ -6933,9 +6940,10 @@ function _importFromServerFileOnce() {
 function shouldUseBackendFileImport(path, selectedFormat) {
   var clean = String(path || '').replace(/\\/g, '/').replace(/^\/+/, '');
   if (/\.gz$/i.test(clean)) return false;
+  var productionBackup = /\.asb$/i.test(clean);
   var sqlPath = /\.(sql|mysql|pgsql|psql|postgres)$/i.test(clean);
   var sqlFormat = selectedFormat === 'auto' || selectedFormat === 'mysql' || selectedFormat === 'postgresql';
-  return sqlPath && sqlFormat;
+  return productionBackup || sqlPath && sqlFormat;
 }
 function shouldUploadFileToBackend(file) {
   if (!file) return false;
@@ -8988,7 +8996,65 @@ document.addEventListener('visibilitychange', function () {
 window.addEventListener('focus', function () {
   return scheduleMetadataPoll(0);
 });
-exportRunBtn.addEventListener('click', exportDatabase);
+// Keep the checked-in ES5 bundle on the production backup path as well.  The
+// readable app.js is the source of truth; this small adapter avoids rebuilding
+// the entire Babel bundle on installations without Node.js.
+function exportDatabaseProduction() {
+  var format = checkedValue('exportFormat');
+  var output = checkedValue('exportOutput');
+  if (backendOnline) {
+    try {
+      exportDatabaseFromBackendLegacy(output);
+    } catch (err) {
+      exportPreview.textContent = ASA_ERROR_LABEL + ': ' + asaErrorCopy(err.message);
+      log(t('log.exportFailed', {
+        error: err.message
+      }));
+    }
+    return;
+  }
+  if (format === 'asadb') {
+    var message = t('export.backendRequired');
+    exportPreview.textContent = ASA_ERROR_LABEL + ': ' + message;
+    log(t('log.exportFailed', {
+      error: message
+    }));
+    return;
+  }
+  exportDatabase();
+}
+function exportDatabaseFromBackendLegacy(output) {
+  var db = ensureCurrentDb('export');
+  if (!db) throw new Error(t('database.selectFirst'));
+  var form = document.createElement('form');
+  form.method = 'post';
+  form.action = '/api/backup';
+  form.style.display = 'none';
+  if (output === 'open') form.target = '_blank';
+  var databaseInput = document.createElement('input');
+  databaseInput.type = 'hidden';
+  databaseInput.name = 'database';
+  databaseInput.value = db;
+  form.appendChild(databaseInput);
+  var outputInput = document.createElement('input');
+  outputInput.type = 'hidden';
+  outputInput.name = 'output';
+  outputInput.value = output === 'open' ? 'open' : 'save';
+  form.appendChild(outputInput);
+  document.body.appendChild(form);
+  form.submit();
+  window.setTimeout(function () {
+    if (form.parentNode) form.parentNode.removeChild(form);
+  }, 0);
+  var filename = db + '.asb';
+  exportPreview.textContent = t('export.productionReady', {
+    name: filename
+  });
+  log(t('export.productionReady', {
+    name: filename
+  }));
+}
+exportRunBtn.addEventListener('click', exportDatabaseProduction);
 createTableForm.addEventListener('submit', saveCreateTable);
 createAddHeaderBtn.addEventListener('click', function () {
   return addCreateColumnRow({

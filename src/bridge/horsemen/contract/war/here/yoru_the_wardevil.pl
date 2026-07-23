@@ -17,6 +17,7 @@
 :- use_module(library(lists)).
 :- use_module(library(process)).
 :- use_module(library(readutil)).
+:- use_module('../../../../../asadb_backup.pl').
 
 :- dynamic guardian_script_file/1.
 :- prolog_load_context(file, ScriptFile), assertz(guardian_script_file(ScriptFile)).
@@ -48,6 +49,7 @@ usage :-
     format('Options:~n'),
     format('  --root DIR                  Project root (default: AsaDB root)~n'),
     format('  --backup-dir DIR            Mirror destination (default: ROOT/.asa-guardian)~n'),
+    format('  --backup-artifacts DIR      Verify and mirror immutable AsaDB .asb artifacts~n'),
     format('  --interval SEC              Snapshot interval (default: 90)~n'),
     format('  --include PATTERN           Extra wildcard, repeatable~n'),
     format('  --exclude PATTERN           Excluded wildcard, repeatable~n'),
@@ -62,7 +64,7 @@ usage :-
     format('  --help                      Show this help~n').
 
 default_options(options{
-    root:'', backup_dir:'', heartbeat_file:'', interval:90, audit_every:30,
+    root:'', backup_dir:'', backup_artifacts:'', heartbeat_file:'', interval:90, audit_every:30,
     stall_after:300, restart_stuck_after:0, max_restarts:5,
     max_file_bytes:16777216, include:[], exclude:[], restart:true,
     once:false, help:false
@@ -85,6 +87,7 @@ parse_argv(Command, Options, Options, Command).
 
 valued_option('--root').
 valued_option('--backup-dir').
+valued_option('--backup-artifacts').
 valued_option('--heartbeat-file').
 valued_option('--interval').
 valued_option('--audit-every').
@@ -97,6 +100,7 @@ valued_option('--exclude').
 
 put_option('--root', Value, Options0, Options) :- !, put_dict(root, Options0, Value, Options).
 put_option('--backup-dir', Value, Options0, Options) :- !, put_dict(backup_dir, Options0, Value, Options).
+put_option('--backup-artifacts', Value, Options0, Options) :- !, put_dict(backup_artifacts, Options0, Value, Options).
 put_option('--heartbeat-file', Value, Options0, Options) :- !, put_dict(heartbeat_file, Options0, Value, Options).
 put_option('--include', Value, Options0, Options) :- !,
     append(Options0.include, [Value], Values), put_dict(include, Options0, Values, Options).
@@ -139,12 +143,20 @@ prepare_context(Options0, Command, Context) :-
     ( same_path(Root, Backup) -> throw(error(permission_error(create, backup, Root), _)) ; true ),
     make_directory_path(Backup),
     directory_file_path(Backup, current, Current), make_directory_path(Current),
+    resolve_artifact_root(Options0.backup_artifacts, Root, ArtifactRoot),
+    ( ArtifactRoot == '' -> true
+    ; same_path(ArtifactRoot, Backup) -> throw(error(permission_error(mirror, backup_artifacts, Backup), _))
+    ; path_inside_or_same(ArtifactRoot, Backup) -> throw(error(permission_error(mirror, backup_artifacts, Backup), _))
+    ; path_inside_or_same(Backup, ArtifactRoot) -> throw(error(permission_error(mirror, backup_artifacts, Backup), _))
+    ),
     resolve_path(Options0.heartbeat_file, Root, Heartbeat),
-    put_dict(_{root:Root, backup_dir:Backup, heartbeat_file:Heartbeat}, Options0, Options),
+    put_dict(_{root:Root, backup_dir:Backup, backup_artifacts:ArtifactRoot,
+               heartbeat_file:Heartbeat}, Options0, Options),
     directory_file_path(Backup, 'manifest.json', Manifest),
     directory_file_path(Backup, 'state.json', State),
     directory_file_path(Backup, 'guardian.log', Log),
     Context = context{options:Options, command:Command, root:Root, backup:Backup,
+                      backup_artifacts:ArtifactRoot,
                       current:Current, manifest:Manifest, state:State, log:Log}.
 
 resolve_root('', Root) :- !, default_root(Root).
@@ -152,6 +164,10 @@ resolve_root(Path, Root) :- absolute_file_name(Path, Root, [file_type(directory)
 
 resolve_path('', _Root, '') :- !.
 resolve_path(Path, Root, Absolute) :- absolute_file_name(Path, Absolute, [relative_to(Root)]).
+
+resolve_artifact_root('', _Root, '') :- !.
+resolve_artifact_root(Path, Root, Absolute) :-
+    absolute_file_name(Path, Absolute, [relative_to(Root), file_type(directory)]).
 
 default_root(Root) :-
     guardian_script_file(File), file_directory_name(File, Here),
@@ -209,7 +225,40 @@ snapshot(Context, Snapshot) :-
     log_event(Context, snapshot, Snapshot).
 
 collect_files(Context, Files) :-
-    walk_directory(Context.root, Context, Unsorted), sort(2, @=<, Unsorted, Files).
+    walk_directory(Context.root, Context, ProjectFiles),
+    collect_backup_artifacts(Context, ArtifactFiles),
+    append(ProjectFiles, ArtifactFiles, Unsorted),
+    sort(2, @=<, Unsorted, Files).
+
+collect_backup_artifacts(Context, []) :- Context.backup_artifacts == '', !.
+collect_backup_artifacts(Context, Files) :-
+    walk_backup_artifact_directory(Context.backup_artifacts, Context.backup_artifacts,
+                                   Files).
+
+walk_backup_artifact_directory(Directory, Root, Files) :-
+    directory_files(Directory, Names),
+    walk_backup_artifact_names(Names, Directory, Root, Files).
+
+walk_backup_artifact_names([], _Directory, _Root, []).
+walk_backup_artifact_names([Name|Rest], Directory, Root, Files) :-
+    directory_file_path(Directory, Name, Path),
+    ( memberchk(Name, ['.', '..']) -> Here = []
+    ; exists_directory(Path) -> walk_backup_artifact_directory(Path, Root, Here)
+    ; exists_file(Path), file_name_extension(_, asb, Name),
+      relative_file_name(Path, Root, Relative0), normalize_path(Relative0, Relative),
+      verify_backup_artifact(Path),
+      atom_concat('backup-artifacts/', Relative, MirrorRelative),
+      Here = [file(Path, MirrorRelative)]
+    ; Here = []
+    ),
+    walk_backup_artifact_names(Rest, Directory, Root, Tail), append(Here, Tail, Files).
+
+verify_backup_artifact(Path) :-
+    ( asadb_backup_file(Path) ->
+        asadb_backup_prepare_restore(Path, _Database, Payload, _Manifest),
+        asadb_backup_cleanup(Payload)
+    ; throw(error(integrity_error(guardian_backup_artifact(Path)), _))
+    ).
 
 walk_directory(Directory, Context, Files) :-
     directory_files(Directory, Names), walk_names(Names, Directory, Context, Files).
@@ -243,9 +292,9 @@ snapshot_files([], _Context, _Previous, Entries, Entries, Copied, Copied, Kept, 
 snapshot_files([file(Source, Relative)|Rest], Context, Previous, Entries0, Entries,
                Copied0, Copied, Kept0, Kept, Skipped0, Skipped) :-
     size_file(Source, Size), time_file(Source, MTime),
-    ( Size > Context.options.max_file_bytes ->
+    ( Size > Context.options.max_file_bytes, \+ backup_artifact_relative(Relative) ->
         Entries1 = Entries0, Copied1 = Copied0, Kept1 = Kept0, Skipped1 is Skipped0 + 1
-    ; entry_unchanged(Relative, Size, MTime, Previous, Context) ->
+    ; entry_unchanged(Source, Relative, Size, MTime, Previous, Context) ->
         old_entry(Relative, Previous, Entry), Entries1 = [Entry|Entries0],
         Copied1 = Copied0, Kept1 is Kept0 + 1, Skipped1 = Skipped0
     ; copy_snapshot_file(Source, Relative, Size, MTime, Context, Entry),
@@ -260,9 +309,19 @@ old_entry(Relative, Entries, Entry) :-
 entry_path_equal(Path, Relative) :- atom(Path), !, Path == Relative.
 entry_path_equal(Path, Relative) :- string(Path), atom_string(Relative, Path).
 
-entry_unchanged(Relative, Size, MTime, Previous, Context) :-
+entry_unchanged(Source, Relative, Size, MTime, Previous, Context) :-
     old_entry(Relative, Previous, Entry), Entry.size =:= Size, Entry.mtime =:= MTime,
-    snapshot_path(Context, Relative, Destination), exists_file(Destination).
+    snapshot_path(Context, Relative, Destination), exists_file(Destination),
+    ( backup_artifact_relative(Relative) ->
+        crypto_file_hash(Source, Digest, [algorithm(sha256)]),
+        entry_digest_equal(Entry.sha256, Digest)
+    ; true
+    ).
+
+backup_artifact_relative(Relative) :- atom_concat('backup-artifacts/', _, Relative).
+
+entry_digest_equal(Stored, Digest) :- atom(Stored), !, Stored == Digest.
+entry_digest_equal(Stored, Digest) :- string(Stored), atom_string(Digest, Stored).
 
 copy_snapshot_file(Source, Relative, Size, MTime, Context, Entry) :-
     snapshot_path(Context, Relative, Destination), file_directory_name(Destination, Parent),

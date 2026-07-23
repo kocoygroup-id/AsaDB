@@ -104,6 +104,15 @@ assert.match(app, /sqlLineNumbersContent\.style\.paddingTop/, 'large SQL gutter 
 assert.match(css, /\.table-show-more/, 'table Show-more styling is missing');
 assert.match(webBackend, /asadb_exec_sql_page/, 'backend SQL page executor is missing');
 assert.match(webBackend, /query_page_offset/, 'backend SQL offset validation is missing');
+assert.match(webBackend, /root\('api\/backup'\)/, 'backend must expose the production backup endpoint');
+assert.match(webBackend, /asadb_backup_create\(/, 'backup endpoint must create artifacts from the backend');
+assert.match(webBackend, /asadb_backup_prepare_restore\(/, 'production backup imports must verify before restore');
+assert.match(html, /accept="[^"]*\.asb/, 'import picker must accept verified AsaDB backup artifacts');
+assert.match(html, /AsaDB Backup/, 'export UI must identify the production backup format');
+assert.match(app, /function exportDatabaseFromBackend/, 'modern UI must submit production backups to the backend');
+assert.match(app, /action = '\/api\/backup'/, 'modern UI must use the backend backup endpoint');
+assert.match(legacyApp, /function exportDatabaseFromBackendLegacy/, 'legacy UI must submit production backups to the backend');
+assert.match(legacyApp, /action = '\/api\/backup'/, 'legacy UI must use the backend backup endpoint');
 assert.match(css, /overflow-anchor:\s*none/, 'SQL editor must disable browser scroll anchoring');
 assert.match(css, /overscroll-behavior:\s*contain/, 'SQL editor must contain overscroll');
 assert.match(css, /scrollbar-gutter:\s*stable/, 'SQL editor must reserve stable scrollbar space');

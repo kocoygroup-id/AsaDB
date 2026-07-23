@@ -1,15 +1,15 @@
 # AsaDB
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Release: 1.3.1 Release Candidate](https://img.shields.io/badge/release-1.3.1%20Release%20Candidate-e0a400.svg)](RELEASE_NOTES.md)
+[![Release: 1.4.0 Stable](https://img.shields.io/badge/release-1.4.0%20Stable-16803c.svg)](RELEASE_NOTES.md)
 [![Runtime: SWI-Prolog](https://img.shields.io/badge/runtime-SWI--Prolog-E61B23.svg)](https://www.swi-prolog.org/)
 
 AsaDB is a local SQL database experiment powered by SWI-Prolog. It ships with
 AsAPanel, a small local web workspace for creating databases, running SQL,
 importing/exporting data, and inspecting tables without a cloud server.
 
-Current release: **v1.3.1 Release Candidate**. The publication artifact
-`AsaDB-1.3.1-linux-x86_64.tar.Z` is a complete open-source distribution
+Current release: **v1.4.0 Stable**. The publication artifact
+`AsaDB-1.4.0-linux-x86_64.tar.Z` is a complete open-source distribution
 validated for Linux x86_64. It does not bundle SWI-Prolog; see
 [RELEASE.md](RELEASE.md) and [COMPATIBILITY.md](COMPATIBILITY.md).
 
@@ -31,9 +31,10 @@ welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
 - Asa Process Guardian is an opt-in source-mirror and process-supervision tool;
   it is isolated from SQL execution and the database storage path.
 
-## v1.3.1 Highlights
+## v1.4.0 Stable Highlights
 
-v1.3.1 adds editor guidance and removes a costly no-op execution path:
+v1.4.0 retains the 1.3.1 RC editor and query-stability work, then adds production
+backup integrity and source-wiring verification:
 
 - The SQL editor offers lightweight schema-aware completion for AsaDB keywords,
   supported types and functions, local database/table/view names, declared
@@ -50,10 +51,48 @@ v1.3.1 adds editor guidance and removes a costly no-op execution path:
   recovery records.
 - The release set now includes a checksummed Windows source-launcher ZIP with
   the same source revision and batch launchers for an installed SWI-Prolog.
+- **Production export is now a real backend backup.** AsAPanel creates an
+  `.asb` artifact by scanning the database record store on the server; it does
+  not reconstruct a database from browser cache or the visible result window.
+  The artifact contains schema, rows, indexes, and catalog objects, and binds
+  its manifest and SQL payload with SHA-256 integrity checks.
+- **Restore is verified before commit.** AsaDB rejects malformed or altered
+  production backups, restores into a transaction, re-scans table and row
+  totals before commit, and refuses backup creation or restore while another
+  database transaction is active.
 
-## 1.3.1 Package Contents
+## Production backups
 
-Every 1.3.1 source package includes the SQL engine, page storage, B+Tree and
+Use **Export → AsaDB Backup** while the local backend is online. The browser
+downloads a complete `.asb` file directly from the backend; it is suitable for
+moving or retaining a database backup, unlike a partial browser-side export.
+Importing an `.asb` verifies its format, payload and integrity manifest before
+the restore transaction can commit. Keep the resulting file with the same care
+as the database because it contains the database's logical contents.
+
+For a consistent snapshot, the backend serializes the database while it scans
+the record store. On a busy production panel, schedule large backups so normal
+write traffic can wait for the snapshot, and leave sufficient local temporary
+disk space for the generated artifact.
+
+## Why 1.4.0 Stable improves on 1.3.1 RC
+
+- Database Export is now a server-produced AsaDB Backup (`.asb`), built by
+  scanning backend record storage rather than browser cache. This closes the
+  risk that a large database backup contains only schema or loaded rows.
+- Restore validates payload and manifest integrity, restores in a transaction,
+  verifies physical table/row totals before commit, and stages catalog objects
+  atomically with the table data.
+- Backup behavior has direct multi-page, HTTP, tamper, transaction, Unicode,
+  index, and schema-option regressions. The source audit also connected the
+  MySQL compatibility manifest to parser fallback diagnostics, replacing an
+  inactive status table with a tested execution path.
+- Asa Process Guardian can verify and mirror retained production backup
+  artifacts, while remaining outside SQL execution.
+
+## 1.4.0 Stable Package Contents
+
+Every 1.4.0 source package includes the SQL engine, page storage, B+Tree and
 metadata layers, Reservoir bridge, AsAPanel modern and compatibility bundles,
 ID/JP/EN assets, tests, build scripts, Linux/POSIX launchers, Windows batch
 launchers, operational guardian, and GPL notices. The Linux and main-source
@@ -174,9 +213,9 @@ with its matching `.asa.store` directory when moving a database.
 Verify and extract the publication files:
 
 ```sh
-sha256sum -c AsaDB-1.3.1-linux-x86_64.tar.Z.sha256
-tar -xzf AsaDB-1.3.1-linux-x86_64.tar.Z
-cd AsaDB-1.3.1-linux-x86_64
+sha256sum -c AsaDB-1.4.0-linux-x86_64.tar.Z.sha256
+tar -xzf AsaDB-1.4.0-linux-x86_64.tar.Z
+cd AsaDB-1.4.0-linux-x86_64
 ./scripts/check_linux_runtime.sh
 ./scripts/run_panel.sh data.asa 8088
 ```
