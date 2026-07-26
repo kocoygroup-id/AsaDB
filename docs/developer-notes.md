@@ -2,9 +2,9 @@
 
 ## Menambah statement baru
 
-1. Tambahkan keyword jika belum ada di `keyword/1` dalam `src/asadb_core.pl`.
-2. Tambahkan rule `parse_statement/2` yang menghasilkan AST baru.
-3. Tambahkan rule `execute_statement/2` untuk AST tersebut.
+1. Tambahkan keyword jika belum ada di `keyword/1` dalam `src/asadb_sql_frontend.pl`.
+2. Tambahkan rule `parse_statement/2` di `src/asadb_sql_frontend.pl` yang menghasilkan AST baru.
+3. Tambahkan rule `execute_statement/2` di `src/asadb_core.pl` untuk AST tersebut.
 4. Tambahkan test SQL di `tests/smoke.sql` atau test baru.
 5. Update `src/asadb_mysql55_compat.pl` dan `docs/mysql55-compatibility.md`.
 
@@ -24,14 +24,26 @@ WHERE col IS NULL
 WHERE col IS NOT NULL
 WHERE a = 1 AND b = 2
 WHERE a = 1 OR b = 2
+WHERE a = 1 XOR b = 2
 WHERE NOT a = 1
+WHERE enabled IS TRUE
+WHERE enabled IS NOT FALSE
+WHERE enabled IS UNKNOWN
 WHERE id IN (1, 2, 3)
 WHERE name LIKE 'Air%'
 WHERE qty BETWEEN 2 AND 10
+WHERE price / 2 >= 10
 UPDATE t SET qty = qty + 1
 ```
 
 Parser ekspresi masih hand-written precedence parser. Kalau grammar makin melebar ke function call kompleks, subquery, dan aggregate expression, langkah berikutnya adalah memindahkan `parse_expr/2` ke DCG/Pratt parser yang lebih eksplisit.
+
+Filter ground yang aman dapat dispesialisasi oleh
+`src/asadb_prolog_jit.pl`. Saat menambah bentuk AST baru, tambahkan rule
+whitelist beserta regression kesetaraan interpreter/specialization. Jangan
+pernah mengubah SQL mentah menjadi goal Prolog: bentuk yang belum di-whitelist
+harus tetap memakai evaluator biasa. Cache SQL dan filter masing-masing wajib
+tetap bounded.
 
 ## Menambah JOIN
 

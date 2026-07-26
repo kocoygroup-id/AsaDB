@@ -14,6 +14,7 @@ const legacyApp = fs.readFileSync(path.join(root, 'web', 'assets', 'app.legacy.j
 const appLoader = fs.readFileSync(path.join(root, 'web', 'assets', 'app-loader.js'), 'utf8');
 const css = fs.readFileSync(path.join(root, 'web', 'assets', 'style.css'), 'utf8');
 const webBackend = fs.readFileSync(path.join(root, 'src', 'asadb_web.pl'), 'utf8');
+const interchangeBackend = fs.readFileSync(path.join(root, 'src', 'asadb_interchange.pl'), 'utf8');
 const realtimeContract = fs.readFileSync(path.join(root, 'scripts', 'realtime_release_contract.txt'), 'utf8');
 const japaneseFontWoff2 = path.join(root, 'web', 'assets', 'fonts', 'noto-sans-jp-japanese-400-normal.woff2');
 const japaneseFontWoff = path.join(root, 'web', 'assets', 'fonts', 'noto-sans-jp-japanese-400-normal.woff');
@@ -105,14 +106,23 @@ assert.match(css, /\.table-show-more/, 'table Show-more styling is missing');
 assert.match(webBackend, /asadb_exec_sql_page/, 'backend SQL page executor is missing');
 assert.match(webBackend, /query_page_offset/, 'backend SQL offset validation is missing');
 assert.match(webBackend, /root\('api\/backup'\)/, 'backend must expose the production backup endpoint');
+assert.match(webBackend, /root\('api\/export'\)/, 'backend must expose the portable export endpoint');
+assert.match(webBackend, /asadb_interchange_export\(/, 'portable export must execute in Prolog backend storage');
+assert.match(interchangeBackend, /interchange_storage_row\(paged_rows/, 'interchange export must scan paged backend rows');
 assert.match(webBackend, /asadb_backup_create\(/, 'backup endpoint must create artifacts from the backend');
 assert.match(webBackend, /asadb_backup_prepare_restore\(/, 'production backup imports must verify before restore');
 assert.match(html, /accept="[^"]*\.asb/, 'import picker must accept verified AsaDB backup artifacts');
 assert.match(html, /AsaDB Backup/, 'export UI must identify the production backup format');
+for (const format of ['mysql', 'postgresql', 'csv', 'xlsx']) {
+  assert.match(html, new RegExp(`name="exportFormat" value="${format}"`),
+    `export UI must expose ${format}`);
+}
 assert.match(app, /function exportDatabaseFromBackend/, 'modern UI must submit production backups to the backend');
-assert.match(app, /action = '\/api\/backup'/, 'modern UI must use the backend backup endpoint');
+assert.match(app, /form\.action = format === 'asadb' \? '\/api\/backup' : '\/api\/export'/,
+  'modern UI must separate backup and portable export endpoints');
 assert.match(legacyApp, /function exportDatabaseFromBackendLegacy/, 'legacy UI must submit production backups to the backend');
-assert.match(legacyApp, /action = '\/api\/backup'/, 'legacy UI must use the backend backup endpoint');
+assert.match(legacyApp, /form\.action = format === 'asadb' \? '\/api\/backup' : '\/api\/export'/,
+  'legacy UI must separate backup and portable export endpoints');
 assert.match(css, /overflow-anchor:\s*none/, 'SQL editor must disable browser scroll anchoring');
 assert.match(css, /overscroll-behavior:\s*contain/, 'SQL editor must contain overscroll');
 assert.match(css, /scrollbar-gutter:\s*stable/, 'SQL editor must reserve stable scrollbar space');

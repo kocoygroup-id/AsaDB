@@ -100,13 +100,21 @@ All endpoints require the existing localhost panel token.
 
 | Method | Endpoint | Purpose |
 |---|---|---|
-| POST | `/api/reservoir/jobs` | Submit raw SQL and receive a job ID |
+| POST | `/api/reservoir/jobs` | Submit raw SQL or a format-labelled interchange stream and receive a job ID |
 | GET | `/api/reservoir/jobs` | Discover active jobs after a panel reload |
 | POST | `/api/reservoir/file` | Submit an allowed server-side SQL file |
 | GET | `/api/reservoir/job?id=...` | Poll status and progress |
 | GET | `/api/reservoir/result?id=...` | Read a bounded result page |
 | POST | `/api/reservoir/cancel?id=...` | Request cancellation |
 | GET | `/api/reservoir/stats` | Inspect queue and spool pressure |
+
+AsAPanel labels MySQL, PostgreSQL, CSV, and XLSX streams with bounded import
+metadata (format, original name, target table, and replace/append mode).
+Reservoir persists that metadata with the job and includes it in idempotency
+matching, so retrying the same bytes for a different target cannot reuse the
+wrong completed job. The worker invokes the Prolog interchange layer before
+the normal transactional SQL importer. See
+[`interchange.md`](interchange.md).
 
 Interactive read results use the same bounded paging contract. `/api/query`
 accepts an optional non-negative `offset`; the panel starts with the configured

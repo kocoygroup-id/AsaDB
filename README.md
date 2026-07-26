@@ -60,6 +60,10 @@ backup integrity and source-wiring verification:
   production backups, restores into a transaction, re-scans table and row
   totals before commit, and refuses backup creation or restore while another
   database transaction is active.
+- **Portable exchange stays backend-owned.** MySQL SQL, PostgreSQL SQL, CSV,
+  and XLSX export scan stored rows in Prolog instead of browser cache. Uploaded
+  interchange enters Reservoir and the normal transactional importer; CSV and
+  XLSX use bounded sampling and row streaming.
 
 ## Production backups
 
@@ -74,6 +78,11 @@ For a consistent snapshot, the backend serializes the database while it scans
 the record store. On a busy production panel, schedule large backups so normal
 write traffic can wait for the snapshot, and leave sufficient local temporary
 disk space for the generated artifact.
+
+For selected-table exchange, choose MySQL, PostgreSQL, CSV, or XLSX in the
+same Export page. These are portable interchange artifacts rather than
+authenticated backups. See [docs/interchange.md](docs/interchange.md) for
+format behavior, input limits, and regression commands.
 
 ## Why 1.4.0 Stable improves on 1.3.1 RC
 
@@ -259,6 +268,7 @@ Tests:
 swipl -q -s tests\run_tests.pl
 swipl -q -s tests\reservoir_tests.pl
 swipl -q -s tests\join_15000_regression.pl
+swipl -q -s tests\interchange_regression.pl
 node tests\ui_regression.js
 ```
 
@@ -279,7 +289,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_windows_exe.ps
 ```text
 src/
   bridge/reservoir.pl  Durable bounded panel-to-engine job bridge
-  asadb_core.pl      SQL parser, planner, executor, and catalog
+  asadb_core.pl      SQL executor, planner, catalog, and storage orchestration
+  asadb_sql_frontend.pl  SQL lexer, parser, AST construction, and diagnostics
+  asadb_prolog_jit.pl  Bounded SQL-plan cache and safe Prolog VM filter specialization
+  asadb_interchange.pl  Backend MySQL/PostgreSQL/CSV/XLSX import and export
   asadb_page_manager.pl  4 KB slotted-page format
   asadb_pager.pl     Disk page I/O
   asadb_buffer_pool.pl  Bounded page cache
@@ -298,6 +311,10 @@ tests/
   run_tests.pl
   reservoir_tests.pl
   join_15000_regression.pl
+  interchange_regression.pl
+  interchange_http_regression.sh
+  interchange_stress.pl
+  prolog_module_audit.sh
   ui_regression.js
   launcher_regression.sh
   release_package_regression.sh

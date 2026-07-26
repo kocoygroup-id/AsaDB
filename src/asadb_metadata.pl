@@ -24,12 +24,38 @@ asadb_metadata_open_locked(BaseFile) :-
     retractall(metadata_state(_)),
     assertz(metadata_file(File)),
     recover_metadata_file(File),
-    ( catch(read_metadata(File, State), _, fail), valid_metadata(State) ->
-        assertz(metadata_state(State))
+    ( catch(read_metadata(File, State0), _, fail), valid_metadata(State0) ->
+        metadata_upgrade_runtime_fields(State0, State, Changed),
+        assertz(metadata_state(State)),
+        ( Changed == true -> write_metadata_atomic(File, State) ; true )
     ; new_metadata(State),
       assertz(metadata_state(State)),
       write_metadata_atomic(File, State)
     ).
+
+% The sidecar is durable database metadata, so preserve its identity and
+% checkpoint history.  Runtime format/version fields are owned by the running
+% engine and must be refreshed at open time; otherwise a database last touched
+% by an earlier AsaDB release keeps reporting that old engine version until its
+% next write checkpoint.
+metadata_upgrade_runtime_fields(State0, State, Changed) :-
+    metadata_engine_version(Version),
+    metadata_storage_format(StorageFormat),
+    get_dict(engine_version, State0, ExistingVersion),
+    get_dict(storage_format, State0, ExistingStorageFormat),
+    ExistingVersion == Version,
+    ExistingStorageFormat =:= StorageFormat, !,
+    State = State0,
+    Changed = false.
+metadata_upgrade_runtime_fields(State0, State, true) :-
+    metadata_engine_version(Version),
+    metadata_storage_format(StorageFormat),
+    utc_timestamp(Now),
+    State = State0.put(_{
+        engine_version:Version,
+        storage_format:StorageFormat,
+        updated_at:Now
+    }).
 
 asadb_metadata_checkpoint(Summary) :-
     with_mutex(asadb_metadata, asadb_metadata_checkpoint_locked(Summary)).

@@ -29,6 +29,9 @@ portable executable is not being relabelled or claimed by this release.
   metadata, SQL payload, and row/table totals with SHA-256 integrity fields.
   Restore rejects altered or incomplete artifacts, validates rebuilt totals,
   and stages catalog objects in the same transaction.
+- **Backend portable interchange.** MySQL SQL, PostgreSQL SQL, CSV, and XLSX
+  export scan verified backend records. Uploaded interchange is normalized in
+  Prolog and committed through Reservoir's bounded transactional import path.
 - **Consistent backup execution.** Backup create and restore reject an
   already-active database transaction and use the shared backend execution
   lock so unrelated writes cannot mix into the operation.
@@ -56,6 +59,11 @@ and Windows source-package gates passed.
 The 100,000-row storage stress suite completed import, indexed lookup,
 order/limit, update, delete, bounded-result, cleanup, and restart assertions.
 Its measured import stage was 27,309 ms on the audit host.
+
+The portable interchange audit round-tripped all four formats and exercised
+authenticated HTTP export plus Reservoir CSV/XLSX import. A separate
+20,000-row run completed four backend exports and CSV/XLSX streaming
+preparation in about 9.7 seconds on the same host.
 
 Node.js was not installed on that host, so the Node-only browser regression is
 not claimed as executed. The checked-in modern and legacy browser bundles

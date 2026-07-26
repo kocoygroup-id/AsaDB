@@ -7,8 +7,9 @@ from disk-backed user rows.
 ## Data Flow
 
 ```text
-SQL text / uploaded SQL stream
+SQL text / SQL, CSV, or XLSX upload
   -> Reservoir admission, durable spool, and single-writer queue
+  -> bounded Prolog interchange preparation when required
   -> lexer and parser
   -> Prolog AST
   -> planner and executor
@@ -33,9 +34,24 @@ B+Tree, buffer pool, pager, and recovery path. See
 
 ### SQL parser and executor
 
-`src/asadb_core.pl` owns tokenization, parsing, AST execution, catalog state,
-simple planner decisions, permissions, transactions at SQL level, and legacy
-compatibility paths.
+`src/asadb_sql_frontend.pl` owns tokenization, parsing, AST construction, and
+syntax diagnostics. It is intentionally side-effect-free and can be exercised
+without opening a database file.
+
+`src/asadb_core.pl` owns AST execution, catalog state, planner decisions,
+permissions, transactions at SQL level, and legacy compatibility paths. This
+separation keeps the stateful engine independent from SQL text handling and
+makes parser changes safer to review.
+
+`src/asadb_prolog_jit.pl` adds a bounded specialization layer. Repeated SQL
+texts up to 32 KiB reuse immutable parsed ASTs, while supported ground filter
+ASTs become dynamically asserted clauses keyed by an integer plan ID.
+SWI-Prolog compiles those clauses to its VM instruction form and may add
+just-in-time clause indexes (JITI) as call patterns become hot. The compiler
+accepts only the engine's expression AST whitelist; SQL text is never executed
+as Prolog source. Both caches are capped at 128 entries and fall back to the
+ordinary interpreter for unsupported expressions. This is VM/JITI
+specialization, not a claim of native machine-code generation.
 
 ### Import manager
 
@@ -43,6 +59,13 @@ compatibility paths.
 reads 256 KB blocks, recognizes statement boundaries across blocks, queues a
 bounded number of statements, executes each batch transactionally, and reports
 progress. It never asks the browser to materialize a selected large SQL file.
+
+`src/asadb_interchange.pl` owns portable backend exchange. Export walks
+verified backend row storage under the shared execution lock. Import converts
+MySQL/PostgreSQL dump streams, CSV rows, and XLSX worksheet events into bounded
+SQL batches before they enter the normal transactional importer. XLSX archive
+paths and declared sizes are validated before worksheet parsing. See
+[`interchange.md`](interchange.md).
 
 ### Record manager
 
@@ -57,9 +80,14 @@ the root, height, key count, and leaf count. Leaf pages carry previous/next
 sibling pointers. Equality descends from the root; range and ordered scans walk
 the relevant leaf chain.
 
-The bulk builder uses external sorted runs of 2,048 entries and merges one head
-from each run while writing final leaf pages. This prevents a full index entry
-list from living in the Prolog heap.
+The bulk builder is adaptive: indexes up to 65,536 entries use an in-memory
+sort, while larger indexes use bounded external runs of 32,768 entries and
+merge one head from each run. Leaf-page packing tracks occupied bytes
+incrementally instead of repeatedly measuring the growing page.
+
+Unique point probes use a selective one-column scan immediately after bulk
+load, then materialize a durable index after repeated access. This avoids a
+large first-query index-build pause while preserving fast recurring workloads.
 
 ### Buffer pool
 

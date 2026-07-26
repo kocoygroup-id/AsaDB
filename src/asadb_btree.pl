@@ -213,23 +213,34 @@ asadb_btree_file_build(File, RawEntries, Stats) :-
     replace_index_file(File, Temp),
     Stats = btree_file_stats{keys:KeyCount,height:Height,leaf_pages:LeafCount,root_page:RootPage}.
 
-/* External bulk builder. Only one bounded run and one record per run are kept
-   in memory while the final leaf chain is written. */
+/* Adaptive bulk builder. Small and medium indexes stay in memory, avoiding
+   temporary term files and their UTF-8 parse/write cost. Large indexes retain
+   the bounded external merge path, seeded with one larger sorted run so the
+   k-way merge does not degrade into hundreds of open run streams. */
 asadb_btree_file_build_stream(File, Pair, Goal, Stats) :-
     btree_run_directory(File, RunDir),
     setup_call_cleanup(
         prepare_run_directory(RunDir),
         setup_call_cleanup(
             engine_create(Pair, Goal, Engine),
-            ( write_sorted_runs(Engine, RunDir, 0, RunFiles),
-              build_file_from_runs(File, RunFiles, Stats)
-            ),
+            build_file_adaptive(Engine, File, RunDir, Stats),
             catch(engine_destroy(Engine), _, true)
         ),
         delete_directory_and_contents(RunDir)
     ).
 
-btree_run_chunk_size(2048).
+btree_in_memory_entry_limit(65536).
+btree_run_chunk_size(32768).
+
+build_file_adaptive(Engine, File, RunDir, Stats) :-
+    btree_in_memory_entry_limit(Limit),
+    collect_engine_pairs(Engine, Limit, InitialPairs, Exhausted),
+    ( Exhausted == true ->
+        asadb_btree_file_build(File, InitialPairs, Stats)
+    ; write_sorted_run(InitialPairs, RunDir, 0, FirstRun),
+      write_sorted_runs(Engine, RunDir, 1, RestRuns),
+      build_file_from_runs(File, [FirstRun|RestRuns], Stats)
+    ).
 
 btree_run_directory(File, RunDir) :- atom_concat(File, '.runs', RunDir).
 
@@ -242,17 +253,20 @@ write_sorted_runs(Engine, RunDir, RunNo, RunFiles) :-
     collect_engine_pairs(Engine, Size, RawPairs, Exhausted),
     ( RawPairs == [] ->
         RunFiles = []
-    ; maplist(normalize_stream_pair, RawPairs, Pairs),
-      keysort(Pairs, Sorted),
-      format(atom(Name), 'run-~|~`0t~d~6+.terms', [RunNo]),
-      directory_file_path(RunDir, Name, RunFile),
-      write_run_file(RunFile, Sorted),
+    ; write_sorted_run(RawPairs, RunDir, RunNo, RunFile),
       RunFiles = [RunFile|Rest],
       ( Exhausted == true -> Rest = []
       ; Next is RunNo + 1,
         write_sorted_runs(Engine, RunDir, Next, Rest)
       )
     ).
+
+write_sorted_run(RawPairs, RunDir, RunNo, RunFile) :-
+    maplist(normalize_stream_pair, RawPairs, Pairs),
+    keysort(Pairs, Sorted),
+    format(atom(Name), 'run-~|~`0t~d~6+.terms', [RunNo]),
+    directory_file_path(RunDir, Name, RunFile),
+    write_run_file(RunFile, Sorted).
 
 collect_engine_pairs(_, 0, [], false) :- !.
 collect_engine_pairs(Engine, Count, Pairs, Exhausted) :-
@@ -427,28 +441,25 @@ term_bounds(child(First, Last, _), First, Last).
 
 pack_page_records([], []) :- !.
 pack_page_records(Records, [Chunk|Chunks]) :-
-    take_page_records(Records, [], Chunk, Rest),
+    asadb_pager_page_size(PageSize),
+    take_page_records_linear(Records, PageSize, 32, [], Chunk, Rest),
     Chunk \== [],
     pack_page_records(Rest, Chunks).
 
-take_page_records([], Acc, Chunk, []) :- !, reverse(Acc, Chunk).
-take_page_records([Record|Records], Acc, Chunk, Rest) :-
-    reverse([Record|Acc], Candidate),
-    page_records_fit(Candidate), !,
-    take_page_records(Records, [Record|Acc], Chunk, Rest).
-take_page_records(Rest, Acc, Chunk, Rest) :- reverse(Acc, Chunk).
-
-page_records_fit(Records) :-
-    length(Records, Count),
-    records_bytes_length(Records, Payload),
-    asadb_pager_page_size(PageSize),
-    32 + Count * 4 + Payload =< PageSize.
-
-records_bytes_length([], 0).
-records_bytes_length([Bytes|Records], Total) :-
-    length(Bytes, Length),
-    records_bytes_length(Records, Rest),
-    Total is Length + Rest.
+% Track page occupancy incrementally. The previous implementation reversed the
+% growing candidate and recomputed every record length for each appended key,
+% making page packing quadratic inside every leaf page.
+take_page_records_linear([], _, _, Acc, Chunk, []) :- !,
+    reverse(Acc, Chunk).
+take_page_records_linear([Record|Records], PageSize, Used0, Acc,
+                         Chunk, Rest) :-
+    length(Record, Length),
+    Used is Used0 + 4 + Length,
+    Used =< PageSize, !,
+    take_page_records_linear(Records, PageSize, Used, [Record|Acc],
+                             Chunk, Rest).
+take_page_records_linear(Rest, _, _, Acc, Chunk, Rest) :-
+    reverse(Acc, Chunk).
 
 asadb_btree_file_candidate(File, '=', RawKey, Rid) :- !,
     canonical_key(RawKey, Key),

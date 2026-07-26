@@ -44,7 +44,7 @@ AsaDB menargetkan sintaks MySQL 5.5 sebagai dialek SQL utama. Implementasi saat 
 | REPLACE | Planned |
 | LOAD DATA INFILE | Planned |
 | UNION | Implemented basic UNION / UNION ALL |
-| JOIN | Implemented subset: INNER, LEFT, RIGHT |
+| JOIN | Implemented subset: INNER, LEFT, RIGHT, CROSS, comma join, and USING |
 | GROUP BY | Implemented subset |
 | HAVING | Planned |
 | Aggregate functions | Implemented subset: COUNT, SUM, AVG, MIN, MAX |
@@ -80,8 +80,8 @@ AsaDB v1 menyimpan value sebagai term Prolog. Type SQL disimpan sebagai metadata
 
 ## Production foundation yang sudah aktif
 
-- Expression evaluator untuk `AND`, `OR`, `NOT`, `IN`, `LIKE`, `BETWEEN`, comparison, arithmetic sederhana, `CASE`, subquery basic, dan fungsi `LOWER`, `UPPER`, `LENGTH`, `CONCAT`, `SUBSTRING`, `TRIM`, `REPLACE`, `COALESCE`.
-- SELECT multi-table basic via `INNER JOIN`, `LEFT JOIN`, `RIGHT JOIN`, plus `GROUP BY` dan aggregate `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`.
+- Expression evaluator untuk `AND`, `OR`, `XOR`, `NOT`, literal `TRUE`/`FALSE`/`UNKNOWN`, predicate `IS [NOT] TRUE/FALSE/UNKNOWN`, `IN`, `LIKE`, `BETWEEN`, comparison, arithmetic sederhana, `CASE`, subquery basic, dan fungsi `LOWER`, `UPPER`, `LENGTH`, `CONCAT`, `SUBSTRING`, `TRIM`, `REPLACE`, `COALESCE`.
+- SELECT multi-table basic via `INNER JOIN`, `LEFT JOIN`, `RIGHT JOIN`, `CROSS JOIN`, comma join, dan `JOIN ... USING (...)`, plus `GROUP BY` dan aggregate `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`.
 - Basic `UNION` / `UNION ALL` dan view sederhana berbasis SELECT.
 - Metadata index via `CREATE INDEX`, `DROP INDEX`, `SHOW INDEX`; executor memakai equality predicate yang cocok sebagai candidate filter awal.
 - Snapshot transaction untuk `START TRANSACTION`, `COMMIT`, `ROLLBACK`, plus journal `.asa.journal`.

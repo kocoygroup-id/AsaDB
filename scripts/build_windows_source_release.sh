@@ -18,9 +18,9 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-if [ ! -s "$SOURCE_ARCHIVE" ]; then
-  ASADB_RELEASE_PLATFORM=source "$ROOT/scripts/build_source_release.sh"
-fi
+# Always stage the current source tree. Reusing an older source archive can
+# silently omit a newly added runtime module from the Windows ZIP.
+ASADB_RELEASE_PLATFORM=source "$ROOT/scripts/build_source_release.sh"
 
 tar -xzf "$SOURCE_ARCHIVE" -C "$STAGE"
 mv "$STAGE/$SOURCE_NAME" "$STAGE/$WINDOWS_NAME"

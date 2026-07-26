@@ -24,4 +24,9 @@ substitute for the corresponding source.
 
 The corresponding source includes `src/asadb_backup.pl`, the backend
 production-backup module used by the `.asb` export/restore route, together
-with pager and HTTP regression coverage.
+with pager and HTTP regression coverage. It also includes
+`src/asadb_sql_frontend.pl`, `src/asadb_prolog_jit.pl`, and
+`src/asadb_interchange.pl`. The specialization module provides the bounded,
+AST-whitelisted SWI-Prolog VM/JITI path used by the core executor. The
+interchange module provides backend-scanned MySQL, PostgreSQL, CSV, and XLSX
+exchange, with direct Prolog and authenticated HTTP/Reservoir regressions.

@@ -2,6 +2,7 @@
 % SPDX-License-Identifier: GPL-3.0-only
 /* Build helper. Usage: swipl -q -s src/asadb_release.pl */
 :- use_module('asadb_core.pl').
+:- ensure_loaded('asadb.pl').
 :- initialization(build, main).
 
 build :-
@@ -9,5 +10,4 @@ build :-
 
 asadb_cli_entry :-
     current_prolog_flag(argv, Argv),
-    consult('src/asadb.pl'),
     run_argv(Argv).

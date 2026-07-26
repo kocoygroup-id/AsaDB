@@ -48,8 +48,12 @@ scan_open_stream_page(Stream, File, LastPage, PageNo, Bytes) :-
     ; asadb_pager_page_size(PageSize),
       Offset is PageNo * PageSize,
       seek(Stream, Offset, bof, _),
-      read_page_bytes(Stream, PageSize, Bytes),
-      asadb_buffer_pool_put(File, PageNo, Bytes, clean)
+      % A sequential scan visits a page once.  Caching every cold page here
+      % needlessly converts it to a dynamic buffer-pool term and repeatedly
+      % evicts a tiny cache; that dominated large unindexed ORDER BY scans.
+      % Existing cached/dirty pages still win above, preserving read-your-own-
+      % write behaviour during a transaction.
+      read_page_bytes(Stream, PageSize, Bytes)
     ).
 
 asadb_pager_write_page(File, PageNo, Bytes0) :-
@@ -194,12 +198,12 @@ take_at_most(N, [Code|Codes], [Code|Taken], Rest) :-
     N1 is N - 1,
     take_at_most(N1, Codes, Taken, Rest).
 
+% Page scans are the hot path for an unindexed WHERE ... ORDER BY query.  A
+% recursive get_byte/2 loop crosses the Prolog/C boundary once per byte and
+% turns a 70 MB sequential scan into a multi-minute operation.  Binary
+% read_string/3 keeps the same 0..255 byte representation while reading the
+% complete page in one stream operation.
 read_page_bytes(_, 0, []) :- !.
 read_page_bytes(Stream, N, Bytes) :-
-    get_byte(Stream, Byte),
-    ( Byte == -1
-    -> Bytes = []
-    ;  N1 is N - 1,
-       Bytes = [Byte|Rest],
-       read_page_bytes(Stream, N1, Rest)
-    ).
+    read_string(Stream, N, Text),
+    string_codes(Text, Bytes).

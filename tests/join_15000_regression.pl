@@ -42,6 +42,8 @@ main :-
          table(['No','Depth'], [[1,1001],[2,1002],[3,1003]])]),
     expect_sql('SELECT COUNT(*) AS total FROM field m INNER JOIN zone z ON m.No = z.No;',
                table([total], [[15000]])),
+    expect_sql('SELECT No, COUNT(*) AS n FROM field GROUP BY No ORDER BY No LIMIT 3;',
+               table(['No',n], [[1,1],[2,1],[3,1]])),
     asadb_storage_stats(Stats),
     ( Stats.planner.indexed_joins >= 2,
       Stats.planner.nested_loop_joins =:= 0 -> true

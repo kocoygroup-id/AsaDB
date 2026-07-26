@@ -6,7 +6,9 @@
     reservoir_init/2,
     reservoir_shutdown/0,
     reservoir_submit_stream/7,
+    reservoir_submit_stream/8,
     reservoir_submit_file/7,
+    reservoir_submit_file/8,
     reservoir_job_snapshots/1,
     reservoir_job_snapshot/2,
     reservoir_job_result/2,
@@ -65,17 +67,29 @@ reservoir_shutdown :-
     retractall(reservoir_root(_)).
 
 reservoir_submit_file(File, Label, IdempotencyKey, StopOnError, JobId, Admission, Size) :-
+    reservoir_submit_file(File, Label, IdempotencyKey, StopOnError,
+                          JobId, Admission, Size, _{}).
+
+reservoir_submit_file(File, Label, IdempotencyKey, StopOnError,
+                      JobId, Admission, Size, Metadata) :-
     size_file(File, Size),
     setup_call_cleanup(
         open(File, read, In, [type(binary)]),
-        reservoir_submit_stream(In, Label, Size, IdempotencyKey, StopOnError, JobId, Admission),
+        reservoir_submit_stream(In, Label, Size, IdempotencyKey, StopOnError,
+                                JobId, Admission, Metadata),
         close(In)
     ).
 
 reservoir_submit_stream(In, Label0, SizeHint, IdempotencyKey0, StopOnError0, JobId, Admission) :-
+    reservoir_submit_stream(In, Label0, SizeHint, IdempotencyKey0,
+                            StopOnError0, JobId, Admission, _{}).
+
+reservoir_submit_stream(In, Label0, SizeHint, IdempotencyKey0, StopOnError0,
+                        JobId, Admission, Metadata0) :-
     reservoir_normalize_label(Label0, Label),
     reservoir_normalize_idempotency_key(IdempotencyKey0, IdempotencyKey),
     reservoir_bool(StopOnError0, StopOnError),
+    reservoir_metadata(Metadata0, Metadata),
     reservoir_size_hint(SizeHint, ExpectedSize),
     uuid(CandidateId),
     get_time(Now),
@@ -97,7 +111,8 @@ reservoir_submit_stream(In, Label0, SizeHint, IdempotencyKey0, StopOnError0, Job
         message:'Receiving a bounded input stream.',
         result_available:false,
         delivered:false,
-        recovered:false
+        recovered:false,
+        metadata:Metadata
     },
     reservoir_admit_and_store(Job0, ExpectedSize),
     reservoir_spool_path(CandidateId, SpoolPath),
@@ -231,10 +246,14 @@ reservoir_finish_submission(JobId, IdempotencyKey, Fingerprint, ActualSize,
 
 reservoir_duplicate_locked(_, '', _, _) :- !, fail.
 reservoir_duplicate_locked(JobId, Key, Fingerprint, ExistingId) :-
+    reservoir_job(JobId, Candidate),
+    reservoir_job_metadata(Candidate, CandidateMetadata),
     reservoir_job(ExistingId, Existing),
     ExistingId \== JobId,
     Existing.idempotency_key == Key,
     Existing.fingerprint == Fingerprint,
+    reservoir_job_metadata(Existing, ExistingMetadata),
+    ExistingMetadata =@= CandidateMetadata,
     \+ memberchk(Existing.status, [failed,cancelled,interrupted]),
     !.
 
@@ -506,6 +525,7 @@ reservoir_snapshot_dict(Job, Snapshot) :-
     karyawan_job_health(Job.status, Job.cancel_requested,
                         Job.processed_bytes, Job.size_bytes,
                         Job.statements, BackendAdvice),
+    reservoir_job_metadata(Job, Metadata),
     Snapshot = reservoir_job{
         id:Job.id,
         label:Job.label,
@@ -523,6 +543,7 @@ reservoir_snapshot_dict(Job, Snapshot) :-
         result_available:Job.result_available,
         delivered:Job.delivered,
         recovered:Job.recovered,
+        metadata:Metadata,
         done:Done,
         message:Job.message,
         advisor:karyawan{
@@ -531,6 +552,12 @@ reservoir_snapshot_dict(Job, Snapshot) :-
             ingress:IngressAdvice
         }
     }.
+
+reservoir_job_metadata(Job, Metadata) :-
+    ( get_dict(metadata, Job, Found), is_dict(Found) ->
+        Metadata = Found
+    ; Metadata = _{}
+    ).
 
 reservoir_job_snapshots(Snapshots) :-
     catch(reservoir_cleanup, _, true),
@@ -927,6 +954,29 @@ reservoir_normalize_label(Value, Label) :-
     atom_length(Atom, Length),
     ( Length =< 240 -> Label = Atom
     ; sub_atom(Atom, 0, 240, _, Label)
+    ).
+
+reservoir_metadata(Metadata0, Metadata) :-
+    ( is_dict(Metadata0) ->
+        reservoir_metadata_value(Metadata0, kind, '', Kind),
+        reservoir_metadata_value(Metadata0, format, '', Format),
+        reservoir_metadata_value(Metadata0, source_name, '', SourceName),
+        reservoir_metadata_value(Metadata0, target_table, '', TargetTable),
+        reservoir_metadata_value(Metadata0, mode, '', Mode),
+        Metadata = _{
+            kind:Kind,
+            format:Format,
+            source_name:SourceName,
+            target_table:TargetTable,
+            mode:Mode
+        }
+    ; Metadata = _{}
+    ).
+
+reservoir_metadata_value(Dict, Key, Default, Value) :-
+    ( get_dict(Key, Dict, Raw) ->
+        reservoir_normalize_label(Raw, Value)
+    ; Value = Default
     ).
 
 reservoir_normalize_idempotency_key(Value, Key) :-

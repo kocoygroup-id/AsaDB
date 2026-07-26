@@ -31,7 +31,6 @@ var LEGACY_SANDBOX_STORAGE_KEY = 'asadb-sandbox';
 var DEFAULT_TABLES = [];
 var BACKEND_FULL_SYNC_ROW_LIMIT = 5000;
 var BROWSER_SQL_IMPORT_LIMIT_BYTES = 512 * 1024;
-var BACKEND_UPLOAD_IMPORT_MIN_BYTES = 128 * 1024;
 var STARTUP_WARMUP_MS = 650;
 var LARGE_SQL_EDITOR_CHAR_LIMIT = 180000;
 var LARGE_SQL_EDITOR_LINE_LIMIT = 4000;
@@ -126,7 +125,7 @@ var I18N = {
     'import.jobStatus': '{status} · {count} statement · {message}',
     'import.autoDetect': 'Deteksi otomatis',
     'import.target': 'Target',
-    'import.csvTable': 'Tabel CSV',
+    'import.csvTable': 'Tabel target',
     'export.output': 'Keluaran',
     'export.download': 'Unduh',
     'export.openPreview': 'Buka pratinjau',
@@ -340,7 +339,7 @@ var I18N = {
     'import.jobStatus': '{status} · {count} statements · {message}',
     'import.autoDetect': 'Auto detect',
     'import.target': 'Target',
-    'import.csvTable': 'CSV table',
+    'import.csvTable': 'Target table',
     'export.output': 'Output',
     'export.download': 'Download',
     'export.openPreview': 'Open preview',
@@ -554,7 +553,7 @@ var I18N = {
     'import.jobStatus': '{status}・{count} ステートメント・{message}',
     'import.autoDetect': '自動検出',
     'import.target': '対象',
-    'import.csvTable': 'CSV テーブル',
+    'import.csvTable': 'ターゲットテーブル',
     'export.output': '出力',
     'export.download': 'ダウンロード',
     'export.openPreview': 'プレビューを開く',
@@ -2787,7 +2786,11 @@ function _submitReservoirPayload() {
               'Content-Type': options.contentType || 'application/sql;charset=UTF-8',
               'X-AsaDB-Idempotency-Key': idempotencyKey,
               'X-AsaDB-Job-Label': options.label || 'SQL command',
-              'X-AsaDB-Stop-On-Error': options.stopOnError === false ? 'false' : 'true'
+              'X-AsaDB-Stop-On-Error': options.stopOnError === false ? 'false' : 'true',
+              'X-AsaDB-Import-Format': options.importFormat || '',
+              'X-AsaDB-Import-Name': options.importName || options.label || 'import.sql',
+              'X-AsaDB-Import-Table': options.importTable || '',
+              'X-AsaDB-Import-Mode': options.importMode || 'replace'
             }),
             body: payload
           });
@@ -2831,7 +2834,10 @@ function _startReservoirFile() {
           body = new URLSearchParams({
             path,
             idempotency_key: options.idempotencyKey || makeReservoirIdempotencyKey('file'),
-            stop_on_error: options.stopOnError === false ? 'false' : 'true'
+            stop_on_error: options.stopOnError === false ? 'false' : 'true',
+            format: options.importFormat || importFormat.value || 'auto',
+            target_table: options.importTable || importTargetTable.value.trim(),
+            mode: options.importMode || importWriteMode.value
           });
           _context9.n = 1;
           return fetch('/api/reservoir/file', {
@@ -6728,8 +6734,9 @@ function detectImportFormat(fileName, bytes) {
   var name = fileName.toLowerCase().replace(/\.gz$/, '');
   if (name.endsWith('.asb')) return 'asadb';
   if (name.endsWith('.asa') || name.endsWith('.asadb') || name.endsWith('.json')) return 'asadb';
+  if (name.endsWith('-csv.zip')) return 'csv';
   if (name.endsWith('.csv')) return 'csv';
-  if (name.endsWith('.xlsx') || name.endsWith('.xls')) return 'xlsx';
+  if (name.endsWith('.xlsx')) return 'xlsx';
   if (name.endsWith('.pgsql') || name.endsWith('.psql') || name.endsWith('.postgres')) return 'postgresql';
   if (name.endsWith('.mysql')) return 'mysql';
   var text = textHint.slice(0, 12000);
@@ -6941,13 +6948,13 @@ function shouldUseBackendFileImport(path, selectedFormat) {
   var clean = String(path || '').replace(/\\/g, '/').replace(/^\/+/, '');
   if (/\.gz$/i.test(clean)) return false;
   var productionBackup = /\.asb$/i.test(clean);
-  var sqlPath = /\.(sql|mysql|pgsql|psql|postgres)$/i.test(clean);
-  var sqlFormat = selectedFormat === 'auto' || selectedFormat === 'mysql' || selectedFormat === 'postgresql';
-  return productionBackup || sqlPath && sqlFormat;
+  var interchangePath = /\.(sql|mysql|pgsql|psql|postgres|csv|xlsx)$/i.test(clean) || /-csv\.zip$/i.test(clean);
+  var interchangeFormat = ['auto', 'mysql', 'postgresql', 'csv', 'xlsx'].indexOf(selectedFormat) !== -1;
+  return productionBackup || interchangePath && interchangeFormat;
 }
 function shouldUploadFileToBackend(file) {
   if (!file) return false;
-  return Number(file.size || 0) >= BACKEND_UPLOAD_IMPORT_MIN_BYTES || shouldUseBackendFileImport(file.name, importFormat.value);
+  return shouldUseBackendFileImport(file.name, importFormat.value);
 }
 function knownServerImportPath(fileName) {
   var name = String(fileName || '').split(/[\\/]/).pop();
@@ -8996,15 +9003,98 @@ document.addEventListener('visibilitychange', function () {
 window.addEventListener('focus', function () {
   return scheduleMetadataPoll(0);
 });
-// Keep the checked-in ES5 bundle on the production backup path as well.  The
-// readable app.js is the source of truth; this small adapter avoids rebuilding
-// the entire Babel bundle on installations without Node.js.
+// Backend interchange adapter for installations that run the checked-in
+// compatibility bundle without Node.js/Babel.
+function submitProductionBackupPayloadLegacy(file) {
+  var body = new FormData();
+  body.append('file', file, file.name);
+  body.append('format', 'asadb');
+  body.append('stop_on_error', importStopOnError.checked ? 'true' : 'false');
+  body.append('import_id', makeImportId());
+  return fetch('/api/import_upload', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body: body
+  }).then(function (response) {
+    return response.json().then(function (data) {
+      if (!response.ok) throw new Error(data.message || 'HTTP ' + response.status);
+      return data;
+    });
+  });
+}
+function importUploadedFileWithBackendProduction(file) {
+  noteArchiveImportStart(file.name, file.size || 0);
+  log(t('log.reservoirUploadStart', {
+    name: file.name
+  }));
+  var selectedFormat = importFormat.value || 'auto';
+  var productionBackup = /\.asb$/i.test(file.name);
+  var operation = productionBackup ? submitProductionBackupPayloadLegacy(file) : submitReservoirPayload(file, {
+    kind: 'import-upload',
+    label: file.name,
+    sizeBytes: file.size || 0,
+    contentType: file.type || 'application/octet-stream',
+    stopOnError: importStopOnError.checked,
+    importFormat: selectedFormat,
+    importName: file.name,
+    importTable: importTargetTable.value.trim(),
+    importMode: importWriteMode.value,
+    onProgress: function (progress) {
+      var percent = progress.total ? Math.min(100, Math.round(progress.completed / progress.total * 100)) : 0;
+      setLastRunKey('progress.reservoir', {
+        percent: percent,
+        count: progress.statements
+      });
+    }
+  });
+  return operation.then(function (data) {
+    var results = data.results || [data];
+    renderResults(results);
+    var summaryTable = results.find(function (result) {
+      return result.status === 'table';
+    });
+    var row = summaryTable && summaryTable.rows && summaryTable.rows[0] || [];
+    var status = row[0] || 'ok';
+    var statements = Number(row[2]) || 0;
+    var errors = Number(row[3]) || 0;
+    var sizeBytes = Number(row[6]) || file.size || 0;
+    return Promise.all([
+      syncBackendStateSmart().catch(function () {
+        return syncCatalogFromBackend().catch(function () {
+          return false;
+        });
+      }),
+      refreshDatabaseMetadata().catch(function () {
+        return null;
+      })
+    ]).then(function () {
+      noteArchiveImportComplete(file.name, sizeBytes,
+        summaryTable && summaryTable.columns || ['status'],
+        summaryTable && summaryTable.rows || [[status]], statements);
+      setSqlText('-- Uploaded through Prolog backend: ' + file.name + '\nSHOW TABLES;');
+      setLastRunKey('progress.backendSteps', {
+        count: statements
+      });
+      renderTableBrowser();
+      var summary = t('import.uploadSummary', {
+        name: file.name,
+        statements: formatNumber(statements),
+        errors: formatNumber(errors)
+      });
+      log(summary);
+      if (errors > 0) throw new Error(summary);
+      return summary;
+    });
+  });
+}
+importUploadedFileWithBackend = importUploadedFileWithBackendProduction;
+
 function exportDatabaseProduction() {
   var format = checkedValue('exportFormat');
   var output = checkedValue('exportOutput');
   if (backendOnline) {
     try {
-      exportDatabaseFromBackendLegacy(output);
+      exportDatabaseFromBackendLegacy(output, format);
     } catch (err) {
       exportPreview.textContent = ASA_ERROR_LABEL + ': ' + asaErrorCopy(err.message);
       log(t('log.exportFailed', {
@@ -9023,12 +9113,14 @@ function exportDatabaseProduction() {
   }
   exportDatabase();
 }
-function exportDatabaseFromBackendLegacy(output) {
+function exportDatabaseFromBackendLegacy(output, format) {
   var db = ensureCurrentDb('export');
   if (!db) throw new Error(t('database.selectFirst'));
+  var selection = getExportSelection();
+  if (format !== 'asadb' && !selection.length) throw new Error(t('export.noTables'));
   var form = document.createElement('form');
   form.method = 'post';
-  form.action = '/api/backup';
+  form.action = format === 'asadb' ? '/api/backup' : '/api/export';
   form.style.display = 'none';
   if (output === 'open') form.target = '_blank';
   var databaseInput = document.createElement('input');
@@ -9041,12 +9133,41 @@ function exportDatabaseFromBackendLegacy(output) {
   outputInput.name = 'output';
   outputInput.value = output === 'open' ? 'open' : 'save';
   form.appendChild(outputInput);
+  function appendField(name, value) {
+    var input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  }
+  if (format !== 'asadb') {
+    appendField('format', format);
+    appendField('tables', selection.map(function (item) {
+      return item.name;
+    }).join(','));
+    appendField('data_tables', selection.filter(function (item) {
+      return item.includeData;
+    }).map(function (item) {
+      return item.name;
+    }).join(','));
+    appendField('include_schema', exportTableMode.value !== 'none' ? 'true' : 'false');
+    appendField('include_data', exportDataMode.value !== 'none' ? 'true' : 'false');
+    appendField('create_database', exportDatabaseMode.value === 'create' ? 'true' : 'false');
+    appendField('drop_tables', exportTableMode.value === 'drop_create' ? 'true' : 'false');
+  }
   document.body.appendChild(form);
   form.submit();
   window.setTimeout(function () {
     if (form.parentNode) form.parentNode.removeChild(form);
   }, 0);
-  var filename = db + '.asb';
+  var filename;
+  if (format === 'asadb') filename = db + '.asb';
+  else if (format === 'mysql') filename = db + '-mysql.sql';
+  else if (format === 'postgresql') filename = db + '-postgresql.sql';
+  else if (format === 'xlsx') filename = db + '.xlsx';
+  else if (format === 'csv' && selection.length === 1) filename = selection[0].name + '.csv';
+  else if (format === 'csv') filename = db + '-csv.zip';
+  else filename = db + '.' + format;
   exportPreview.textContent = t('export.productionReady', {
     name: filename
   });
