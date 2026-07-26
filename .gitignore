@@ -8,6 +8,8 @@
 *.asa.wal
 *.asa.store/
 asadb.port
+# SWI-Prolog pack manager state created by `swipl pack install .`
+status.db
 
 # Generated tests and releases
 tests/*_generated.sql

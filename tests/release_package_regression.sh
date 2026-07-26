@@ -30,7 +30,7 @@ if grep -Ev "^$NAME(/|$)" "$LIST_FILE" >/dev/null; then
 fi
 
 for required in \
-  LICENSE README.md RELEASE.md RELEASE_NOTES.md COMPATIBILITY.md INSTALL.md VERSION \
+  LICENSE README.md RELEASE.md RELEASE_NOTES.md COMPATIBILITY.md INSTALL.md VERSION GNUmakefile pack.pl pack/pack.pl prolog/asadb.pl docs/swi-prolog-pack.md \
   THIRD_PARTY_NOTICES.md licenses/Noto-Sans-JP-OFL-1.1.txt \
   bin/asadb scripts/run_asadb.sh scripts/run_panel.sh scripts/asadb_guardian.sh scripts/check_linux_runtime.sh scripts/build_legacy_frontend.sh scripts/build_windows_source_release.sh \
   scripts/build_windows_exe.ps1 scripts/check_realtime_release.sh scripts/check_realtime_release.ps1 \
@@ -39,7 +39,7 @@ for required in \
   web/assets/app.legacy.js web/assets/app-loader.js \
   web/assets/fonts/noto-sans-jp-japanese-400-normal.woff2 web/assets/fonts/noto-sans-jp-japanese-400-normal.woff \
   tests/run_tests.pl tests/join_15000_regression.pl tests/production_backup_regression.pl tests/production_backup_http_regression.sh tests/interchange_regression.pl tests/interchange_http_regression.sh tests/interchange_stress.pl tests/prolog_module_audit.sh tests/guardian_regression.sh tests/windows_source_package_regression.sh tests/ui_regression.js \
-  tests/launcher_regression.sh tests/release_package_regression.sh
+  tests/launcher_regression.sh tests/release_package_regression.sh tests/pack_regression.sh
 do
   if ! grep -Fx "$NAME/$required" "$LIST_FILE" >/dev/null; then
     echo "Release is missing required path: $required" >&2
