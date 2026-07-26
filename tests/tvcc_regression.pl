@@ -13,33 +13,62 @@ main :-
     cleanup,
     setup_call_cleanup(
         true,
-        run_tvcc_regression,
+        run_tvcc_regressions,
         ( catch(asadb_shutdown, _, true), cleanup )
     ),
     halt(0).
 
+run_tvcc_regressions :-
+    run_database_context_regression,
+    asadb_shutdown,
+    cleanup,
+    run_tvcc_regression.
+
+run_database_context_regression :-
+    asadb_boot('tests/tvcc testdata.asa'),
+    expect_sql('CREATE DATABASE tvcc_a; USE tvcc_a;'),
+    asadb_tvcc_acquire(OldGeneration, _, _, OldDatabase),
+    assert_equal(tvcc_a, OldDatabase, old_snapshot_database),
+    expect_sql('CREATE DATABASE tvcc_b; USE tvcc_b;'),
+    asadb_tvcc_acquire(NewGeneration, _, _, NewDatabase),
+    assert_equal(tvcc_b, NewDatabase, new_snapshot_database),
+    assert_equal(tvcc_a, OldDatabase, old_snapshot_database_is_immutable),
+    asadb_tvcc_release(NewGeneration),
+    asadb_tvcc_release(OldGeneration).
+
 run_tvcc_regression :-
-    asadb_boot('tests/tvcc_testdata.asa'),
+    asadb_boot('tests/tvcc testdata.asa'),
     % Pin generation one before the writer creates the application database.
     asadb_tvcc_acquire(InitialGeneration, _, _, _),
-    expect_sql('CREATE DATABASE tvcc; USE tvcc; CREATE TABLE events (id INT, label TEXT); INSERT INTO events VALUES (1, ''before''), (2, ''stable'');'),
+    expect_sql('CREATE DATABASE tvcc; USE tvcc; CREATE TABLE events (id INT PRIMARY KEY, label TEXT); CREATE TABLE metrics (id INT PRIMARY KEY, score INT); INSERT INTO events VALUES (1, ''before''), (2, ''stable''); INSERT INTO metrics VALUES (1, 10), (2, 20);'),
     asadb_tvcc_acquire(ReaderGeneration, _ReaderState, ReaderStore, _),
+    asadb_tvcc_acquire(ReaderGeneration, _SecondReaderState, SecondReaderStore, _),
+    assert_equal(ReaderStore, SecondReaderStore, readers_share_generation_store),
     asadb_record_store_id(tvcc, events, StoreId),
     snapshot_rows(ReaderStore, StoreId, BeforeRows),
     assert_equal([[1,before],[2,stable]], BeforeRows, initial_snapshot_rows),
+    run_snapshot_query_shape_regression,
     thread_create(tvcc_writer, Writer, []),
     sleep(0.15),
     ( thread_property(Writer, status(running)) -> true
     ; thread_property(Writer, status(Status)),
       throw(error(assertion_failed(tvcc_writer_did_not_wait_for_pinned_oldest_snapshot(Status)), _))
     ),
+    asadb_tvcc_stats(WaitingStats),
+    assert_equal(3, WaitingStats.retained_generations,
+                 temporary_generation_is_not_committed),
     % The held generation is still readable while the fourth publication waits.
     snapshot_rows(ReaderStore, StoreId, StableRows),
     assert_equal(BeforeRows, StableRows, immutable_reader_rows),
     asadb_tvcc_release(ReaderGeneration),
+    asadb_tvcc_stats(HeldReaderStats),
+    assert_equal(2, HeldReaderStats.active_readers, second_reader_keeps_generation_pinned),
+    asadb_tvcc_release(ReaderGeneration),
     asadb_tvcc_release(InitialGeneration),
     thread_join(Writer, true),
     expect_snapshot_sql('SELECT COUNT(*) FROM events;', table([count], [[4]])),
+    run_snapshot_api_safety_regression,
+    run_transaction_visibility_regression,
     asadb_storage_stats(Storage),
     Tvcc = Storage.tvcc,
     ( Tvcc.retained_generations =< 3,
@@ -50,6 +79,38 @@ run_tvcc_regression :-
 tvcc_writer :-
     expect_sql('INSERT INTO events VALUES (3, ''writer-one'');'),
     expect_sql('INSERT INTO events VALUES (4, ''writer-two'');').
+
+run_snapshot_api_safety_regression :-
+    expect_snapshot_rejected('INSERT INTO events VALUES (9, ''forbidden'');'),
+    expect_snapshot_rejected('UPDATE events SET label = ''forbidden'' WHERE id = 1;'),
+    expect_snapshot_rejected('DELETE FROM events WHERE id = 1;'),
+    expect_snapshot_rejected('BEGIN;'),
+    expect_snapshot_rejected('SELECT * FROM events; DELETE FROM events WHERE id = 1;'),
+    asadb_exec_sql_snapshot_limited('SELECT unknown_tvcc_function(id) FROM events;', 50, _),
+    asadb_tvcc_stats(Stats),
+    assert_equal(0, Stats.active_readers, failed_snapshot_releases_reader).
+
+run_snapshot_query_shape_regression :-
+    expect_snapshot_sql(
+        'SELECT e.id, m.score FROM events e INNER JOIN metrics m ON e.id = m.id ORDER BY e.id;',
+        table(['e.id','m.score'], [[1,10],[2,20]])),
+    expect_snapshot_sql(
+        'SELECT COUNT(*) AS n, SUM(score) AS total FROM metrics WHERE id IN (SELECT id FROM events);',
+        table([n,total], [[2,30]])),
+    expect_snapshot_sql('SELECT score FROM metrics WHERE id = 2;',
+                        table([score], [[20]])),
+    expect_snapshot_sql('SELECT id FROM metrics ORDER BY id DESC LIMIT 1;',
+                        table([id], [[2]])).
+
+run_transaction_visibility_regression :-
+    expect_sql('BEGIN; INSERT INTO events VALUES (5, ''transaction-visible'');'),
+    ( asadb_transaction_active -> true
+    ; throw(error(assertion_failed(transaction_should_be_active), _))
+    ),
+    expect_sql_result('SELECT COUNT(*) FROM events;', table([count], [[5]])),
+    expect_snapshot_rejected('SELECT COUNT(*) FROM events;'),
+    expect_sql('ROLLBACK;'),
+    expect_sql_result('SELECT COUNT(*) FROM events;', table([count], [[4]])).
 
 snapshot_rows(StoreRoot, StoreId, Values) :-
     asadb_record_with_root(StoreRoot,
@@ -70,18 +131,28 @@ expect_snapshot_sql(SQL, Expected) :-
     asadb_exec_sql_snapshot_limited(SQL, 50, multi([Actual])),
     assert_equal(Expected, Actual, snapshot_sql).
 
+expect_snapshot_rejected(SQL) :-
+    asadb_exec_sql_snapshot_limited(SQL, 50, Result),
+    ( Result = error(runtime_error, _) -> true
+    ; throw(error(assertion_failed(snapshot_should_reject(SQL, Result)), _))
+    ).
+
+expect_sql_result(SQL, Expected) :-
+    asadb_exec_sql(SQL, multi([Actual])),
+    assert_equal(Expected, Actual, sql_result).
+
 assert_equal(Expected, Actual, _) :- Expected == Actual, !.
 assert_equal(Expected, Actual, Label) :-
     throw(error(assertion_failed(Label, expected(Expected), actual(Actual)), _)).
 
 cleanup :-
-    delete_if_exists('tests/tvcc_testdata.asa'),
-    delete_if_exists('tests/tvcc_testdata.asa.current_db'),
-    delete_if_exists('tests/tvcc_testdata.asa.journal'),
-    delete_if_exists('tests/tvcc_testdata.asa.wal'),
-    delete_if_exists('tests/tvcc_testdata.asa.meta'),
-    remove_directory_if_exists('tests/tvcc_testdata.asa.store'),
-    remove_directory_if_exists('tests/tvcc_testdata.asa.tvcc').
+    delete_if_exists('tests/tvcc testdata.asa'),
+    delete_if_exists('tests/tvcc testdata.asa.current_db'),
+    delete_if_exists('tests/tvcc testdata.asa.journal'),
+    delete_if_exists('tests/tvcc testdata.asa.wal'),
+    delete_if_exists('tests/tvcc testdata.asa.meta'),
+    remove_directory_if_exists('tests/tvcc testdata.asa.store'),
+    remove_directory_if_exists('tests/tvcc testdata.asa.tvcc').
 
 remove_directory_if_exists(Path) :-
     ( exists_directory(Path) -> delete_directory_and_contents(Path) ; true ).

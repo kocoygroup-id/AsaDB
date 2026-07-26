@@ -17,10 +17,10 @@
 */
 
 :- module(asadb_tvcc, [
-    asadb_tvcc_boot/2,
+    asadb_tvcc_boot/3,
     asadb_tvcc_shutdown/0,
     asadb_tvcc_mark_change/1,
-    asadb_tvcc_publish/2,
+    asadb_tvcc_publish/3,
     asadb_tvcc_acquire/4,
     asadb_tvcc_release/1,
     asadb_tvcc_stats/1
@@ -32,7 +32,7 @@
 :- dynamic tvcc_root/1.
 :- dynamic tvcc_current_generation/1.
 :- dynamic tvcc_next_generation/1.
-:- dynamic tvcc_generation/3.       % Generation, immutable State, store root
+:- dynamic tvcc_generation/4.       % Generation, State, store root, database
 :- dynamic tvcc_reader/2.           % Generation, owning thread
 :- dynamic tvcc_pending_change/1.   % all or store(StoreId)
 
@@ -41,18 +41,20 @@
 tvcc_root_for_file(File, Root) :-
     atom_concat(File, '.tvcc', Root).
 
-asadb_tvcc_boot(File, State) :-
+asadb_tvcc_boot(File, State, Database) :-
     with_mutex(asadb_tvcc,
-        asadb_tvcc_boot_locked(File, State)).
+        asadb_tvcc_boot_locked(File, State, Database)).
 
-asadb_tvcc_boot_locked(File, State) :-
+asadb_tvcc_boot_locked(File, State, Database) :-
     asadb_tvcc_shutdown_locked,
     tvcc_root_for_file(File, Root),
     make_directory_path(Root),
     assertz(tvcc_root(Root)),
     assertz(tvcc_next_generation(1)),
-    tvcc_create_generation_locked(File, State, [all], Generation, _),
-    assertz(tvcc_current_generation(Generation)).
+    tvcc_reserve_generation_locked(Generation, Root, none),
+    tvcc_build_generation(File, [all], Generation, Root, none, Temporary),
+    tvcc_publish_reserved_generation_locked(Temporary, Generation, State,
+                                            Database, Root).
 
 asadb_tvcc_shutdown :-
     with_mutex(asadb_tvcc, asadb_tvcc_shutdown_locked).
@@ -60,7 +62,7 @@ asadb_tvcc_shutdown :-
 asadb_tvcc_shutdown_locked :-
     ( tvcc_root(Root) -> safe_remove_tvcc_root(Root) ; true ),
     retractall(tvcc_reader(_, _)),
-    retractall(tvcc_generation(_, _, _)),
+    retractall(tvcc_generation(_, _, _, _)),
     retractall(tvcc_current_generation(_)),
     retractall(tvcc_next_generation(_)),
     retractall(tvcc_pending_change(_)),
@@ -76,56 +78,72 @@ safe_remove_tvcc_root(_).
 % Called only after the normal catalog/page write is durable.  Creating the
 % copy before changing current_generation means a reader can observe either
 % full old data or full new data, never the writer's in-place pages.
-asadb_tvcc_publish(File, State) :-
+asadb_tvcc_publish(File, State, Database) :-
     with_mutex(asadb_tvcc_publish,
-        asadb_tvcc_publish_serial(File, State)).
+        asadb_tvcc_publish_serial(File, State, Database)).
 
-asadb_tvcc_publish_serial(File, State) :-
+asadb_tvcc_publish_serial(File, State, Database) :-
     tvcc_root(_), !,
-    with_mutex(asadb_tvcc, tvcc_pending_changes(Changes)),
     with_mutex(asadb_tvcc,
-        tvcc_create_generation_locked(File, State, Changes, Generation, _)),
-    tvcc_wait_for_generation_slot,
-    with_mutex(asadb_tvcc,
-        ( tvcc_retire_unpinned_generations_locked,
-          retractall(tvcc_current_generation(_)),
-          assertz(tvcc_current_generation(Generation)),
-          retractall(tvcc_pending_change(_))
-        )).
-asadb_tvcc_publish_serial(_, _).
+        ( tvcc_pending_changes(Changes),
+          tvcc_reserve_generation_locked(Generation, Root, PreviousRoot)
+        )),
+    catch(
+        ( tvcc_build_generation(File, Changes, Generation, Root, PreviousRoot,
+                                Temporary),
+          tvcc_wait_for_publish_slot,
+          with_mutex(asadb_tvcc,
+              ( tvcc_publish_reserved_generation_locked(Temporary, Generation,
+                                                         State, Database, Root),
+                retractall(tvcc_pending_change(_))
+              ))
+        ),
+        Error,
+        ( safe_remove_temporary_generation(Temporary), throw(Error) )
+    ).
+asadb_tvcc_publish_serial(_, _, _).
 
-tvcc_wait_for_generation_slot :-
+tvcc_wait_for_publish_slot :-
     with_mutex(asadb_tvcc,
-        ( tvcc_retire_unpinned_generations_locked,
+        ( tvcc_retire_for_publish_locked,
           tvcc_generation_count(Count)
         )),
-    ( Count =< 3 -> true
+    ( Count < 3 -> true
     ; sleep(0.01),
-      tvcc_wait_for_generation_slot
+      tvcc_wait_for_publish_slot
     ).
 
-tvcc_retire_unpinned_generations_locked :-
+tvcc_retire_for_publish_locked :-
     tvcc_generation_count(Count),
-    ( Count =< 3 -> true
+    ( Count < 3 -> true
     ; oldest_generation(Generation),
       ( tvcc_reader(Generation, _) -> true
       ; tvcc_remove_generation_locked(Generation),
-        tvcc_retire_unpinned_generations_locked
+        tvcc_retire_for_publish_locked
       )
     ).
 
 tvcc_generation_count(Count) :-
-    aggregate_all(count, tvcc_generation(_, _, _), Count).
+    aggregate_all(count, tvcc_generation(_, _, _, _), Count).
 
 oldest_generation(Generation) :-
-    findall(G, tvcc_generation(G, _, _), Generations),
+    findall(G, tvcc_generation(G, _, _, _), Generations),
     min_list(Generations, Generation).
 
-tvcc_create_generation_locked(File, State, Changes, Generation, StoreRoot) :-
+tvcc_reserve_generation_locked(Generation, Root, PreviousRoot) :-
     retract(tvcc_next_generation(Generation)),
     Next is Generation + 1,
     assertz(tvcc_next_generation(Next)),
     tvcc_root(Root),
+    ( tvcc_current_generation(Current),
+      tvcc_generation(Current, _, PreviousRoot, _) -> true
+    ; PreviousRoot = none
+    ).
+
+% Building can copy a large changed heap. It runs under the single publisher
+% mutex, but never under asadb_tvcc, so new readers keep acquiring the current
+% committed generation while the next one is prepared privately.
+tvcc_build_generation(File, Changes, Generation, Root, PreviousRoot, Temporary) :-
     tvcc_generation_directory(Root, Generation, Directory),
     atom_concat(Directory, '.tmp', Temporary),
     ( exists_directory(Temporary) -> delete_directory_and_contents(Temporary) ; true ),
@@ -133,10 +151,22 @@ tvcc_create_generation_locked(File, State, Changes, Generation, StoreRoot) :-
     directory_file_path(Temporary, 'catalog.asa', CatalogCopy),
     copy_catalog_image(File, CatalogCopy),
     directory_file_path(Temporary, 'store', TemporaryStoreRoot),
-    copy_store_files(File, TemporaryStoreRoot, Changes),
+    copy_store_files(File, TemporaryStoreRoot, Changes, PreviousRoot).
+
+tvcc_publish_reserved_generation_locked(Temporary, Generation, State,
+                                        Database, Root) :-
+    tvcc_generation_directory(Root, Generation, Directory),
     rename_file(Temporary, Directory),
     directory_file_path(Directory, 'store', StoreRoot),
-    assertz(tvcc_generation(Generation, State, StoreRoot)).
+    assertz(tvcc_generation(Generation, State, StoreRoot, Database)),
+    retractall(tvcc_current_generation(_)),
+    assertz(tvcc_current_generation(Generation)).
+
+safe_remove_temporary_generation(Temporary) :-
+    atom(Temporary),
+    exists_directory(Temporary), !,
+    delete_directory_and_contents(Temporary).
+safe_remove_temporary_generation(_).
 
 tvcc_pending_changes([all]) :- tvcc_pending_change(all), !.
 tvcc_pending_changes(Changes) :-
@@ -174,19 +204,19 @@ tvcc_generation_directory(Root, Generation, Directory) :-
     format(atom(Name), 'generation-~|~`0t~d~6+', [Generation]),
     directory_file_path(Root, Name, Directory).
 
-copy_store_files(File, Destination, Changes) :-
+copy_store_files(File, Destination, Changes, PreviousRoot) :-
     atom_concat(File, '.store', Source),
     make_directory_path(Destination),
     ( exists_directory(Source) ->
         directory_files(Source, Names),
         forall(( member(Name, Names), tvcc_store_data_file(Name) ),
-               copy_store_file(Source, Destination, Changes, Name))
+               copy_store_file(Source, Destination, Changes, PreviousRoot, Name))
     ; true
     ).
 
 % The in-memory State is authoritative for a new database before its first
 % user write.  The catalog copy is kept for diagnostics/forensics; readers use
-% the immutable State passed to tvcc_generation/3, so an absent primary file
+% the immutable State passed to tvcc_generation/4, so an absent primary file
 % must not force a checkpoint merely to satisfy this auxiliary artifact.
 copy_catalog_image(File, Destination) :-
     exists_file(File), !,
@@ -203,11 +233,11 @@ copy_catalog_image(_, Destination) :-
 tvcc_store_data_file(Name) :- sub_atom(Name, _, 5, 0, '.heap'), !.
 tvcc_store_data_file(Name) :- sub_atom(Name, _, 6, 0, '.btree').
 
-copy_store_file(Source, Destination, Changes, Name) :-
+copy_store_file(Source, Destination, Changes, PreviousRoot, Name) :-
     directory_file_path(Source, Name, From),
     directory_file_path(Destination, Name, To),
     ( tvcc_file_changed(Name, Changes) -> copy_file(From, To)
-    ; tvcc_previous_store_file(Name, Previous), exists_file(Previous) ->
+    ; tvcc_previous_store_file(PreviousRoot, Name, Previous), exists_file(Previous) ->
         copy_or_hard_link(Previous, To)
     ; copy_file(From, To)
     ).
@@ -218,9 +248,8 @@ tvcc_file_changed(Name, Changes) :-
     atom_concat(StoreId, '.', Prefix),
     sub_atom(Name, 0, _, _, Prefix), !.
 
-tvcc_previous_store_file(Name, File) :-
-    tvcc_current_generation(Generation),
-    tvcc_generation(Generation, _, PreviousRoot),
+tvcc_previous_store_file(PreviousRoot, Name, File) :-
+    PreviousRoot \== none,
     directory_file_path(PreviousRoot, Name, File).
 
 % Hard links are supported by normal Linux filesystems and NTFS, so an
@@ -234,29 +263,28 @@ asadb_tvcc_acquire(Generation, State, StoreRoot, Database) :-
     thread_self(Thread),
     with_mutex(asadb_tvcc,
         ( tvcc_current_generation(Generation),
-          tvcc_generation(Generation, State, StoreRoot),
-          assertz(tvcc_reader(Generation, Thread)),
-          Database = none
+          tvcc_generation(Generation, State, StoreRoot, Database),
+          assertz(tvcc_reader(Generation, Thread))
         )).
 
 asadb_tvcc_release(Generation) :-
     thread_self(Thread),
     with_mutex(asadb_tvcc,
-        retract(tvcc_reader(Generation, Thread))).
+        ( retract(tvcc_reader(Generation, Thread)) -> true ; true )).
 
 tvcc_remove_generation_locked(Generation) :-
-    tvcc_generation(Generation, _, StoreRoot),
-    file_directory_name(StoreRoot, Directory),
-    retractall(tvcc_generation(Generation, _, _)),
-    safe_remove_generation_directory(Directory).
-
-safe_remove_generation_directory(Directory) :-
+    tvcc_generation(Generation, _, _, _),
     tvcc_root(Root),
-    atom_concat(Root, '/', Prefix),
-    sub_atom(Directory, 0, _, _, Prefix),
+    tvcc_generation_directory(Root, Generation, Directory),
+    retractall(tvcc_generation(Generation, _, _, _)),
+    safe_remove_generation_directory(Root, Directory).
+
+safe_remove_generation_directory(Root, Directory) :-
+    file_directory_name(Directory, Parent),
+    same_file(Parent, Root),
     exists_directory(Directory), !,
     delete_directory_and_contents(Directory).
-safe_remove_generation_directory(_).
+safe_remove_generation_directory(_, _).
 
 asadb_tvcc_stats(tvcc{
     current_generation:Current,

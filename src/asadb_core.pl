@@ -30,10 +30,12 @@
     asadb_exec_sql_page/4,
     asadb_exec_sql_snapshot_limited/3,
     asadb_exec_sql_snapshot_page/4,
+    asadb_snapshot_read_allowed/1,
     asadb_parse_sql/2,
     asadb_analyze_sql/2,
     asadb_current_database/1,
     asadb_get_state/1,
+    asadb_transaction_active/0,
     asadb_backup_transaction_active/0,
     asadb_backup_capture_current_database/1,
     asadb_backup_restore_current_database/1,
@@ -273,7 +275,8 @@ asadb_boot(InputFile) :-
     % have completed.  It must not force a checkpoint just to create a reader
     % image, because that would change recovery and metadata accounting.
     asadb_state(BootState),
-    asadb_tvcc_boot(File, BootState).
+    tvcc_selected_database(BootDatabase),
+    asadb_tvcc_boot(File, BootState, BootDatabase).
 
 load_storage_config(File) :-
     asadb_config_load('asadb.conf'),
@@ -348,7 +351,8 @@ asadb_save_locked :-
     retractall(asadb_checkpoint_dirty),
     metadata_checkpoint_summary(State, Summary),
     catch(asadb_metadata_checkpoint(Summary), _, true),
-    asadb_tvcc_publish(File, State).
+    tvcc_selected_database(Database),
+    asadb_tvcc_publish(File, State, Database).
 
 mark_state_upgrade(state(V, _)) :-
     ( \+ integer(V) ; V < 3 ), !,
@@ -362,6 +366,12 @@ asadb_get_state(State) :-
 % committed.  The web backup path checks this before walking record pages.
 asadb_backup_transaction_active :-
     with_mutex(asadb_write, asadb_tx_snapshot(_)).
+
+% The transaction implementation is local and single-writer.  A transaction
+% must read its own uncommitted writes through the primary execution path, not
+% through a previously committed TVCC generation.
+asadb_transaction_active :-
+    asadb_tx_snapshot(_).
 
 % USE inside a streamed backup changes the selected database outside the row
 % transaction snapshot.  The web importer captures it before BEGIN and uses
@@ -786,16 +796,45 @@ asadb_exec_sql_page(SQL, Offset, MaxRows, Result) :-
 % The HTTP SELECT path uses this wrapper instead of opening the mutable record
 % store.  Catalog and heap files are bound to the same committed generation.
 asadb_exec_sql_snapshot_limited(SQL, MaxRows, Result) :-
-    asadb_with_tvcc_snapshot(asadb_exec_sql_limited(SQL, MaxRows, Result)).
+    catch(( asadb_require_snapshot_read_only(SQL),
+            asadb_with_tvcc_snapshot(asadb_exec_sql_limited(SQL, MaxRows, Result))
+          ),
+          Error,
+          Result = error(runtime_error, Error)).
 
 asadb_exec_sql_snapshot_page(SQL, Offset, MaxRows, Result) :-
-    asadb_with_tvcc_snapshot(asadb_exec_sql_page(SQL, Offset, MaxRows, Result)).
+    catch(( asadb_require_snapshot_read_only(SQL),
+            asadb_with_tvcc_snapshot(asadb_exec_sql_page(SQL, Offset, MaxRows, Result))
+          ),
+          Error,
+          Result = error(runtime_error, Error)).
+
+asadb_snapshot_read_allowed(SQL) :-
+    \+ asadb_transaction_active,
+    asadb_parse_sql(SQL, Statements),
+    Statements = [_|_],
+    snapshot_read_only_statements(Statements).
+
+snapshot_read_only_statements([Statement|Statements]) :-
+    snapshot_read_only_statement(Statement),
+    snapshot_read_only_statements(Statements).
+snapshot_read_only_statements([]) :- !.
+
+snapshot_read_only_statement(select(_, _, _, _, _, _)).
+
+asadb_require_snapshot_read_only(SQL) :-
+    asadb_snapshot_read_allowed(SQL), !.
+asadb_require_snapshot_read_only(_) :-
+    throw(error(permission_error(execute, tvcc_snapshot, read_only_select_required), _)).
 
 :- meta_predicate asadb_with_tvcc_snapshot(0).
 
 asadb_with_tvcc_snapshot(Goal) :-
-    asadb_tvcc_acquire(Generation, State, StoreRoot, _),
-    with_mutex(asadb_write, tvcc_selected_database(Database)),
+    ( asadb_tx_snapshot(_) ->
+        throw(error(permission_error(execute, tvcc_snapshot,
+                                     active_transaction), _))
+    ; asadb_tvcc_acquire(Generation, State, StoreRoot, Database)
+    ),
     setup_call_cleanup(
         ( assertz(asadb_tvcc_read_state(State)),
           assertz(asadb_tvcc_read_db(Database))
@@ -1017,7 +1056,13 @@ execute_statement(use_database(Name), ok(using_database(Name))) :-
         retractall(asadb_current_db(_)), assertz(asadb_current_db(Name))
     ; update_state(create_db(Name)), retractall(asadb_current_db(_)), assertz(asadb_current_db(Name))
     ),
-    persist_current_db(Name).
+    persist_current_db(Name),
+    % `USE` changes the database context without changing table pages. Publish
+    % a catalog-equivalent generation so a snapshot never combines an older
+    % catalog/store with a newer selected database.
+    asadb_file(File),
+    asadb_state(CurrentState),
+    asadb_tvcc_publish(File, CurrentState, Name).
 
 execute_statement(drop_database(Name), ok(dropped_database(Name))) :-
     update_state(drop_db(Name)),

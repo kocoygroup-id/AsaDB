@@ -21,6 +21,11 @@ The policy is deliberately bounded:
 - a `SELECT` released through AsAPanel no longer waits on the global writer
   execution mutex.
 
+TVCC is deliberately bypassed while a SQL transaction is active. A transaction
+continues through the primary executor so `BEGIN` → write → `SELECT` reads its
+own uncommitted work. The public snapshot API accepts only one or more `SELECT`
+statements and rejects mutation, transaction control, and mixed SQL batches.
+
 The result is stable reads during long local writes, while retaining the
 existing write-ahead/recovery and single-writer semantics.
 
@@ -35,7 +40,10 @@ would let a reader pair old table metadata with new pages. TVCC instead binds:
 
 The publish point moves only after catalog and pager pages have been flushed.
 A reader therefore sees either the complete preceding generation or the
-complete new generation.
+complete new generation. A new image is prepared as a private `.tmp` directory;
+only after retention has a free committed slot is it atomically renamed,
+registered, and made current. Thus the committed-generation count never exceeds
+three.
 
 ## Write-path performance
 
@@ -50,6 +58,10 @@ Bulk import stays efficient because the importer batches many inserts into one
 normal commit and TVCC publishes one generation for that durable batch, rather
 than one generation per row.
 
+The publisher reserves its generation metadata briefly, then performs file
+copying outside the reader-coordination mutex. New readers continue acquiring
+the current committed generation while the next image is built.
+
 ## Scope and boundaries
 
 TVCC is intentionally local to one AsaDB process and localhost AsAPanel. It
@@ -63,4 +75,9 @@ three generations of changed table files and monitor long-running local reads.
 `tests/tvcc_regression.pl` holds an old reader generation while a writer tries
 to publish a fourth generation. It verifies that the writer waits, the old
 reader remains readable, and retention returns to three generations after the
-reader releases. The test runs through the standard `make test` target.
+reader releases. It also covers read-your-writes transactions, snapshot API
+rejection of mutations, two readers on one generation, selected-database
+binding, joins, subqueries, aggregates, indexed predicates, ordering, error
+cleanup, and a database path containing spaces. The test runs through the
+standard `make test` target; CI also executes the core and TVCC suites on
+Windows.

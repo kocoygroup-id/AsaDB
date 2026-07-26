@@ -23,3 +23,17 @@ jobs:
         run: ./scripts/check_linux_runtime.sh
       - name: Run engine, UI, Reservoir, and 15k JOIN regressions
         run: make test-all
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SWI-Prolog
+        shell: pwsh
+        run: choco install swi-prolog --no-progress -y
+      - name: Run core and TVCC regressions on NTFS paths
+        shell: pwsh
+        run: |
+          swipl -q -s tests/run_tests.pl
+          swipl -q -s tests/tvcc_regression.pl
