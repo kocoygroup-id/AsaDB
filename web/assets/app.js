@@ -9,7 +9,6 @@ const LEGACY_SANDBOX_STORAGE_KEY = 'asadb-sandbox';
 const DEFAULT_TABLES = [];
 const BACKEND_FULL_SYNC_ROW_LIMIT = 5000;
 const BROWSER_SQL_IMPORT_LIMIT_BYTES = 512 * 1024;
-const BACKEND_UPLOAD_IMPORT_MIN_BYTES = 128 * 1024;
 const STARTUP_WARMUP_MS = 650;
 const LARGE_SQL_EDITOR_CHAR_LIMIT = 180000;
 const LARGE_SQL_EDITOR_LINE_LIMIT = 4000;
@@ -98,7 +97,7 @@ const I18N = {
     'import.jobStatus': '{status} · {count} statement · {message}',
     'import.autoDetect': 'Deteksi otomatis',
     'import.target': 'Target',
-    'import.csvTable': 'Tabel CSV',
+    'import.csvTable': 'Tabel target',
     'export.output': 'Keluaran',
     'export.download': 'Unduh',
     'export.openPreview': 'Buka pratinjau',
@@ -312,7 +311,7 @@ const I18N = {
     'import.jobStatus': '{status} · {count} statements · {message}',
     'import.autoDetect': 'Auto detect',
     'import.target': 'Target',
-    'import.csvTable': 'CSV table',
+    'import.csvTable': 'Target table',
     'export.output': 'Output',
     'export.download': 'Download',
     'export.openPreview': 'Open preview',
@@ -526,7 +525,7 @@ const I18N = {
     'import.jobStatus': '{status}・{count} ステートメント・{message}',
     'import.autoDetect': '自動検出',
     'import.target': '対象',
-    'import.csvTable': 'CSV テーブル',
+    'import.csvTable': 'ターゲットテーブル',
     'export.output': '出力',
     'export.download': 'ダウンロード',
     'export.openPreview': 'プレビューを開く',
@@ -2691,6 +2690,12 @@ async function submitReservoirPayload(payload, options = {}) {
       'X-AsaDB-Idempotency-Key': idempotencyKey,
       'X-AsaDB-Job-Label': options.label || 'SQL command',
       'X-AsaDB-Stop-On-Error': options.stopOnError === false ? 'false' : 'true',
+      ...(options.importFormat ? {
+        'X-AsaDB-Import-Format': options.importFormat,
+        'X-AsaDB-Import-Name': options.importName || options.label || 'import.sql',
+        'X-AsaDB-Import-Table': options.importTable || '',
+        'X-AsaDB-Import-Mode': options.importMode || 'replace',
+      } : {}),
     }),
     body: payload,
   });
@@ -2709,6 +2714,9 @@ async function startReservoirFile(path, options = {}) {
     path,
     idempotency_key: options.idempotencyKey || makeReservoirIdempotencyKey('file'),
     stop_on_error: options.stopOnError === false ? 'false' : 'true',
+    format: options.importFormat || importFormat.value || 'auto',
+    target_table: options.importTable || importTargetTable.value.trim(),
+    mode: options.importMode || importWriteMode.value,
   });
   const res = await fetch('/api/reservoir/file', {
     method: 'POST',
@@ -4855,8 +4863,9 @@ function detectImportFormat(fileName, bytes, textHint = '') {
   const name = fileName.toLowerCase().replace(/\.gz$/, '');
   if (name.endsWith('.asb')) return 'asadb';
   if (name.endsWith('.asa') || name.endsWith('.asadb') || name.endsWith('.json')) return 'asadb';
+  if (name.endsWith('-csv.zip')) return 'csv';
   if (name.endsWith('.csv')) return 'csv';
-  if (name.endsWith('.xlsx') || name.endsWith('.xls')) return 'xlsx';
+  if (name.endsWith('.xlsx')) return 'xlsx';
   if (name.endsWith('.pgsql') || name.endsWith('.psql') || name.endsWith('.postgres')) return 'postgresql';
   if (name.endsWith('.mysql')) return 'mysql';
   const text = textHint.slice(0, 12000);
@@ -4951,14 +4960,14 @@ function shouldUseBackendFileImport(path, selectedFormat) {
   const clean = String(path || '').replace(/\\/g, '/').replace(/^\/+/, '');
   if (/\.gz$/i.test(clean)) return false;
   const productionBackup = /\.asb$/i.test(clean);
-  const sqlPath = /\.(sql|mysql|pgsql|psql|postgres)$/i.test(clean);
-  const sqlFormat = selectedFormat === 'auto' || selectedFormat === 'mysql' || selectedFormat === 'postgresql';
-  return productionBackup || (sqlPath && sqlFormat);
+  const interchangePath = /\.(sql|mysql|pgsql|psql|postgres|csv|xlsx)$/i.test(clean) || /-csv\.zip$/i.test(clean);
+  const interchangeFormat = ['auto', 'mysql', 'postgresql', 'csv', 'xlsx'].includes(selectedFormat);
+  return productionBackup || (interchangePath && interchangeFormat);
 }
 
 function shouldUploadFileToBackend(file) {
   if (!file) return false;
-  return Number(file.size || 0) >= BACKEND_UPLOAD_IMPORT_MIN_BYTES || shouldUseBackendFileImport(file.name, importFormat.value);
+  return shouldUseBackendFileImport(file.name, importFormat.value);
 }
 
 function knownServerImportPath(fileName) {
@@ -5016,17 +5025,25 @@ async function importServerPathWithBackend(path, sizeHint = 0) {
 async function importUploadedFileWithBackend(file) {
   noteArchiveImportStart(file.name, file.size || 0);
   log(t('log.reservoirUploadStart', { name: file.name }));
-  const data = await submitReservoirPayload(file, {
-    kind: 'import-upload',
-    label: file.name,
-    sizeBytes: file.size || 0,
-    contentType: file.type || 'application/sql',
-    stopOnError: importStopOnError.checked,
-    onProgress: ({ completed, total, statements }) => {
-      const percent = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
-      setLastRunKey('progress.reservoir', { percent, count: statements });
-    },
-  });
+  const selectedFormat = importFormat.value || 'auto';
+  const productionBackup = /\.asb$/i.test(file.name);
+  const data = productionBackup
+    ? await submitProductionBackupPayload(file)
+    : await submitReservoirPayload(file, {
+        kind: 'import-upload',
+        label: file.name,
+        sizeBytes: file.size || 0,
+        contentType: file.type || 'application/octet-stream',
+        stopOnError: importStopOnError.checked,
+        importFormat: selectedFormat,
+        importName: file.name,
+        importTable: importTargetTable.value.trim(),
+        importMode: importWriteMode.value,
+        onProgress: ({ completed, total, statements }) => {
+          const percent = total ? Math.min(100, Math.round((completed / total) * 100)) : 0;
+          setLastRunKey('progress.reservoir', { percent, count: statements });
+        },
+      });
 
   const results = data.results || [data];
   renderResults(results);
@@ -5049,6 +5066,22 @@ async function importUploadedFileWithBackend(file) {
   log(summary);
   if (errors > 0) throw new Error(summary);
   return summary;
+}
+
+async function submitProductionBackupPayload(file) {
+  const body = new FormData();
+  body.append('file', file, file.name);
+  body.append('format', 'asadb');
+  body.append('stop_on_error', importStopOnError.checked ? 'true' : 'false');
+  body.append('import_id', makeImportId());
+  const res = await fetch('/api/import_upload', {
+    method: 'POST',
+    headers: apiHeaders(),
+    body,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+  return data;
 }
 
 async function importFromBuffer(name, rawBuffer, selectedFormat) {
@@ -5322,7 +5355,7 @@ async function exportDatabase() {
   const output = checkedValue('exportOutput');
   if (backendOnline) {
     try {
-      exportDatabaseFromBackend(output);
+      exportDatabaseFromBackend(output, format);
     } catch (err) {
       exportPreview.textContent = `${ASA_ERROR_LABEL}: ${asaErrorCopy(err.message)}`;
       log(t('log.exportFailed', { error: err.message }));
@@ -5362,20 +5395,37 @@ async function exportDatabase() {
   }
 }
 
-function exportDatabaseFromBackend(output) {
+function exportDatabaseFromBackend(output, format) {
   const db = ensureCurrentDb('export');
   if (!db) throw new Error(t('database.selectFirst'));
+  const selection = getExportSelection();
+  if (format !== 'asadb' && !selection.length) {
+    throw new Error(t('export.noTables'));
+  }
 
   // A normal form submission keeps a large artifact out of JavaScript heap
   // and lets the browser stream Content-Disposition directly to disk.  The
   // authenticated same-origin cookie is sent automatically.
   const form = document.createElement('form');
   form.method = 'post';
-  form.action = '/api/backup';
+  form.action = format === 'asadb' ? '/api/backup' : '/api/export';
   form.style.display = 'none';
   if (output === 'open') form.target = '_blank';
 
-  for (const [name, value] of Object.entries({ database: db, output: output === 'open' ? 'open' : 'save' })) {
+  const fields = {
+    database: db,
+    output: output === 'open' ? 'open' : 'save',
+  };
+  if (format !== 'asadb') {
+    fields.format = format;
+    fields.tables = selection.map(item => item.name).join(',');
+    fields.data_tables = selection.filter(item => item.includeData).map(item => item.name).join(',');
+    fields.include_schema = exportTableMode.value !== 'none' ? 'true' : 'false';
+    fields.include_data = exportDataMode.value !== 'none' ? 'true' : 'false';
+    fields.create_database = exportDatabaseMode.value === 'create' ? 'true' : 'false';
+    fields.drop_tables = exportTableMode.value === 'drop_create' ? 'true' : 'false';
+  }
+  for (const [name, value] of Object.entries(fields)) {
     const input = document.createElement('input');
     input.type = 'hidden';
     input.name = name;
@@ -5386,9 +5436,19 @@ function exportDatabaseFromBackend(output) {
   document.body.appendChild(form);
   form.submit();
   window.setTimeout(() => form.remove(), 0);
-  const filename = `${db}.asb`;
+  const filename = backendExportFilename(db, format, selection);
   exportPreview.textContent = t('export.productionReady', { name: filename });
   log(t('export.productionReady', { name: filename }));
+}
+
+function backendExportFilename(db, format, selection) {
+  if (format === 'asadb') return `${db}.asb`;
+  if (format === 'mysql') return `${db}-mysql.sql`;
+  if (format === 'postgresql') return `${db}-postgresql.sql`;
+  if (format === 'xlsx') return `${db}.xlsx`;
+  if (format === 'csv' && selection.length === 1) return `${selection[0].name}.csv`;
+  if (format === 'csv') return `${db}-csv.zip`;
+  return `${db}.${format}`;
 }
 
 async function buildExportPackage(format) {

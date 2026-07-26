@@ -12,6 +12,7 @@ Compatibility matrix: [COMPATIBILITY.md](COMPATIBILITY.md)
 | Area | 1.3.1 RC | 1.4.0 Stable | Benefit |
 | --- | --- | --- | --- |
 | Production export | Export could be assembled from browser state, which might hold only metadata or a loaded subset of a large table. | The backend scans every stored page and creates an `.asb` backup containing schema, records, indexes, and catalog objects. | Backup completeness no longer depends on browser memory or the visible result window. |
+| Portable interchange | CSV/XLSX conversion and dialect export could depend on sandbox rows, while uploaded dialect dumps had no backend normalization stage. | MySQL, PostgreSQL, CSV, and XLSX exchange is implemented in Prolog over backend storage; imports enter Reservoir and the transactional streaming importer. | Selected-table exchange scales independently of browser row hydration and retains rollback, cancellation, and capacity controls. |
 | Restore integrity | Generic import could not prove a backup was complete before commit. | Restore verifies the payload and integrity manifest, then confirms rebuilt table and row totals before committing one transaction. | Altered, truncated, and incomplete backup artifacts are rejected. |
 | Backup consistency | No explicit production transaction guard protected export and restore. | Create and restore reject an active database transaction; the shared backend execution lock gives the operation one logical view. | Backup data cannot mix with an unrelated in-flight write transaction. |
 | Large-data query safety | The RC fixed `ORDER BY *` and bounded browser results. | Stable keeps those fixes and regression-tests backup, paging, bounded results, restart persistence, and a 100,000-row storage scenario together. | Large datasets receive a broader end-to-end release gate. |
@@ -68,11 +69,15 @@ The stable audit was exercised on **PCLinuxOS 2026**, Linux
 - Reservoir queue, reload, cancellation, and recovery suite.
 - JOIN and paging regressions.
 - Production backup unit and authenticated HTTP create/restore regressions.
+- Backend MySQL/PostgreSQL/CSV/XLSX round trips plus authenticated export and
+  Reservoir CSV/XLSX import regressions.
 - Process companion, launcher, release contract, and package checks.
 - Windows source-package structure and archive-integrity checks.
 - 100,000-row storage stress: import, indexed lookup, order/limit, update,
   delete, bounded result, cleanup, and restart assertions. The measured import
   stage was 27,309 ms on the audit host.
+- A 20,000-row interchange stress covered four backend exports plus CSV/XLSX
+  streaming preparation in about 9.7 seconds on the audit host.
 
 Node.js was not installed on the audit host, so the Node-only browser
 regression is not claimed as executed there. The checked-in modern and legacy

@@ -191,7 +191,7 @@ backup_count_tables([Table|Tables], Count0, Count) :-
     backup_count_tables(Tables, Count1, Count).
 
 backup_count_storage_rows(Table, paged_rows(StoreId, Expected, _), Count) :- !,
-    aggregate_all(count, asadb_record_scan(StoreId, _, _), Count),
+    aggregate_all(count, asadb_record_scan_verified(StoreId, _, _), Count),
     ( Count =:= Expected -> true
     ; throw(error(integrity_error(backup_restored_row_count(Table, Expected, Count)), _))
     ).
@@ -323,15 +323,17 @@ backup_raw_character_atom(Code, Atom) :-
 backup_raw_character_atom(Code, _) :- throw(error(domain_error(backup_raw_character, Code), _)).
 
 backup_write_storage_rows(Out, Table, Columns, paged_rows(StoreId, Expected, _), Count) :- !,
-    % Verify the physical record-store cardinality before streaming.  Do not
-    % use a mutable counter inside forall/2: that is vulnerable to Prolog
-    % backtracking semantics and previously produced unstable totals.
-    aggregate_all(count, asadb_record_scan(StoreId, _, _), Actual),
+    % Stream each row exactly once through the checksum-verifying scan. A
+    % non-backtrackable accumulator is required because forall/2 implements
+    % universal quantification through backtracking.
+    Counter = backup_row_counter(0, 0),
+    forall(asadb_record_scan_verified(StoreId, _, Row),
+           backup_write_insert_batch_row(Out, Table, Columns, Row, Counter)),
+    backup_finish_insert_batch(Out, Counter),
+    arg(2, Counter, Actual),
     ( Actual =:= Expected -> true
     ; throw(error(integrity_error(backup_row_count(Table, Expected, Actual)), _))
     ),
-    forall(asadb_record_scan(StoreId, _, Row),
-           backup_write_insert(Out, Table, Columns, Row)),
     Count = Expected.
 backup_write_storage_rows(Out, Table, Columns, Rows, Count) :-
     is_list(Rows), !,
@@ -346,17 +348,53 @@ backup_write_inline_rows(Out, Table, Columns, [Row|Rows], Count0, Count) :-
     backup_write_inline_rows(Out, Table, Columns, Rows, Count1, Count).
 
 backup_write_insert(Out, Table, Columns, row(Pairs)) :- !,
-    maplist(backup_column_name, Columns, Names),
-    maplist(backup_row_value(Pairs), Names, Values),
-    maplist(backup_sql_identifier, Names, Identifiers),
-    maplist(backup_sql_value, Values, Literals),
-    atomic_list_concat(Identifiers, ', ', IdentifierText),
-    atomic_list_concat(Literals, ', ', LiteralText),
-    backup_sql_identifier(Table, QuotedTable),
-    format(Out, 'INSERT INTO ~w (~w) VALUES (~w);~n',
-           [QuotedTable, IdentifierText, LiteralText]).
+    backup_write_insert_prefix(Out, Table, Columns),
+    backup_write_insert_values(Out, Columns, Pairs),
+    format(Out, ';~n', []).
 backup_write_insert(_, Table, _, Row) :-
     throw(error(domain_error(backup_row(Table), Row), _)).
+
+backup_insert_batch_size(256).
+
+backup_write_insert_batch_row(Out, Table, Columns, row(Pairs), Counter) :- !,
+    arg(1, Counter, BatchCount0),
+    ( BatchCount0 =:= 0 ->
+        backup_write_insert_prefix(Out, Table, Columns),
+        format(Out, '~n  ', [])
+    ; format(Out, ',~n  ', [])
+    ),
+    backup_write_insert_values(Out, Columns, Pairs),
+    BatchCount1 is BatchCount0 + 1,
+    arg(2, Counter, Total0),
+    Total is Total0 + 1,
+    backup_insert_batch_size(BatchSize),
+    ( BatchCount1 >= BatchSize ->
+        format(Out, ';~n', []),
+        BatchCount = 0
+    ; BatchCount = BatchCount1
+    ),
+    nb_setarg(1, Counter, BatchCount),
+    nb_setarg(2, Counter, Total).
+backup_write_insert_batch_row(_, Table, _, Row, _) :-
+    throw(error(domain_error(backup_row(Table), Row), _)).
+
+backup_finish_insert_batch(Out, Counter) :-
+    arg(1, Counter, BatchCount),
+    ( BatchCount > 0 -> format(Out, ';~n', []) ; true ).
+
+backup_write_insert_prefix(Out, Table, Columns) :-
+    maplist(backup_column_name, Columns, Names),
+    maplist(backup_sql_identifier, Names, Identifiers),
+    atomic_list_concat(Identifiers, ', ', IdentifierText),
+    backup_sql_identifier(Table, QuotedTable),
+    format(Out, 'INSERT INTO ~w (~w) VALUES', [QuotedTable, IdentifierText]).
+
+backup_write_insert_values(Out, Columns, Pairs) :-
+    maplist(backup_column_name, Columns, Names),
+    maplist(backup_row_value(Pairs), Names, Values),
+    maplist(backup_sql_value, Values, Literals),
+    atomic_list_concat(Literals, ', ', LiteralText),
+    format(Out, '(~w)', [LiteralText]).
 
 backup_column_name(col(Name, _, _), Name).
 

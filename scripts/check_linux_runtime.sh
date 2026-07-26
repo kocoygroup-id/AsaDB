@@ -36,8 +36,8 @@ swipl --version
 
 cd "$ROOT"
 
-if ! swipl -q -g "use_module(library(assoc)),use_module(library(crypto)),use_module(library(uuid)),use_module(library(http/thread_httpd)),use_module(library(http/http_dispatch)),use_module(library(http/http_parameters)),use_module(library(http/http_client)),use_module(library(http/http_multipart_plugin)),use_module(library(http/json)),use_module(library(http/http_stream)),halt"; then
-  echo "FAIL: modul SWI-Prolog untuk core, HTTP, crypto, atau UUID tidak lengkap." >&2
+if ! swipl -q -g "use_module(library(assoc)),use_module(library(crypto)),use_module(library(uuid)),use_module(library(csv)),use_module(library(sgml)),use_module(library(zip)),use_module(library(http/thread_httpd)),use_module(library(http/http_dispatch)),use_module(library(http/http_parameters)),use_module(library(http/http_client)),use_module(library(http/http_multipart_plugin)),use_module(library(http/json)),use_module(library(http/http_stream)),halt"; then
+  echo "FAIL: modul SWI-Prolog untuk core, interchange, HTTP, crypto, atau UUID tidak lengkap." >&2
   exit 1
 fi
 
@@ -46,8 +46,8 @@ if ! swipl -q -g "current_predicate(thread_create/3),current_predicate(message_q
   exit 1
 fi
 
-if ! swipl -q -g "load_files('src/asadb_core.pl',[silent(true)]),load_files('src/bridge/reservoir.pl',[silent(true)]),load_files('src/bridge/horsemen/contract/war/here/yoru_the_wardevil.pl',[silent(true)]),load_files('src/asadb_web.pl',[silent(true)]),halt"; then
-  echo "FAIL: core, Reservoir, Process Guardian, atau backend web AsaDB tidak dapat dimuat." >&2
+if ! swipl -q -g "load_files('src/asadb_core.pl',[silent(true)]),load_files('src/asadb_interchange.pl',[silent(true)]),load_files('src/bridge/reservoir.pl',[silent(true)]),load_files('src/bridge/horsemen/contract/war/here/yoru_the_wardevil.pl',[silent(true)]),load_files('src/asadb_web.pl',[silent(true)]),list_undefined,halt"; then
+  echo "FAIL: core, interchange, Reservoir, Process Guardian, atau backend web AsaDB tidak dapat dimuat." >&2
   exit 1
 fi
 

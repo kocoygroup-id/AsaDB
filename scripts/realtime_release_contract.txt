@@ -8,7 +8,10 @@
 bundle|asadb-active-reservoir-job-v1
 bundle|/api/reservoir/cancel?id=
 bundle|/api/backup
+bundle|/api/export
 markup|importCancelBtn
 markup|AsaDB Backup
+markup|value="xlsx"
 backend|reservoir_jobs{
 backend|root('api/backup')
+backend|root('api/export')

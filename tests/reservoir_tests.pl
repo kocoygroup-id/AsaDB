@@ -27,6 +27,7 @@ run_reservoir_tests :-
     test_receiving_cancellation,
     test_live_progress_metadata,
     test_processing_cancellation,
+    test_interchange_metadata_idempotency,
     test_backpressure,
     test_underreported_stream_capacity,
     test_restart_recovery(JobId).
@@ -168,6 +169,32 @@ test_processing_cancellation :-
     must_equal(CancelledAgain.status, cancelled, terminal_cancel_idempotent_status),
     must_equal(CancelledAgain.cancel_requested, true, terminal_cancel_idempotent_flag).
 
+test_interchange_metadata_idempotency :-
+    MetadataA = _{
+        kind:interchange,format:csv,source_name:'rows.csv',
+        target_table:target_a,mode:replace
+    },
+    MetadataB = MetadataA.put(target_table, target_b),
+    submit_text_metadata('rows', 'metadata target A', 'metadata-key',
+                         MetadataA, FirstId, FirstAdmission),
+    must_equal(FirstAdmission, queued, metadata_first_admission),
+    reservoir_wait(FirstId, 5, result(table([n], [[1],[2],[3]]))),
+    reservoir_job_snapshot(FirstId, FirstSnapshot),
+    must_equal(FirstSnapshot.metadata.target_table, target_a,
+               metadata_snapshot_target),
+    submit_text_metadata('rows', 'metadata target B', 'metadata-key',
+                         MetadataB, SecondId, SecondAdmission),
+    must_equal(SecondAdmission, queued, metadata_target_not_deduplicated),
+    ( SecondId \== FirstId -> true
+    ; throw(error(assertion_failed(metadata_target_distinct_job,
+                                   expected(distinct), got(SecondId)), _))
+    ),
+    reservoir_wait(SecondId, 5, result(table([n], [[1],[2],[3]]))),
+    submit_text_metadata('rows', 'metadata target B retry', 'metadata-key',
+                         MetadataB, RetryId, RetryAdmission),
+    must_equal(RetryAdmission, duplicate, metadata_retry_deduplicated),
+    must_equal(RetryId, SecondId, metadata_retry_job_id).
+
 test_backpressure :-
     asadb_config_set(reservoir_max_jobs, 1),
     submit_text('slow', 'capacity holder', 'capacity-a', SlowId, _),
@@ -206,6 +233,14 @@ submit_text(Text, Label, Key, JobId, Admission) :-
     setup_call_cleanup(
         open_string(Text, In),
         reservoir_submit_stream(In, Label, 4, Key, true, JobId, Admission),
+        close(In)
+    ).
+
+submit_text_metadata(Text, Label, Key, Metadata, JobId, Admission) :-
+    setup_call_cleanup(
+        open_string(Text, In),
+        reservoir_submit_stream(In, Label, 4, Key, true,
+                                JobId, Admission, Metadata),
         close(In)
     ).
 

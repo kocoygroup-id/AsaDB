@@ -16,6 +16,7 @@
 :- use_module('asadb_core.pl').
 :- use_module('asadb_backup.pl').
 :- use_module('asadb_config.pl').
+:- use_module('asadb_interchange.pl').
 :- use_module('bridge/reservoir.pl').
 :- initialization(main, main).
 
@@ -53,6 +54,7 @@
 :- http_handler(root('api/catalog'), api_catalog, []).
 :- http_handler(root('api/metadata'), api_metadata, []).
 :- http_handler(root('api/backup'), api_backup, []).
+:- http_handler(root('api/export'), api_export, []).
 :- http_handler(root('api/import_file'), api_import_file, []).
 :- http_handler(root('api/import_upload'), api_import_upload, []).
 :- http_handler(root('api/import_progress'), api_import_progress, []).
@@ -116,6 +118,18 @@ reservoir_execute_job(JobId, SpoolPath, StopOnError, Result) :-
     with_mutex(asadb_execution,
         reservoir_execute_spooled_sql(JobId, SpoolPath, StopOnError, Result)).
 
+reservoir_execute_spooled_sql(JobId, SpoolPath, StopOnError, Result) :-
+    reservoir_job_snapshot(JobId, Snapshot),
+    get_dict(metadata, Snapshot, Metadata),
+    get_dict(kind, Metadata, interchange), !,
+    reservoir_interchange_options(Metadata, Format, OriginalName, Target, Mode),
+    asadb_interchange_prepare_import(SpoolPath, OriginalName, Format,
+                                     Target, Mode, Prepared, _),
+    setup_call_cleanup(
+        true,
+        reservoir_execute_prepared_sql(JobId, Prepared, StopOnError, Result),
+        asadb_interchange_cleanup(Prepared)
+    ).
 reservoir_execute_spooled_sql(JobId, SpoolPath, _, Result) :-
     size_file(SpoolPath, Size),
     Size =< 250000, !,
@@ -130,6 +144,19 @@ reservoir_execute_spooled_sql(JobId, SpoolPath, _, Result) :-
                               'Backend completed the spooled SQL command.', true).
 reservoir_execute_spooled_sql(JobId, SpoolPath, StopOnError, Result) :-
     import_sql_file_backend(SpoolPath, StopOnError, JobId, Result).
+
+reservoir_execute_prepared_sql(JobId, Prepared, StopOnError, Result) :-
+    import_sql_file_backend(Prepared, StopOnError, JobId, Result).
+
+reservoir_interchange_options(Metadata, Format, OriginalName, Target, Mode) :-
+    interchange_metadata_value(Metadata, format, auto, Format),
+    interchange_metadata_value(Metadata, source_name, 'import.sql',
+                               OriginalName),
+    interchange_metadata_value(Metadata, target_table, '', Target),
+    interchange_metadata_value(Metadata, mode, replace, Mode).
+
+interchange_metadata_value(Dict, Key, Default, Value) :-
+    ( get_dict(Key, Dict, Found) -> Value = Found ; Value = Default ).
 
 result_statement_count(multi(Results), Count) :- !, length(Results, Count).
 result_statement_count(_, 1).
@@ -423,6 +450,101 @@ api_backup_error(Error) :-
     term_atom_safe(Error, Message),
     json_error('400 Bad Request', Message).
 
+% Portable exports are separate from authenticated .asb backups.  Like the
+% backup endpoint, this endpoint accepts selection controls only; all rows are
+% scanned from backend storage by the Prolog interchange module.
+api_export(Request) :-
+    member(method(post), Request), !,
+    ( authorized_api(Request) ->
+        catch(api_export_authorized(Request), Error, api_backup_error(Error))
+    ; json_error('403 Forbidden', 'Forbidden')
+    ).
+api_export(_) :-
+    json_error('405 Method Not Allowed', 'POST only').
+
+api_export_authorized(Request) :-
+    http_read_data(Request, Data, []),
+    backup_request_database(Data, Database),
+    backup_request_output(Data, Output),
+    export_request_format(Data, Format),
+    export_request_options(Data, Options),
+    asadb_interchange_export(Database, Format, Options, File, Metadata),
+    setup_call_cleanup(
+        true,
+        serve_interchange_export(File, Output, Metadata),
+        asadb_interchange_cleanup(File)
+    ).
+
+export_request_format(Data, Format) :-
+    member(format=Raw, Data),
+    memberchk(Raw, [mysql,postgresql,csv,xlsx]), !,
+    Format = Raw.
+export_request_format(_, _) :-
+    throw(error(domain_error(interchange_export_format, missing), _)).
+
+export_request_options(Data, Options) :-
+    export_form_tables(Data, Tables),
+    export_form_named_tables(Data, data_tables, all, DataTables),
+    export_form_bool(Data, include_schema, true, IncludeSchema),
+    export_form_bool(Data, include_data, true, IncludeData),
+    export_form_bool(Data, create_database, true, CreateDatabase),
+    export_form_bool(Data, drop_tables, true, DropTables),
+    Options = _{
+        tables:Tables,
+        data_tables:DataTables,
+        include_schema:IncludeSchema,
+        include_data:IncludeData,
+        create_database:CreateDatabase,
+        drop_tables:DropTables
+    }.
+
+export_form_tables(Data, Tables) :-
+    member(tables=Raw, Data),
+    atom(Raw),
+    Raw \== '', !,
+    atomic_list_concat(Parts0, ',', Raw),
+    exclude(=(''), Parts0, Tables).
+export_form_tables(_, all).
+
+export_form_named_tables(Data, Key, Default, Tables) :-
+    ( member(Pair, Data),
+      Pair = (FoundKey=Raw),
+      FoundKey == Key,
+      atom(Raw) ->
+        ( Raw == '' ->
+            Tables = []
+        ; atomic_list_concat(Parts0, ',', Raw),
+          exclude(=(''), Parts0, Tables)
+        )
+    ; Tables = Default
+    ).
+
+export_form_bool(Data, Name, Default, Value) :-
+    ( member(Pair, Data),
+      Pair = (FoundName=Raw),
+      FoundName == Name ->
+        ( memberchk(Raw, [true,'true',yes,'yes','1',1,on,'on']) ->
+            Value = true
+        ; Value = false
+        )
+    ; Value = Default
+    ).
+
+serve_interchange_export(File, Output, Metadata) :-
+    security_headers,
+    format('Content-type: ~w~n', [Metadata.content_type]),
+    format('Content-length: ~w~n', [Metadata.bytes]),
+    format('X-AsaDB-Export-Format: ~w~n', [Metadata.format]),
+    format('X-AsaDB-Export-Rows: ~w~n', [Metadata.row_count]),
+    ( Output == open -> Disposition = inline ; Disposition = attachment ),
+    format('Content-Disposition: ~w; filename="~w"~n~n',
+           [Disposition, Metadata.filename]),
+    setup_call_cleanup(
+        open(File, read, In, [type(binary)]),
+        copy_stream_data(In, current_output),
+        close(In)
+    ).
+
 api_reservoir_jobs(Request) :-
     member(method(get), Request), !,
     ( authorized_api(Request) ->
@@ -438,11 +560,13 @@ api_reservoir_jobs(Request) :-
             request_stop_on_error(Request, StopOnError),
             request_idempotency_key(Request, IdempotencyKey),
             request_job_label(Request, Label),
+            request_reservoir_metadata(Request, Metadata),
             setup_call_cleanup(
                 true,
                 catch(
-                    ( reservoir_submit_stream(In, Label, Size, IdempotencyKey, StopOnError,
-                                              JobId, Admission),
+                    ( reservoir_submit_stream(In, Label, Size, IdempotencyKey,
+                                              StopOnError, JobId, Admission,
+                                              Metadata),
                       reservoir_job_snapshot(JobId, Snapshot),
                       Response = reservoir_admission{
                           status:accepted,
@@ -474,8 +598,17 @@ api_reservoir_file(Request) :-
             catch(
                 ( import_stop_on_error(Data, StopOnError),
                   form_idempotency_key(Data, IdempotencyKey),
-                  reservoir_submit_file(File, File, IdempotencyKey, StopOnError,
-                                        JobId, Admission, Size),
+                  import_interchange_options(Data, Format, Target, Mode),
+                  Metadata = _{
+                      kind:interchange,
+                      format:Format,
+                      source_name:File,
+                      target_table:Target,
+                      mode:Mode
+                  },
+                  reservoir_submit_file(File, File, IdempotencyKey,
+                                        StopOnError, JobId, Admission, Size,
+                                        Metadata),
                   reservoir_job_snapshot(JobId, Snapshot),
                   Response = reservoir_admission{
                       status:accepted,
@@ -571,8 +704,10 @@ api_import_file_authorized(Request) :-
         exists_file(File)
     ->  import_stop_on_error(Data, StopOnError),
         import_id(Data, ImportId),
+        import_interchange_options(Data, Format, Target, Mode),
         with_mutex(asadb_execution,
                    import_uploaded_database_file(File, File,
+                                                 Format, Target, Mode,
                                                  StopOnError, ImportId, Result)),
         asadb_result_json(Result, JSON),
         json_response(JSON)
@@ -595,11 +730,14 @@ api_import_upload_authorized(Request) :-
     (   member(file=upload(TempFile, OriginalName, Size), Data)
     ->  import_stop_on_error(Data, StopOnError),
         import_id(Data, ImportId),
+        import_interchange_options(Data, Format, Target, Mode),
         setup_call_cleanup(
             true,
             with_mutex(asadb_execution,
                        import_uploaded_database_file(TempFile, OriginalName,
-                                                     StopOnError, ImportId, Result0)),
+                                                     Format, Target, Mode,
+                                                     StopOnError, ImportId,
+                                                     Result0)),
             cleanup_uploaded_import_file(TempFile)
         ),
         uploaded_import_result(Result0, OriginalName, Size, Result),
@@ -611,7 +749,8 @@ api_import_upload_authorized(Request) :-
 % A production backup is verified before it reaches the SQL importer.  Its
 % catalog-only objects are staged immediately before COMMIT, making the full
 % restore atomic: SQL rows and catalog objects succeed or roll back together.
-import_uploaded_database_file(File, OriginalName, StopOnError, ImportId, Result) :-
+import_uploaded_database_file(File, OriginalName, Format, Target, Mode,
+                              StopOnError, ImportId, Result) :-
     ( production_backup_candidate(File, OriginalName) ->
         asadb_backup_prepare_restore(File, Database, PayloadFile, Manifest),
         setup_call_cleanup(
@@ -620,7 +759,27 @@ import_uploaded_database_file(File, OriginalName, StopOnError, ImportId, Result)
                                               StopOnError, ImportId, Result),
             asadb_backup_cleanup(PayloadFile)
         )
-    ; import_sql_file_backend(File, StopOnError, ImportId, Result)
+    ; asadb_interchange_prepare_import(File, OriginalName, Format,
+                                       Target, Mode, Prepared, _),
+      setup_call_cleanup(
+          true,
+          import_sql_file_backend(Prepared, StopOnError, ImportId, Result),
+          asadb_interchange_cleanup(Prepared)
+      )
+    ).
+
+import_interchange_options(Data, Format, Target, Mode) :-
+    import_form_value(Data, format, auto, Format),
+    import_form_value(Data, target_table, '', Target),
+    import_form_value(Data, mode, replace, Mode).
+
+import_form_value(Data, Key, Default, Value) :-
+    ( member(Pair, Data),
+      Pair = (FoundKey=Found),
+      FoundKey == Key,
+      Found \== '' ->
+        Value = Found
+    ; Value = Default
     ).
 
 % A file called .asb is never permitted to fall through into the generic SQL
@@ -756,7 +915,8 @@ allowed_import_path_clean(Clean, File) :-
 safe_import_file_name(Name) :-
     \+ sub_atom(Name, _, _, _, '/'),
     file_name_extension(_, Ext, Name),
-    member(Ext, [asb,sql,mysql,pgsql,psql,postgres]).
+    downcase_atom(Ext, Lower),
+    member(Lower, [asb,sql,mysql,pgsql,psql,postgres,csv,zip,xlsx]).
 
 stress_import_file(Name, File) :-
     directory_file_path('stress tests', Name, Candidate),
@@ -1246,6 +1406,29 @@ request_job_label(Request, Label) :-
     Raw \= '', !,
     Label = Raw.
 request_job_label(_, 'SQL command').
+
+request_reservoir_metadata(Request, Metadata) :-
+    request_header(x_asadb_import_format, Request, Format),
+    atom(Format),
+    Format \== '', !,
+    request_header_default(x_asadb_import_name, Request,
+                           'import.sql', SourceName),
+    request_header_default(x_asadb_import_table, Request, '', Target),
+    request_header_default(x_asadb_import_mode, Request, replace, Mode),
+    Metadata = _{
+        kind:interchange,
+        format:Format,
+        source_name:SourceName,
+        target_table:Target,
+        mode:Mode
+    }.
+request_reservoir_metadata(_, _{}).
+
+request_header_default(Name, Request, Default, Value) :-
+    ( request_header(Name, Request, Found), atom(Found), Found \== '' ->
+        Value = Found
+    ; Value = Default
+    ).
 
 form_idempotency_key(Data, Key) :-
     member(idempotency_key=Raw, Data),

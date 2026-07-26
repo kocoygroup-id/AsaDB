@@ -12,10 +12,12 @@ main :-
     run_sql_file('tests/critical_select_features.sql'),
     run_persistence_assertions,
     run_metadata_persistence_assertions,
+    run_metadata_version_upgrade_assertions,
     run_alter_order_assertions,
     run_auto_increment_assertions,
     run_order_by_duplicate_assertions,
     run_order_by_wildcard_assertions,
+    run_order_by_filtered_projection_assertions,
     run_delete_where_safety_assertions,
     run_duplicate_column_assertions,
     run_bare_identifier_insert_assertions,
@@ -23,9 +25,11 @@ main :-
     run_read_only_no_autosave_assertions,
     run_limited_result_assertions,
     run_storage_engine_assertions,
+    run_logic_jit_assertions,
     run_drop_table_cleanup_assertions,
     run_catalog_multitable_assertions,
     run_critical_select_assertions,
+    run_join_syntax_compat_assertions,
     run_mysql55_manifest_assertions,
     cleanup,
     halt(0).
@@ -106,6 +110,63 @@ run_metadata_persistence_assertions :-
         cleanup,
         halt(1)
     ),
+    asadb_shutdown,
+    cleanup.
+
+run_metadata_version_upgrade_assertions :-
+    cleanup,
+    StaleMetadata = metadata{
+        format:1,
+        database_id:'asa-upgrade-regression',
+        created_at:'2026-01-01T00:00:00Z',
+        updated_at:'2026-01-01T00:00:00Z',
+        last_checkpoint_at:'2026-01-01T00:00:00Z',
+        checkpoint_count:7,
+        engine_version:'1.3.0',
+        storage_format:3,
+        summary:summary{row_count:42}
+    },
+    setup_call_cleanup(
+        open('tests/testdata.asa.meta', write, Out, [encoding(utf8)]),
+        ( write_canonical(Out, StaleMetadata), write(Out, '.\n') ),
+        close(Out)
+    ),
+    asadb_boot('tests/testdata.asa'),
+    asadb_database_metadata(Upgraded),
+    ( Upgraded.engine_version == '1.4.0',
+      Upgraded.storage_format =:= 3,
+      Upgraded.database_id == 'asa-upgrade-regression',
+      Upgraded.checkpoint_count =:= 7 ->
+        true
+    ;   format('ASSERTION FAILED: stale metadata was not upgraded safely: ~w.~n', [Upgraded]),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ),
+    asadb_shutdown,
+    cleanup.
+
+run_join_syntax_compat_assertions :-
+    cleanup,
+    asadb_boot('tests/testdata.asa'),
+    Setup = 'CREATE DATABASE join_syntax; USE join_syntax; CREATE TABLE a (id INT PRIMARY KEY, label TEXT, bucket TEXT); CREATE TABLE b (id INT PRIMARY KEY, status TEXT, bucket TEXT); INSERT INTO a VALUES (1, ''one'', ''x''), (2, ''two'', ''x''); INSERT INTO b VALUES (1, ''active'', ''x''), (2, ''idle'', ''y'');',
+    asadb_exec_sql(Setup, SetupResult),
+    ( result_has_error(SetupResult) ->
+        asadb_format_result(SetupResult),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ; true
+    ),
+    expect_sql('SELECT a.id, a.label, b.status FROM a JOIN b USING (id) ORDER BY a.id;',
+               table(['a.id','a.label','b.status'],
+                     [[1,one,active],[2,two,idle]])),
+    expect_sql('SELECT a.id, b.status FROM a JOIN b USING (id, bucket);',
+               table(['a.id','b.status'], [[1,active]])),
+    expect_sql('SELECT COUNT(*) AS total FROM a CROSS JOIN b;',
+               table([total], [[4]])),
+    expect_sql('SELECT a.id, b.status FROM a, b WHERE a.id = b.id ORDER BY a.id;',
+               table(['a.id','b.status'], [[1,active],[2,idle]])),
     asadb_shutdown,
     cleanup.
 
@@ -196,6 +257,60 @@ run_order_by_wildcard_assertions :-
     ),
     asadb_shutdown,
     cleanup.
+
+% A paged table must be able to sort by a selected text column while WHERE
+% filters on another column.  This crosses multiple sorter buffers, covering
+% the production Double_Company query shape without making the core suite
+% depend on an external stress-import file.
+run_order_by_filtered_projection_assertions :-
+    cleanup,
+    asadb_boot('tests/testdata.asa'),
+    order_by_filtered_projection_fixture(1024, Setup),
+    asadb_exec_sql(Setup, SetupResult),
+    ( result_has_error(SetupResult) ->
+        asadb_format_result(SetupResult),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ; true
+    ),
+    Query = 'SELECT department FROM Double_Company WHERE transaction_count < 1000 ORDER BY department;',
+    asadb_exec_sql_limited(Query, 500, Result),
+    ( Result = multi([table([department], Rows)]),
+      length(Rows, 500),
+      rows_are_ascending(Rows) ->
+        true
+    ; format('ASSERTION FAILED: filtered projected ORDER BY result: ~q.~n', [Result]),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    asadb_shutdown,
+    cleanup.
+
+order_by_filtered_projection_fixture(RowCount, SQL) :-
+    findall(Row,
+            ( between(1, RowCount, Id),
+              order_fixture_department(Id, Department),
+              TransactionCount is Id,
+              format(atom(Row), '(~w, ''~w'', ~w)',
+                     [Id, Department, TransactionCount])
+            ),
+            Rows),
+    atomic_list_concat(Rows, ', ', Values),
+    format(atom(SQL),
+           'CREATE DATABASE order_projection_assert; USE order_projection_assert; CREATE TABLE Double_Company (company_id INT, department VARCHAR(60), transaction_count INT); INSERT INTO Double_Company VALUES ~w;',
+           [Values]).
+
+order_fixture_department(Id, 'Accounting') :- Id mod 3 =:= 0, !.
+order_fixture_department(Id, 'Finance') :- Id mod 3 =:= 1, !.
+order_fixture_department(_, 'Sales').
+
+rows_are_ascending([]).
+rows_are_ascending([_]).
+rows_are_ascending([[Left], [Right]|Rows]) :-
+    Left @=< Right,
+    rows_are_ascending([[Right]|Rows]).
 
 run_delete_where_safety_assertions :-
     cleanup,
@@ -394,6 +509,81 @@ run_storage_engine_assertions :-
         cleanup,
         halt(1)
     ),
+    asadb_shutdown,
+    cleanup.
+
+run_logic_jit_assertions :-
+    cleanup,
+    asadb_boot('tests/testdata.asa'),
+    Setup = 'CREATE DATABASE logic_jit_assert; USE logic_jit_assert; CREATE TABLE truth_table (id INT, enabled INT, blocked INT); INSERT INTO truth_table VALUES (1, 1, 0), (2, 1, 1), (3, 0, 1), (4, 0, 0), (5, NULL, 0);',
+    asadb_exec_sql(Setup, SetupResult),
+    ( result_has_error(SetupResult) ->
+        asadb_format_result(SetupResult),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ; true
+    ),
+    expect_sql('LOCK TABLES logic_jit_assert.truth_table WRITE;',
+               ok(locked_tables([logic_jit_assert-truth_table]))),
+    expect_sql('UNLOCK TABLES;', ok(unlocked_tables)),
+    expect_sql('SELECT * FROM truth_table GROUP BY enabled;',
+               table([enabled], [[1],[0],[null]])),
+    Query = 'SELECT id FROM truth_table WHERE enabled = 1 XOR blocked = 1 ORDER BY id;',
+    expect_sql(Query, table([id], [[1],[3]])),
+    expect_sql(Query, table([id], [[1],[3]])),
+    expect_sql('SELECT id FROM truth_table WHERE enabled IS TRUE XOR blocked IS TRUE ORDER BY id;',
+               table([id], [[1],[3]])),
+    expect_sql('SELECT id FROM truth_table WHERE enabled IS UNKNOWN ORDER BY id;',
+               table([id], [[5]])),
+    expect_sql('SELECT id FROM truth_table WHERE enabled IS NOT FALSE ORDER BY id;',
+               table([id], [[1],[2],[5]])),
+    expect_sql('SELECT id FROM truth_table WHERE id / 2 >= 2 ORDER BY id;',
+               table([id], [[4],[5]])),
+    asadb_storage_stats(Stats),
+    get_dict(jit, Stats, Jit),
+    get_dict(parse_hits, Jit, ParseHits),
+    get_dict(filter_hits, Jit, FilterHits),
+    get_dict(filter_cache_entries, Jit, FilterEntries),
+    get_dict(filter_cache_limit, Jit, FilterLimit),
+    get_dict(native_code, Jit, false),
+    ( ParseHits >= 1,
+      FilterHits >= 1,
+      FilterEntries >= 1,
+      FilterEntries =< FilterLimit ->
+        true
+    ;   format('ASSERTION FAILED: bounded Prolog JIT cache was not exercised: ~w.~n',
+               [Jit]),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ),
+    % Exercise eviction as well as hits: both caches must stay bounded even
+    % when an application emits many literal-specific query/filter shapes.
+    forall(between(1, 140, N),
+           ( format(atom(SQL), 'SELECT id FROM truth_table WHERE id = ~d;', [N]),
+             asadb_parse_sql(SQL, _),
+             Expression = cmp('=', col(id), value(N)),
+             asadb_core:prepare_row_filter(Expression, _)
+           )),
+    asadb_storage_stats(BoundedStats),
+    get_dict(jit, BoundedStats, BoundedJit),
+    get_dict(sql_cache_entries, BoundedJit, SQLCacheEntries),
+    get_dict(sql_cache_limit, BoundedJit, SQLCacheLimit),
+    get_dict(filter_cache_entries, BoundedJit, BoundedFilterEntries),
+    get_dict(filter_cache_limit, BoundedJit, BoundedFilterLimit),
+    ( SQLCacheEntries =:= SQLCacheLimit,
+      BoundedFilterEntries =:= BoundedFilterLimit ->
+        true
+    ;   format('ASSERTION FAILED: Prolog JIT caches exceeded or missed their bounds: ~w.~n',
+               [BoundedJit]),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ),
+    % The original plan was among the oldest entries and may have been
+    % evicted. Recompilation after eviction must remain transparent.
+    expect_sql(Query, table([id], [[1],[3]])),
     asadb_shutdown,
     cleanup.
 

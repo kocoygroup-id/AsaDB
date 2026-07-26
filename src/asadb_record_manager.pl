@@ -14,6 +14,9 @@
     asadb_record_insert_batch/2,
     asadb_record_insert_batch/3,
     asadb_record_scan/3,
+    asadb_record_scan_columns/4,
+    asadb_record_scan_columns/5,
+    asadb_record_scan_verified/3,
     asadb_record_read/3,
     asadb_record_read_rids/3,
     asadb_record_update_batch/3,
@@ -194,10 +197,11 @@ append_rows(File, Rows, Rids) :-
 
 record_append_chunk_size(8192).
 
-% The buffered path is faster for ordinary DML and indexed JOIN fixtures.
-% Switch to the streaming writer only for the very large generated batches
-% that otherwise approach the Prolog stack limit.
-record_direct_append_threshold(16000).
+% Once a batch spans more than a handful of pages, writing each completed page
+% through the small random-access buffer pool adds avoidable eviction/flush
+% churn.  Keep tiny interactive INSERTs buffered, but stream bulk runs through
+% one open file descriptor.
+record_direct_append_threshold(512).
 
 append_rows_without_rids_for_batch(File, Rows) :-
     length(Rows, Count),
@@ -365,7 +369,48 @@ rows_bytes([Row|Rows], [Bytes|Encoded]) :-
 asadb_record_scan(StoreId, Rid, Row) :-
     store_file(StoreId, File),
     asadb_pager_scan_page(File, PageNo, Page),
-    asadb_page_validate(Page),
+    % Normal sequential SELECT scans validate the page envelope while keeping
+    % checksum verification on the explicit integrity paths below.  Repeating
+    % a byte-by-byte checksum over every page made an unindexed ORDER BY on a
+    % large table spend most of its time revalidating storage rather than
+    % evaluating SQL.  Point reads remain checksum-verified and backup/restore
+    % uses asadb_record_scan_verified/3.
+    asadb_page_header(Page, _),
+    asadb_page_records(Page, Records),
+    member(Slot-Bytes, Records),
+    bytes_row(Bytes, Row),
+    Rid = rid(PageNo, Slot).
+
+% Decode only the fields needed by a simple paged SELECT.  Record values are
+% self-describing, so fields that cannot affect projection, WHERE, or ORDER
+% can be skipped without allocating their text/UTF-8 terms.  Complex callers
+% continue to use asadb_record_scan/3 and receive complete rows.
+asadb_record_scan_columns(StoreId, Names, Rid, Row) :-
+    store_file(StoreId, File),
+    asadb_pager_scan_page(File, PageNo, Page),
+    asadb_page_header(Page, _),
+    asadb_page_records(Page, Records),
+    member(Slot-Bytes, Records),
+    bytes_row_columns(Bytes, Names, Row),
+    Rid = rid(PageNo, Slot).
+
+% The table schema supplies the canonical field order.  Using it avoids
+% UTF-8-decoding every stored field name for every row of a large scan; only
+% requested values are decoded.  If an older/noncanonical row is encountered,
+% the name-aware /4 decoder remains the safe fallback.
+asadb_record_scan_columns(StoreId, ColumnNames, Names, Rid, Row) :-
+    store_file(StoreId, File),
+    asadb_pager_scan_page(File, PageNo, Page),
+    asadb_page_header(Page, _),
+    asadb_page_records(Page, Records),
+    member(Slot-Bytes, Records),
+    bytes_row_columns(Bytes, ColumnNames, Names, Row),
+    Rid = rid(PageNo, Slot).
+
+asadb_record_scan_verified(StoreId, Rid, Row) :-
+    store_file(StoreId, File),
+    asadb_pager_scan_page(File, PageNo, Page),
+    ensure_record_page_valid(File, PageNo, Page),
     asadb_page_records(Page, Records),
     member(Slot-Bytes, Records),
     bytes_row(Bytes, Row),
@@ -568,6 +613,84 @@ bytes_row(Bytes, Row) :-
     phrase(utf8_codes(Codes), Bytes),
     read_term_from_codes(Codes, Row, []).
 
+bytes_row_columns([82,1|Bytes], Names, row(Pairs)) :- !,
+    read_u16_record(Bytes, PairCount, Rest),
+    decode_row_pairs_columns(PairCount, Rest, Names, Pairs, []).
+bytes_row_columns(Bytes, Names, row(Selected)) :-
+    bytes_row(Bytes, row(Pairs)),
+    select_row_pairs(Names, Pairs, Selected).
+
+bytes_row_columns([82,1|Bytes], ColumnNames, Names, row(Pairs)) :- !,
+    read_u16_record(Bytes, PairCount, Rest),
+    length(ColumnNames, ColumnCount),
+    ( PairCount =:= ColumnCount ->
+        decode_row_pairs_column_positions(ColumnNames, Rest, Names, Pairs, [])
+    ; decode_row_pairs_columns(PairCount, Rest, Names, Pairs, [])
+    ).
+bytes_row_columns(Bytes, _ColumnNames, Names, Row) :-
+    bytes_row_columns(Bytes, Names, Row).
+
+decode_row_pairs_column_positions([], Rest, _, [], Rest).
+decode_row_pairs_column_positions([Name|ColumnNames], Bytes0, Names,
+                                  Pairs, Rest) :-
+    read_u16_record(Bytes0, NameLength, Bytes1),
+    drop_record_bytes(NameLength, Bytes1, Bytes2),
+    ( record_identifier_member(Name, Names) ->
+        decode_record_value(Bytes2, Value, Bytes3),
+        Pairs = [Name=Value|Tail]
+    ; skip_record_value(Bytes2, Bytes3),
+      Pairs = Tail
+    ),
+    decode_row_pairs_column_positions(ColumnNames, Bytes3, Names, Tail, Rest).
+
+decode_row_pairs_columns(0, Rest, _, [], Rest) :- !.
+decode_row_pairs_columns(Count, Bytes0, Names, Pairs, Rest) :-
+    read_u16_record(Bytes0, NameLength, Bytes1),
+    take_record_bytes(NameLength, Bytes1, NameBytes, Bytes2),
+    utf8_atom(NameBytes, Name),
+    Next is Count - 1,
+    ( record_identifier_member(Name, Names) ->
+        decode_record_value(Bytes2, Value, Bytes3),
+        Pairs = [Name=Value|Tail]
+    ; skip_record_value(Bytes2, Bytes3),
+      Pairs = Tail
+    ),
+    decode_row_pairs_columns(Next, Bytes3, Names, Tail, Rest).
+
+skip_record_value([0|Bytes], Bytes) :- !.
+skip_record_value([1|Bytes0], Bytes) :- !,
+    drop_record_bytes(8, Bytes0, Bytes).
+skip_record_value([2|Bytes0], Bytes) :- !,
+    skip_length_bytes(Bytes0, Bytes).
+skip_record_value([3|Bytes0], Bytes) :- !,
+    skip_length_bytes(Bytes0, Bytes).
+skip_record_value([4|Bytes0], Bytes) :- !,
+    skip_length_bytes(Bytes0, Bytes).
+skip_record_value([5|Bytes0], Bytes) :-
+    skip_length_bytes(Bytes0, Bytes).
+
+skip_length_bytes(Bytes0, Bytes) :-
+    read_u16_record(Bytes0, Length, Bytes1),
+    drop_record_bytes(Length, Bytes1, Bytes).
+
+select_row_pairs(_, [], []).
+select_row_pairs(Names, [Name=Value|Pairs], [Name=Value|Selected]) :-
+    record_identifier_member(Name, Names), !,
+    select_row_pairs(Names, Pairs, Selected).
+select_row_pairs(Names, [_|Pairs], Selected) :-
+    select_row_pairs(Names, Pairs, Selected).
+
+record_identifier_member(Name, [Candidate|_]) :-
+    same_record_identifier(Name, Candidate), !.
+record_identifier_member(Name, [_|Names]) :-
+    record_identifier_member(Name, Names).
+
+same_record_identifier(A, B) :-
+    atom(A), atom(B),
+    downcase_atom(A, LowerA),
+    downcase_atom(B, LowerB),
+    LowerA == LowerB.
+
 encode_row_pairs([], []).
 encode_row_pairs([Name=Value|Pairs], Bytes) :-
     atom_utf8_bytes(Name, NameBytes),
@@ -676,6 +799,12 @@ take_record_bytes(N, [Byte|Bytes], [Byte|Taken], Rest) :-
     N > 0,
     Next is N - 1,
     take_record_bytes(Next, Bytes, Taken, Rest).
+
+drop_record_bytes(0, Bytes, Bytes) :- !.
+drop_record_bytes(N, [_|Bytes], Rest) :-
+    N > 0,
+    Next is N - 1,
+    drop_record_bytes(Next, Bytes, Rest).
 
 store_file(StoreId, File) :-
     record_root(Root),
