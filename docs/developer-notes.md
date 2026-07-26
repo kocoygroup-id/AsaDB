@@ -86,6 +86,19 @@ LOGIN reader IDENTIFIED BY 'pw';
 
 Permission check sudah aktif untuk `SELECT`, `INSERT`, `UPDATE`, `DELETE`, dan `ALTER` pada scope `db.table`, `db.*`, atau `*.*`.
 
+## Local TVCC
+
+`src/asadb_tvcc.pl` owns the reader-generation lifecycle. Keep its contract
+strict: it is one local writer plus immutable `SELECT` snapshots, not an
+alternative mutation path. Any new action that changes a physical table store
+must be recognized by `tvcc_action_table/3`; otherwise the publisher cannot
+know which heap/index files require a fresh copy. New catalog-only actions may
+reuse all existing immutable record files.
+
+Never remove a generation that has `tvcc_reader/2` references. The regression
+test intentionally pins the oldest generation while a writer reaches the
+fourth publication. See [tvcc.md](tvcc.md) before changing this code.
+
 ## Build release
 
 `qsave_program/2` bisa membuat saved state SWI-Prolog:

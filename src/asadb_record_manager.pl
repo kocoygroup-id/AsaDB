@@ -22,7 +22,8 @@
     asadb_record_update_batch/3,
     asadb_record_delete_batch/3,
     asadb_record_rewrite/5,
-    asadb_record_stats/2
+    asadb_record_stats/2,
+    asadb_record_with_root/2
 ]).
 
 :- use_module(library(readutil)).
@@ -35,8 +36,10 @@
 :- dynamic record_tx_active/0.
 :- dynamic record_tx_snapshot/3.
 :- dynamic record_page_checked/2.
+:- thread_local record_snapshot_root/1.
 
 :- meta_predicate asadb_record_rewrite(+, 2, -, -, -).
+:- meta_predicate asadb_record_with_root(+, 0).
 
 asadb_record_store_open(BaseFile) :-
     atom_concat(BaseFile, '.store', Root),
@@ -45,6 +48,15 @@ asadb_record_store_open(BaseFile) :-
     retractall(record_page_checked(_, _)),
     assertz(record_root(Root)),
     recover_store_root(Root).
+
+% A TVCC reader receives a private immutable record root for one query.
+% Writers never install this context and continue through normal recovery.
+asadb_record_with_root(Root, Goal) :-
+    setup_call_cleanup(
+        assertz(record_snapshot_root(Root)),
+        call(Goal),
+        retractall(record_snapshot_root(_))
+    ).
 
 asadb_record_tx_begin :-
     record_tx_active, !.
@@ -89,7 +101,7 @@ asadb_record_index_file(StoreId, Column, File) :-
     phrase(utf8_codes(Codes), Bytes),
     bytes_hex(Bytes, HexCodes),
     atom_codes(ColumnId, HexCodes),
-    record_root(Root),
+    active_record_root(Root),
     atomic_list_concat([StoreId, '.', ColumnId, '.btree'], Name),
     directory_file_path(Root, Name, File).
 
@@ -807,9 +819,12 @@ drop_record_bytes(N, [_|Bytes], Rest) :-
     drop_record_bytes(Next, Bytes, Rest).
 
 store_file(StoreId, File) :-
-    record_root(Root),
+    active_record_root(Root),
     atomic_list_concat([StoreId, '.heap'], Name),
     directory_file_path(Root, Name, File).
+
+active_record_root(Root) :- record_snapshot_root(Root), !.
+active_record_root(Root) :- record_root(Root).
 
 begin_append_undo(File) :-
     asadb_pager_flush,

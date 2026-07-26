@@ -28,6 +28,8 @@
     asadb_exec_sql/2,
     asadb_exec_sql_limited/3,
     asadb_exec_sql_page/4,
+    asadb_exec_sql_snapshot_limited/3,
+    asadb_exec_sql_snapshot_page/4,
     asadb_parse_sql/2,
     asadb_analyze_sql/2,
     asadb_current_database/1,
@@ -62,6 +64,7 @@
 :- use_module('asadb_mysql55_compat.pl').
 :- use_module('asadb_prolog_jit.pl').
 :- use_module('asadb_sql_frontend.pl', [asadb_parse_statement/2]).
+:- use_module('asadb_tvcc.pl').
 
 :- dynamic asadb_state/1.
 :- dynamic asadb_file/1.
@@ -77,6 +80,8 @@
 :- dynamic asadb_hot_filter_tick/1.
 :- dynamic asadb_checkpoint_dirty/0.
 :- thread_local asadb_query_batch_depth/1.
+:- thread_local asadb_tvcc_read_state/1.
+:- thread_local asadb_tvcc_read_db/1.
 
 asadb_magic("ASADB001\n").
 
@@ -263,7 +268,12 @@ asadb_boot(InputFile) :-
     assertz(asadb_state(Recovered)),
     ensure_catalog,
     restore_current_db,
-    assertz(asadb_current_user(admin)).
+    assertz(asadb_current_user(admin)),
+    % A boot snapshot is built only after recovery and catalog initialization
+    % have completed.  It must not force a checkpoint just to create a reader
+    % image, because that would change recovery and metadata accounting.
+    asadb_state(BootState),
+    asadb_tvcc_boot(File, BootState).
 
 load_storage_config(File) :-
     asadb_config_load('asadb.conf'),
@@ -304,7 +314,8 @@ asadb_shutdown :-
     retractall(asadb_checkpoint_dirty),
     retractall(asadb_query_batch_depth(_)),
     asadb_buffer_pool_flush_all,
-    asadb_metadata_close.
+    asadb_metadata_close,
+    asadb_tvcc_shutdown.
 
 asadb_save_if_needed :-
     asadb_file(File),
@@ -328,11 +339,16 @@ asadb_save :-
 asadb_save_locked :-
     asadb_file(File),
     asadb_state(State),
+    % A TVCC generation copies durable heap files.  Flush buffered pages
+    % before catalog/checkpoint publication so its row count and page image
+    % always describe the same commit.
+    asadb_pager_flush,
     asadb_save_file(File, State),
     clear_wal,
     retractall(asadb_checkpoint_dirty),
     metadata_checkpoint_summary(State, Summary),
-    catch(asadb_metadata_checkpoint(Summary), _, true).
+    catch(asadb_metadata_checkpoint(Summary), _, true),
+    asadb_tvcc_publish(File, State).
 
 mark_state_upgrade(state(V, _)) :-
     ( \+ integer(V) ; V < 3 ), !,
@@ -423,12 +439,13 @@ asadb_backup_restore_catalog_objects_locked(Database, Views, Functions, Procedur
     assertz(asadb_state(State)),
     asadb_save_locked.
 
-asadb_storage_stats(storage{config:Config,pager:PagerStats,btree_cache:btree_cache{entries:CacheEntries},planner:Planner,jit:Jit}) :-
+asadb_storage_stats(storage{config:Config,pager:PagerStats,btree_cache:btree_cache{entries:CacheEntries},planner:Planner,jit:Jit,tvcc:Tvcc}) :-
     asadb_config_snapshot(Config),
     asadb_pager_stats(PagerStats),
     aggregate_all(count, asadb_btree_cache(_, _, _, _), CacheEntries),
     planner_stats_dict(Planner),
-    logic_jit_stats(Jit).
+    logic_jit_stats(Jit),
+    asadb_tvcc_stats(Tvcc).
 
 asadb_database_metadata(Metadata) :-
     asadb_metadata_snapshot(Identity),
@@ -560,6 +577,9 @@ note_plan(Name) :-
     Next is Current + 1,
     assertz(asadb_plan_stat(Name, Next)).
 
+asadb_current_database(Name) :-
+    asadb_tvcc_read_db(Name),
+    Name \== none, !.
 asadb_current_database(Name) :-
     asadb_current_db(Name), !.
 asadb_current_database(none).
@@ -763,6 +783,33 @@ asadb_exec_sql_page(SQL, Offset, MaxRows, Result) :-
         Result = multi(Results)
     )), Error, Result = error(runtime_error, Error)).
 
+% The HTTP SELECT path uses this wrapper instead of opening the mutable record
+% store.  Catalog and heap files are bound to the same committed generation.
+asadb_exec_sql_snapshot_limited(SQL, MaxRows, Result) :-
+    asadb_with_tvcc_snapshot(asadb_exec_sql_limited(SQL, MaxRows, Result)).
+
+asadb_exec_sql_snapshot_page(SQL, Offset, MaxRows, Result) :-
+    asadb_with_tvcc_snapshot(asadb_exec_sql_page(SQL, Offset, MaxRows, Result)).
+
+:- meta_predicate asadb_with_tvcc_snapshot(0).
+
+asadb_with_tvcc_snapshot(Goal) :-
+    asadb_tvcc_acquire(Generation, State, StoreRoot, _),
+    with_mutex(asadb_write, tvcc_selected_database(Database)),
+    setup_call_cleanup(
+        ( assertz(asadb_tvcc_read_state(State)),
+          assertz(asadb_tvcc_read_db(Database))
+        ),
+        asadb_record_with_root(StoreRoot, Goal),
+        ( retractall(asadb_tvcc_read_state(_)),
+          retractall(asadb_tvcc_read_db(_)),
+          asadb_tvcc_release(Generation)
+        )
+    ).
+
+tvcc_selected_database(Database) :- asadb_current_db(Database), !.
+tvcc_selected_database(none).
+
 valid_result_page_number(Value) :- integer(Value), Value >= 0.
 
 with_query_batch(Goal) :-
@@ -783,7 +830,8 @@ end_query_batch(false) :-
     assertz(asadb_query_batch_depth(Depth)).
 end_query_batch(true) :-
     retractall(asadb_query_batch_depth(_)),
-    ( asadb_tx_snapshot(_) -> true
+    ( asadb_tvcc_read_state(_) -> true
+    ; asadb_tx_snapshot(_) -> true
     ; asadb_checkpoint_dirty -> asadb_save
     ; true
     ).
@@ -1183,7 +1231,7 @@ execute_statement(login_user(User, Password), ok(logged_in(User))) :-
     assertz(asadb_current_user(User)).
 
 execute_statement(show_databases, table([database], Rows)) :-
-    asadb_state(state(_, DBs)), db_names(DBs, Names), atoms_rows(Names, Rows).
+    asadb_visible_state(state(_, DBs)), db_names(DBs, Names), atoms_rows(Names, Rows).
 
 execute_statement(show_tables, table([table], Rows)) :-
     current_db_or_default(DB),
@@ -1205,6 +1253,7 @@ execute_statement(Stmt, error(unknown_statement, Stmt)).
 union_rows(all, Rows, Rows) :- !.
 union_rows(distinct, Rows, UniqueRows) :- sort(Rows, UniqueRows).
 
+current_db_or_default(DB) :- asadb_tvcc_read_db(DB), DB \== none, !.
 current_db_or_default(DB) :- asadb_current_db(DB), !.
 current_db_or_default(main) :-
     asadb_state(State),
@@ -1737,8 +1786,16 @@ update_state_locked(Action) :-
     assertz(asadb_state(NewState)),
     ( State == NewState -> true
     ; invalidate_index_cache(Action),
+      asadb_tvcc_mark_change(Action),
+      mark_changed_action_for_checkpoint(Action),
       persist_state_after_write(Action)
     ).
+
+% Catalog bootstrap may append recovery information during boot, but it is not
+% a user commit. Every user-visible change marks a checkpoint so the TVCC
+% publisher receives a durable catalog and durable record pages at batch end.
+mark_changed_action_for_checkpoint(ensure_catalog(_)) :- !.
+mark_changed_action_for_checkpoint(_) :- assert_checkpoint_dirty.
 
 persist_state_after_write(_) :- asadb_tx_snapshot(_), !.
 persist_state_after_write(Action) :- paged_storage_action(Action), !,
@@ -2280,7 +2337,7 @@ drop_table_stores([Table|Tables]) :-
     drop_table_stores(Tables).
 
 get_db(Name, db(Name, Tables, Views, Functions, Procedures, Triggers)) :-
-    asadb_state(state(_, DBs)),
+    asadb_visible_state(state(_, DBs)),
     (member(db(Name, Tables, Views, Functions, Procedures, Triggers), DBs) ->
         true
     ;
@@ -2288,6 +2345,9 @@ get_db(Name, db(Name, Tables, Views, Functions, Procedures, Triggers)) :-
         Views = [], Functions = [], Procedures = [], Triggers = []
     ), !.
 get_db(Name, db(Name, [], [], [], [], [])).
+
+asadb_visible_state(State) :- asadb_tvcc_read_state(State), !.
+asadb_visible_state(State) :- asadb_state(State).
 
 get_table(DB, Name, table(Name, Columns, Rows, Indexes)) :-
     get_db(DB, db(DB, Tables, _, _, _, _)),
