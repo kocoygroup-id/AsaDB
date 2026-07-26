@@ -230,7 +230,12 @@ User rows now live in persistent 4 KB slotted heap pages. Indexed equality,
 range, and simple ordered scans use persistent B+Tree files with linked leaf
 pages. The bounded buffer pool uses a Clock-style policy with pin/unpin and dirty
 tracking. Recovery uses append undo records, page mutation backups, transaction
-snapshots, and atomic catalog replacement. This is not yet MVCC or ARIES.
+snapshots, atomic catalog replacement, and bounded local TVCC snapshots for
+concurrent `SELECT` requests. TVCC retains at most three complete committed
+generations and keeps one writer; it is not a distributed lock manager,
+cross-process concurrency layer, full SQL-standard MVCC, or ARIES.
+See [the local TVCC design](docs/tvcc.md) for its visibility, retention, and
+performance boundaries.
 
 Runtime limits are configured in `asadb.conf`. Keep each `.asa` catalog together
 with its matching `.asa.store` directory when moving a database.
@@ -315,6 +320,7 @@ src/
   asadb_pager.pl     Disk page I/O
   asadb_buffer_pool.pl  Bounded page cache
   asadb_record_manager.pl  Heap records and mutation recovery
+  asadb_tvcc.pl       Local immutable reader-generation coordinator
   asadb_btree.pl     In-memory compatibility tree and persistent B+Tree
   asadb_config.pl    Runtime storage configuration
   asadb_metadata.pl  Atomic persistent database identity and runtime metadata

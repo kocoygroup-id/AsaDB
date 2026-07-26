@@ -18,6 +18,11 @@ SQL text / SQL, CSV, or XLSX upload
   -> 4 KB page manager and disk files
 ```
 
+For local `SELECT` requests, the HTTP layer acquires an immutable
+three-version concurrency-control (TVCC) generation before opening catalog or
+heap files. A reader therefore sees one complete committed generation while a
+writer is importing, updating, or checkpointing.
+
 ## Modules
 
 ### Reservoir bridge
@@ -160,7 +165,14 @@ they are small or require legacy behavior.
 
 ## Current Limits
 
-- Single local writer; no MVCC.
+- One local writer is retained intentionally. Local `SELECT` requests use
+  bounded TVCC snapshots and may run while that writer is active; writes,
+  explicit SQL transactions, import, restore, and catalog administration do
+  not become concurrent writers.
+- TVCC retains at most three committed generations. If a reader pins the
+  oldest generation, publication waits rather than evicting that snapshot.
+  It is local-process concurrency, not a cross-process lock manager, a
+  distributed database protocol, or full SQL-standard MVCC.
 - Recovery is undo/backup/journal based, not ARIES.
 - Some writes invalidate an affected persistent index and rebuild it lazily
   through bounded external runs.

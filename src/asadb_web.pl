@@ -200,8 +200,7 @@ api_query(Request) :-
     (   authorized_api(Request)
     ->  (   read_sql_page_body(Request, SQL, Offset)
         ->  web_query_fetch_size(FetchRows),
-            with_mutex(asadb_execution,
-                       query_page_execution(SQL, Offset, FetchRows, Result0, OffsetApplied)),
+            web_query_execution(SQL, Offset, FetchRows, Result0, OffsetApplied),
             ( OffsetApplied == true ->
                 web_query_result(Result0, Result)
             ;   web_query_result_offset(Result0, Offset, Result)
@@ -243,9 +242,23 @@ page_number_value(Value, Number) :-
 query_page_execution(SQL, Offset, FetchRows, Result, true) :-
     Offset > 0,
     catch(asadb_parse_sql(SQL, [select(_, _, _, _, _, _)]), _, fail), !,
-    asadb_exec_sql_page(SQL, Offset, FetchRows, Result).
+    asadb_exec_sql_snapshot_page(SQL, Offset, FetchRows, Result).
+query_page_execution(SQL, _Offset, FetchRows, Result, false) :-
+    catch(asadb_parse_sql(SQL, [select(_, _, _, _, _, _)]), _, fail), !,
+    asadb_exec_sql_snapshot_limited(SQL, FetchRows, Result).
 query_page_execution(SQL, _Offset, FetchRows, Result, false) :-
     asadb_exec_sql_limited(SQL, FetchRows, Result).
+
+% SELECT receives an immutable TVCC generation and no longer waits behind a
+% long import or writer.  Every other statement keeps the established local
+% single-writer execution mutex, including transactions and administrative
+% commands.
+web_query_execution(SQL, Offset, FetchRows, Result, OffsetApplied) :-
+    catch(asadb_parse_sql(SQL, [select(_, _, _, _, _, _)]), _, fail), !,
+    query_page_execution(SQL, Offset, FetchRows, Result, OffsetApplied).
+web_query_execution(SQL, Offset, FetchRows, Result, OffsetApplied) :-
+    with_mutex(asadb_execution,
+               query_page_execution(SQL, Offset, FetchRows, Result, OffsetApplied)).
 
 api_execute_stream(Request) :-
     member(method(post), Request), !,

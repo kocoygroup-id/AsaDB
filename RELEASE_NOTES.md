@@ -7,6 +7,21 @@ scope
 Publication summary: [RELEASE.md](RELEASE.md)  
 Compatibility matrix: [COMPATIBILITY.md](COMPATIBILITY.md)
 
+## Post-1.4.0 development branch: local TVCC (not a release)
+
+The development branch adds local three-version concurrency control for
+AsAPanel `SELECT` requests. A reader receives one immutable catalog and
+heap/index generation while the established single-writer path continues to
+handle import, update, backup, restore, and transaction work. Up to three
+committed generations are retained; a writer waits if an old reader pins the
+oldest one, rather than deleting a live snapshot.
+
+Generation publication flushes pager pages before moving the reader-visible
+generation. Changed table files are copied, while unchanged immutable files are
+hard-linked from the preceding generation when supported (with a safe copy
+fallback). This is local-process TVCC, not a distributed protocol or a
+replacement for the documented recovery model. See [docs/tvcc.md](docs/tvcc.md).
+
 ## 1.3.1 RC to 1.4.0 Stable
 
 | Area | 1.3.1 RC | 1.4.0 Stable | Benefit |
