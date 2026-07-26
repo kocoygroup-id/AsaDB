@@ -38,9 +38,9 @@ mkdir -p "$STAGE/$NAME" "$DIST"
 
 for path in \
   BENCHMARK_RESULTS.md BUGFIX_REPORT.txt CODE_OF_CONDUCT.md CONTRIBUTING.md DCO GOVERNANCE.md \
-  COMPATIBILITY.md INSTALL.md LICENSE LICENSE_HISTORY.md Makefile OPEN_SOURCE_RELEASE_CHECKLIST.md \
+  COMPATIBILITY.md INSTALL.md LICENSE LICENSE_HISTORY.md GNUmakefile OPEN_SOURCE_RELEASE_CHECKLIST.md \
   README.md RELEASE.md RELEASE_NOTES.md SECURITY.md SOURCE_CODE.md THIRD_PARTY_NOTICES.md \
-  TRADEMARKS.md VERSION asadb.conf bin examples docs licenses scripts src tests tools web \
+  TRADEMARKS.md VERSION asadb.conf pack.pl pack prolog bin examples docs licenses scripts src tests tools web \
   .github .gitattributes .gitignore
 do
   if [ -e "$ROOT/$path" ]; then
