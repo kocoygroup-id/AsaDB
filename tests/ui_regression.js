@@ -103,7 +103,9 @@ assert.match(app, /IntersectionObserver/, 'table chooser must reveal more rows a
 assert.match(html, /id="sqlLineNumbersContent"/, 'large SQL line-number gutter needs a scrollable content layer');
 assert.match(app, /sqlLineNumbersContent\.style\.paddingTop/, 'large SQL gutter padding must live inside the scrollable content layer');
 assert.match(css, /\.table-show-more/, 'table Show-more styling is missing');
-assert.match(webBackend, /asadb_exec_sql_page/, 'backend SQL page executor is missing');
+assert.match(webBackend, /web_query_execution/, 'backend SQL execution dispatcher is missing');
+assert.match(webBackend, /asadb_exec_sql_snapshot_page/, 'paged SELECT must use a TVCC snapshot executor');
+assert.match(webBackend, /asadb_exec_sql_snapshot_limited/, 'bounded SELECT must use a TVCC snapshot executor');
 assert.match(webBackend, /query_page_offset/, 'backend SQL offset validation is missing');
 assert.match(webBackend, /root\('api\/backup'\)/, 'backend must expose the production backup endpoint');
 assert.match(webBackend, /root\('api\/export'\)/, 'backend must expose the portable export endpoint');
