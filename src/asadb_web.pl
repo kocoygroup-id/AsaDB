@@ -239,13 +239,16 @@ page_number_value(Value, Number) :-
     Number >= 0,
     Number =< 1000000000.
 
+query_page_snapshot_execution(SQL, Offset, FetchRows, Result, true) :-
+    Offset > 0,
+    asadb_exec_sql_snapshot_page(SQL, Offset, FetchRows, Result).
+query_page_snapshot_execution(SQL, _Offset, FetchRows, Result, false) :-
+    asadb_exec_sql_snapshot_limited(SQL, FetchRows, Result).
+
 query_page_execution(SQL, Offset, FetchRows, Result, true) :-
     Offset > 0,
     catch(asadb_parse_sql(SQL, [select(_, _, _, _, _, _)]), _, fail), !,
-    asadb_exec_sql_snapshot_page(SQL, Offset, FetchRows, Result).
-query_page_execution(SQL, _Offset, FetchRows, Result, false) :-
-    catch(asadb_parse_sql(SQL, [select(_, _, _, _, _, _)]), _, fail), !,
-    asadb_exec_sql_snapshot_limited(SQL, FetchRows, Result).
+    asadb_exec_sql_page(SQL, Offset, FetchRows, Result).
 query_page_execution(SQL, _Offset, FetchRows, Result, false) :-
     asadb_exec_sql_limited(SQL, FetchRows, Result).
 
@@ -254,8 +257,8 @@ query_page_execution(SQL, _Offset, FetchRows, Result, false) :-
 % single-writer execution mutex, including transactions and administrative
 % commands.
 web_query_execution(SQL, Offset, FetchRows, Result, OffsetApplied) :-
-    catch(asadb_parse_sql(SQL, [select(_, _, _, _, _, _)]), _, fail), !,
-    query_page_execution(SQL, Offset, FetchRows, Result, OffsetApplied).
+    asadb_snapshot_read_allowed(SQL), !,
+    query_page_snapshot_execution(SQL, Offset, FetchRows, Result, OffsetApplied).
 web_query_execution(SQL, Offset, FetchRows, Result, OffsetApplied) :-
     with_mutex(asadb_execution,
                query_page_execution(SQL, Offset, FetchRows, Result, OffsetApplied)).

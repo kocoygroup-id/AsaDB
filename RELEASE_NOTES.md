@@ -22,6 +22,13 @@ hard-linked from the preceding generation when supported (with a safe copy
 fallback). This is local-process TVCC, not a distributed protocol or a
 replacement for the documented recovery model. See [docs/tvcc.md](docs/tvcc.md).
 
+Hardening on the development branch ensures active transactions keep using the
+primary executor for read-your-writes; the public snapshot executor rejects
+mutations and mixed SQL; an unpublished temporary generation is built before a
+committed slot is retired; and each reader generation binds its selected
+database together with catalog and record files. Windows CI now runs the core
+and TVCC suites on NTFS paths.
+
 ## 1.3.1 RC to 1.4.0 Stable
 
 | Area | 1.3.1 RC | 1.4.0 Stable | Benefit |

@@ -104,6 +104,7 @@ assert.match(html, /id="sqlLineNumbersContent"/, 'large SQL line-number gutter n
 assert.match(app, /sqlLineNumbersContent\.style\.paddingTop/, 'large SQL gutter padding must live inside the scrollable content layer');
 assert.match(css, /\.table-show-more/, 'table Show-more styling is missing');
 assert.match(webBackend, /web_query_execution/, 'backend SQL execution dispatcher is missing');
+assert.match(webBackend, /asadb_snapshot_read_allowed/, 'TVCC dispatcher must bypass snapshots during transactions');
 assert.match(webBackend, /asadb_exec_sql_snapshot_page/, 'paged SELECT must use a TVCC snapshot executor');
 assert.match(webBackend, /asadb_exec_sql_snapshot_limited/, 'bounded SELECT must use a TVCC snapshot executor');
 assert.match(webBackend, /query_page_offset/, 'backend SQL offset validation is missing');
