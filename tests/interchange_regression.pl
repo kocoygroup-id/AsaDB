@@ -280,6 +280,10 @@ assert_import_metadata(Format, Metadata, Rows) :-
     ).
 
 exec_sql_file(Stage, File) :-
+    size_file(File, Bytes),
+    ( Bytes > 0 -> true
+    ; throw(error(assertion_failed(prepared_sql_empty(Stage, File)), _))
+    ),
     read_file_to_string(File, SQL, [encoding(utf8)]),
     exec_ok(Stage, SQL).
 

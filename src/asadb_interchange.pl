@@ -45,8 +45,8 @@ asadb_interchange_export(Database0, Format0, Options0, File, Metadata) :-
     interchange_export_options(Options0, Options),
     catch(
         with_mutex(asadb_execution,
-            interchange_export_locked(Database, Format, Options,
-                                       File, Metadata)),
+            once(interchange_export_locked(
+                Database, Format, Options, File, Metadata))),
         Error,
         ( asadb_interchange_cleanup(File), throw(Error) )
     ).
@@ -58,8 +58,9 @@ asadb_interchange_prepare_import(File, OriginalName, RequestedFormat,
     interchange_target_table(TargetTable0, OriginalName, TargetTable),
     interchange_prepare_detect(File, OriginalName, RequestedFormat, Format),
     catch(
-        interchange_prepare_import(Format, File, OriginalName, TargetTable,
-                                   Mode, PreparedFile, Metadata),
+        once(interchange_prepare_import(
+            Format, File, OriginalName, TargetTable,
+            Mode, PreparedFile, Metadata)),
         Error,
         ( ( Format == asadb -> true
           ; asadb_interchange_cleanup(PreparedFile)
@@ -114,8 +115,9 @@ interchange_export_locked(Database, Format, Options, File, Metadata) :-
         temporary_interchange_file(text, File),
         setup_call_cleanup(
             open(File, write, Out, [encoding(utf8), newline(posix)]),
-            interchange_write_mysql(Out, CanonicalDatabase, Tables, Options,
-                                    TableCount, RowCount),
+            once(interchange_write_mysql(
+                Out, CanonicalDatabase, Tables, Options,
+                TableCount, RowCount)),
             close(Out)
         ),
         interchange_filename(CanonicalDatabase, '-mysql.sql', Filename),
@@ -124,8 +126,9 @@ interchange_export_locked(Database, Format, Options, File, Metadata) :-
         temporary_interchange_file(text, File),
         setup_call_cleanup(
             open(File, write, Out, [encoding(utf8), newline(posix)]),
-            interchange_write_postgresql(Out, CanonicalDatabase, Tables,
-                                         Options, TableCount, RowCount),
+            once(interchange_write_postgresql(
+                Out, CanonicalDatabase, Tables, Options,
+                TableCount, RowCount)),
             close(Out)
         ),
         interchange_filename(CanonicalDatabase, '-postgresql.sql', Filename),
@@ -452,8 +455,8 @@ interchange_write_csv_package(_Database, [Table], Options, File, Filename,
     interchange_table_options(Options, Name, TableOptions),
     setup_call_cleanup(
         open(File, write, Out, [encoding(utf8), newline(posix)]),
-        interchange_write_csv_table(Out, Columns, Storage, TableOptions,
-                                    RowCount),
+        once(interchange_write_csv_table(
+            Out, Columns, Storage, TableOptions, RowCount)),
         close(Out)
     ),
     interchange_filename(Name, '.csv', Filename).
@@ -463,8 +466,9 @@ interchange_write_csv_package(Database, Tables, Options, File, Filename,
     zip_open(File, write, Zipper, []),
     setup_call_cleanup(
         true,
-        interchange_write_csv_zip_tables(Zipper, Tables, Options,
-                                         0, TableCount, 0, RowCount),
+        once(interchange_write_csv_zip_tables(
+            Zipper, Tables, Options,
+            0, TableCount, 0, RowCount)),
         zip_close(Zipper)
     ),
     interchange_filename(Database, '-csv.zip', Filename).
@@ -482,7 +486,8 @@ interchange_write_csv_zip_tables(Zipper, [Table|Tables], Options,
                                  method(deflated), level(6), zip64(true)]),
     setup_call_cleanup(
         true,
-        interchange_write_csv_table(Out, Columns, Storage, TableOptions, Rows),
+        once(interchange_write_csv_table(
+            Out, Columns, Storage, TableOptions, Rows)),
         close(Out)
     ),
     TableCount1 is TableCount0 + 1,
@@ -541,7 +546,8 @@ interchange_write_xlsx(_Database, Tables, Options, File,
     zip_open(File, write, Zipper, []),
     setup_call_cleanup(
         true,
-        xlsx_write_archive(Zipper, Sheets, Options, 0, RowCount),
+        once(xlsx_write_archive(
+            Zipper, Sheets, Options, 0, RowCount)),
         zip_close(Zipper)
     ).
 
@@ -587,7 +593,7 @@ xlsx_write_entry(Zipper, Name, Text) :-
                                  method(deflated), level(6), zip64(true)]),
     setup_call_cleanup(
         true,
-        interchange_write_format(Out, '~s', [Text]),
+        once(interchange_write_format(Out, '~s', [Text])),
         close(Out)
     ).
 
@@ -602,7 +608,8 @@ xlsx_write_sheet_entries(Zipper, [sheet(Index, _, Table)|Sheets], Options,
                                  method(deflated), level(6), zip64(true)]),
     setup_call_cleanup(
         true,
-        xlsx_write_worksheet(Out, Table, TableOptions, Rows),
+        once(xlsx_write_worksheet(
+            Out, Table, TableOptions, Rows)),
         close(Out)
     ),
     RowCount1 is RowCount0 + Rows,
@@ -753,7 +760,7 @@ interchange_prepare_import(mysql, File, Name, _, _, Prepared, Metadata) :- !,
         open(File, read, In, [encoding(utf8)]),
         setup_call_cleanup(
             open(Prepared, write, Out, [encoding(utf8), newline(posix)]),
-            convert_sql_stream(mysql, In, Out, Stats),
+            once(convert_sql_stream(mysql, In, Out, Stats)),
             close(Out)
         ),
         close(In)
@@ -766,7 +773,7 @@ interchange_prepare_import(postgresql, File, Name, _, _, Prepared,
         open(File, read, In, [encoding(utf8)]),
         setup_call_cleanup(
             open(Prepared, write, Out, [encoding(utf8), newline(posix)]),
-            convert_sql_stream(postgresql, In, Out, Stats),
+            once(convert_sql_stream(postgresql, In, Out, Stats)),
             close(Out)
         ),
         close(In)
@@ -777,8 +784,9 @@ interchange_prepare_import(csv, File, Name, Target, Mode, Prepared,
     temporary_interchange_file(text, Prepared),
     setup_call_cleanup(
         open(Prepared, write, Out, [encoding(utf8), newline(posix)]),
-        csv_file_to_asadb_sql(File, Name, Out, Target, Mode,
-                             Tables, Rows, Columns),
+        once(csv_file_to_asadb_sql(
+            File, Name, Out, Target, Mode,
+            Tables, Rows, Columns)),
         close(Out)
     ),
     Metadata = interchange{
@@ -790,7 +798,8 @@ interchange_prepare_import(xlsx, File, Name, Target, Mode, Prepared,
     temporary_interchange_file(text, Prepared),
     setup_call_cleanup(
         open(Prepared, write, Out, [encoding(utf8), newline(posix)]),
-        xlsx_to_asadb_sql(File, Out, Target, Mode, Sheets, Rows),
+        once(xlsx_to_asadb_sql(
+            File, Out, Target, Mode, Sheets, Rows)),
         close(Out)
     ),
     Metadata = interchange{
@@ -805,17 +814,20 @@ interchange_prepare_import(xlsx, File, Name, Target, Mode, Prepared,
 csv_file_to_asadb_sql(File, Name, Out, Target, Mode,
                       Tables, Rows, Columns) :-
     csv_zip_candidate(File, Name), !,
+    validate_interchange_archive(File),
     zip_open(File, read, Zipper, []),
     setup_call_cleanup(
         true,
-        csv_zip_to_asadb_sql(Zipper, Out, Target, Mode, Tables, Rows),
+        once(csv_zip_to_asadb_sql(
+            Zipper, Out, Target, Mode, Tables, Rows)),
         zip_close(Zipper)
     ),
     Columns = 0.
 csv_file_to_asadb_sql(File, _, Out, Target, Mode, 1, Rows, Columns) :-
     setup_call_cleanup(
         open(File, read, In, [encoding(utf8), bom(true)]),
-        csv_to_asadb_sql(In, Out, Target, Mode, Rows, Columns),
+        once(csv_to_asadb_sql(
+            In, Out, Target, Mode, Rows, Columns)),
         close(In)
     ).
 
@@ -830,33 +842,38 @@ csv_zip_candidate(File, Name0) :-
     ).
 
 csv_zip_to_asadb_sql(Zipper, Out, Target, Mode, TableCount, RowCount) :-
-    validate_xlsx_archive(Zipper),
-    zipper_members(Zipper, Members),
-    include(csv_zip_member, Members, CSVEntries),
-    CSVEntries \= [],
-    csv_import_zip_entries(Zipper, CSVEntries, Out, Target, Mode,
-                           0, TableCount, 0, RowCount).
+    zipper_goto(Zipper, first),
+    csv_import_zip_cursor(Zipper, Out, Target, Mode,
+                          0, TableCount, 0, RowCount),
+    TableCount > 0.
 
 csv_zip_member(Name) :-
     downcase_atom(Name, Lower),
     sub_atom(Lower, _, 4, 0, '.csv').
 
-csv_import_zip_entries(_, [], _, _, _, TableCount, TableCount,
-                       RowCount, RowCount).
-csv_import_zip_entries(Zipper, [Entry|Entries], Out, Target, Mode,
-                       TableCount0, TableCount, RowCount0, RowCount) :-
-    csv_import_table_name(Target, Entry, TableCount0, Table),
-    zipper_goto(Zipper, file(Entry)),
-    zipper_open_current(Zipper, In, [type(text), encoding(utf8)]),
-    setup_call_cleanup(
-        true,
-        csv_to_asadb_sql(In, Out, Table, Mode, Rows, _),
-        close(In)
+csv_import_zip_cursor(Zipper, Out, Target, Mode,
+                      TableCount0, TableCount, RowCount0, RowCount) :-
+    zipper_file_info(Zipper, Entry, _),
+    ( csv_zip_member(Entry) ->
+        csv_import_table_name(Target, Entry, TableCount0, Table),
+        zipper_open_current(Zipper, In, [type(text), encoding(utf8)]),
+        setup_call_cleanup(
+            true,
+            once(csv_to_asadb_sql(In, Out, Table, Mode, Rows, _)),
+            close(In)
+        ),
+        TableCount1 is TableCount0 + 1,
+        RowCount1 is RowCount0 + Rows
+    ; TableCount1 = TableCount0,
+      RowCount1 = RowCount0
     ),
-    TableCount1 is TableCount0 + 1,
-    RowCount1 is RowCount0 + Rows,
-    csv_import_zip_entries(Zipper, Entries, Out, Target, Mode,
-                           TableCount1, TableCount, RowCount1, RowCount).
+    ( zipper_goto(Zipper, next) ->
+        csv_import_zip_cursor(Zipper, Out, Target, Mode,
+                              TableCount1, TableCount,
+                              RowCount1, RowCount)
+    ; TableCount = TableCount1,
+      RowCount = RowCount1
+    ).
 
 csv_import_table_name(Target, _, 0, Target) :- !.
 csv_import_table_name(Target, Entry, _, Table) :-
@@ -1223,15 +1240,16 @@ postgres_copy_unescape([Code|Codes], [Code|Decoded]) :-
    ------------------------------------------------------------------------- */
 
 xlsx_to_asadb_sql(File, Out, Target, Mode, SheetCount, RowCount) :-
+    validate_interchange_archive(File),
     zip_open(File, read, Zipper, []),
     setup_call_cleanup(
         true,
-        xlsx_import_zip(Zipper, Out, Target, Mode, SheetCount, RowCount),
+        once(xlsx_import_zip(
+            Zipper, Out, Target, Mode, SheetCount, RowCount)),
         zip_close(Zipper)
     ).
 
 xlsx_import_zip(Zipper, Out, Target, Mode, SheetCount, RowCount) :-
-    validate_xlsx_archive(Zipper),
     xlsx_read_dom_entry(Zipper, 'xl/workbook.xml', WorkbookDOM),
     xlsx_read_dom_entry(Zipper, 'xl/_rels/workbook.xml.rels', RelsDOM),
     xlsx_workbook_specs(WorkbookDOM, RelsDOM, Specs),
@@ -1240,20 +1258,26 @@ xlsx_import_zip(Zipper, Out, Target, Mode, SheetCount, RowCount) :-
     xlsx_import_sheets(Zipper, Specs, SharedStrings, Out, Target, Mode,
                        0, SheetCount, 0, RowCount).
 
-validate_xlsx_archive(Zipper) :-
-    zipper_members(Zipper, Members),
-    length(Members, EntryCount),
+validate_interchange_archive(File) :-
+    zip_open(File, read, Zipper, []),
+    setup_call_cleanup(
+        true,
+        once(validate_archive_cursor(Zipper)),
+        zip_close(Zipper)
+    ).
+
+validate_archive_cursor(Zipper) :-
+    zipper_goto(Zipper, first),
+    validate_archive_entries(Zipper, 0, 0).
+
+validate_archive_entries(Zipper, EntryCount0, Total0) :-
+    zipper_file_info(Zipper, Name, Info),
+    EntryCount is EntryCount0 + 1,
     interchange_archive_max_entries(MaxEntries),
     ( EntryCount =< MaxEntries -> true
     ; throw(error(resource_error(xlsx_archive_entries), _))
     ),
-    validate_xlsx_members(Zipper, Members, 0, _).
-
-validate_xlsx_members(_, [], Total, Total).
-validate_xlsx_members(Zipper, [Name|Names], Total0, Total) :-
     safe_zip_member(Name),
-    zipper_goto(Zipper, file(Name)),
-    zipper_file_info(Zipper, _, Info),
     Size = Info.uncompressed_size,
     interchange_archive_max_entry_bytes(MaxEntry),
     ( Size =< MaxEntry -> true
@@ -1265,7 +1289,10 @@ validate_xlsx_members(Zipper, [Name|Names], Total0, Total) :-
     ; throw(error(resource_error(xlsx_uncompressed_size), _))
     ),
     validate_xlsx_xml_member(Zipper, Name),
-    validate_xlsx_members(Zipper, Names, Total1, Total).
+    ( zipper_goto(Zipper, next) ->
+        validate_archive_entries(Zipper, EntryCount, Total1)
+    ; true
+    ).
 
 validate_xlsx_xml_member(Zipper, Name) :-
     downcase_atom(Name, Lower),
@@ -1275,7 +1302,7 @@ validate_xlsx_xml_member(Zipper, Name) :-
     zipper_open_current(Zipper, In, [type(text), encoding(utf8)]),
     setup_call_cleanup(
         true,
-        read_string(In, 65536, Prefix),
+        once(read_string(In, 65536, Prefix)),
         close(In)
     ),
     string_upper(Prefix, Upper),
@@ -1301,7 +1328,8 @@ xlsx_read_dom_entry(Zipper, Name, DOM) :-
     zipper_open_current(Zipper, In, [type(text), encoding(utf8)]),
     setup_call_cleanup(
         true,
-        load_structure(In, DOM, [dialect(xml), space(remove)]),
+        once(load_structure(
+            In, DOM, [dialect(xml), space(remove)])),
         close(In)
     ).
 
@@ -1337,7 +1365,8 @@ xlsx_shared_strings(Zipper, Strings) :-
         zipper_open_current(Zipper, In, [type(text), encoding(utf8)]),
         setup_call_cleanup(
             true,
-            load_structure(In, DOM, [dialect(xml), space(preserve)]),
+            once(load_structure(
+                In, DOM, [dialect(xml), space(preserve)])),
             close(In)
         ),
         findall(Text,
@@ -1376,13 +1405,14 @@ xlsx_import_sheet(Zipper, Entry, Shared, Out, Table, Mode, RowCount) :-
     set_sgml_parser(Parser, dialect(xml)),
     setup_call_cleanup(
         nb_linkval(asadb_xlsx_import_state, State),
-        ( sgml_parse(Parser,
-                     [source(In),
-                      call(begin, xlsx_row_begin)]),
-          nb_getval(asadb_xlsx_import_state, ParsedState),
-          xlsx_finish_sheet(ParsedState),
-          arg(7, ParsedState, RowCount)
-        ),
+        once((
+            sgml_parse(Parser,
+                       [source(In),
+                        call(begin, xlsx_row_begin)]),
+            nb_getval(asadb_xlsx_import_state, ParsedState),
+            xlsx_finish_sheet(ParsedState),
+            arg(7, ParsedState, RowCount)
+        )),
         ( nb_delete(asadb_xlsx_import_state),
           free_sgml_parser(Parser),
           close(In)
@@ -1902,7 +1932,7 @@ interchange_probe_sql_format(Name, Format) :-
     ( exists_file(Atom) ->
         setup_call_cleanup(
             open(Atom, read, In, [encoding(utf8)]),
-            read_string(In, 65536, Prefix),
+            once(read_string(In, 65536, Prefix)),
             close(In)
         ),
         string_upper(Prefix, Upper),
