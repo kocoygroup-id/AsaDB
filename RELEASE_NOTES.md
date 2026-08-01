@@ -1,12 +1,28 @@
-# AsaDB 1.5.0 Stable Release Notes
+# AsaDB Release Notes
 
-Stable release prepared: 2026-08-02
+Current release: **1.5.0 Stable**, prepared 2026-08-02
+
 Status: **Stable** for the documented Linux/PCLinuxOS backend and source-package scope
 
 Publication summary: [RELEASE.md](RELEASE.md)  
 Compatibility matrix: [COMPATIBILITY.md](COMPATIBILITY.md)
 
-## 1.4.0 Stable to 1.5.0 Stable
+## Release order
+
+| Version | Prepared/released | Status | Release focus |
+| --- | --- | --- | --- |
+| **1.5.0** | 2026-08-02 | **Current Stable** | Local TVCC reads, view-aware interchange, bounded ordering, and complete source distribution. |
+| 1.4.0 | 2026-07-23 | Superseded Stable | Backend-produced `.asb` backup/restore and production backup validation. |
+| 1.3.1 | 2026-07-21 | Superseded Release Candidate | Schema-aware editor assistance, syntax feedback, and Windows source launchers. |
+| 1.3.0 | 2026-07-19 | Historical Stable | Reservoir admission, result paging, and indexed JOIN improvements. |
+
+Only 1.5.0 is the current release line. Earlier entries are retained as an
+ordered compatibility and operational-history reference; their original scope
+and limitations are not silently reclassified as 1.5.0 guarantees.
+
+## 1.5.0 Stable (current)
+
+### Changes from 1.4.0 Stable
 
 | Area | 1.4.0 Stable | 1.5.0 Stable | Operational benefit |
 | --- | --- | --- | --- |
@@ -17,7 +33,7 @@ Compatibility matrix: [COMPATIBILITY.md](COMPATIBILITY.md)
 | Production backup | Backend `.asb` backup and verified restore were introduced in 1.4.0. | The backup route remains backend-owned and is re-audited together with TVCC, portable interchange, and view export. | Complete logical backup never depends on loaded browser rows or visible result pages. |
 | Release integrity | Linux/Windows-source package checks existed. | Version, engine metadata, pack manifest, runtime sources, docs, archive checksums, and release artifacts are released as one 1.5.0 set. | Operators can match a package, its checksum, and its reported engine version. |
 
-## SQL surface and performance
+### SQL surface and performance
 
 The documented SQL surface remains the supported contract: database and table DDL;
 `INSERT`, `SELECT`, `UPDATE`, and `DELETE`; filters; ordering and limits;
@@ -34,7 +50,7 @@ represented as an instant indexed lookup. The new bounded sorter avoids
 re-evaluating the same order expressions during comparisons and keeps equal sort
 keys in scan order.
 
-## SWI-Prolog distribution
+### SWI-Prolog distribution
 
 The source package now includes `tools/asadb_pack.pl`, a cross-platform
 repository-channel helper for `install`, `upgrade`, `info`, `version`, and
@@ -44,8 +60,11 @@ repository-basename naming difference on current SWI-Prolog versions. The
 standard public-registry commands remain `swipl pack install asadb` and
 `swipl pack install --upgrade asadb`; `swipl install asadb` is not valid stock
 SWI-Prolog syntax and is intentionally not emulated by replacing `swipl`.
+The command and API behavior follows SWI-Prolog's official
+[`library(prolog_pack)` documentation](https://www.swi-prolog.org/pldoc/man?section=prologpack)
+and [`pack_install/2` reference](https://www.swi-prolog.org/pldoc/doc_for?object=pack_install%2F2).
 
-## Production backup and interchange
+### Production backup and interchange
 
 **Export → AsaDB Backup** creates a backend-produced `.asb` logical backup. The
 backend scans paged storage under the execution lock and writes schema, all rows,
@@ -61,7 +80,7 @@ CSV/XLSX materialize selected views through the normal executor. Unsupported
 vendor-specific procedural dump syntax is rejected or remains outside the portable
 dialect surface rather than being silently changed.
 
-## Release validation profile
+### Release validation profile
 
 The release audit runs on **PCLinuxOS 2026**, Linux `6.18.37-pclos1`, x86_64, with
 SWI-Prolog `10.0.2`. The release gates cover core parser/executor, catalog
@@ -77,7 +96,7 @@ modern/legacy bundle contract is checked locally. Native Windows execution is no
 claimed from Linux; the Windows deliverable is a complete source-launcher ZIP that
 requires a compatible SWI-Prolog installation on Windows.
 
-## Release artifacts
+### Release artifacts
 
 - `AsaDB-1.5.0-linux-x86_64.tar.Z` and SHA-256.
 - `AsaDB-1.5.0-windows-source.zip` and SHA-256, including `run_asadb.bat` and `run_panel.bat`.
@@ -88,7 +107,7 @@ Every source artifact is built from the same release tree and contains the engin
 storage modules, TVCC, backup/interchange, AsAPanel bundles, launchers, tests,
 documentation, pack manifest, and GPL notices.
 
-## Stable scope and known limits
+### Stable scope and known limits
 
 - Stable applies to the documented PCLinuxOS/Linux backend and source-package
   validation scope; it is not a certification for every operating system or
@@ -102,6 +121,29 @@ documentation, pack manifest, and GPL notices.
   before setting service objectives.
 - AsaDB does not claim ARIES, MySQL wire compatibility, or a blanket performance
   comparison with a server-class database.
+
+## Prior release summaries
+
+### 1.4.0 Stable
+
+1.4.0 moved production export and restore fully into the backend: `.asb`
+artifacts carry schema, rows, indexes, catalog objects, and integrity metadata.
+It also added transaction guards and restore-total validation, establishing the
+backup baseline that 1.5.0 retains and re-tests.
+
+### 1.3.1 Release Candidate
+
+1.3.1 introduced local-catalog SQL completion, supported-syntax coloring,
+consistent ID/JP/EN typography, the compatible `ORDER BY *` no-op, and the
+checksummed Windows source-launcher package. Those editor and packaging
+capabilities were stabilized by the subsequent 1.4.0 release.
+
+### 1.3.0 Stable
+
+1.3.0 established the earlier large-workload foundation: Reservoir admission
+and recovery, paged result/table presentation, the `karyawan.pl` advisor, and
+an indexed path for qualified equality joins. The 1.3.x release line remains
+historical context rather than a substitute for the current 1.5.0 scope.
 
 ## License
 

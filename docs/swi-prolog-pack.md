@@ -14,6 +14,12 @@ executable to make that spelling work. The supported, cross-platform commands
 are `swipl pack install asadb`, `swipl pack install --upgrade asadb`,
 `swipl pack info asadb`, and `swipl pack remove asadb`.
 
+These command forms are the CLI surface of SWI-Prolog's documented
+[`library(prolog_pack)` manager](https://www.swi-prolog.org/pldoc/man?section=prologpack).
+For automation, the helper uses the documented
+[`pack_install/2`](https://www.swi-prolog.org/pldoc/doc_for?object=pack_install%2F2),
+its `upgrade(true)` option, and `pack_remove/2` with non-interactive options.
+
 The same commands work in a Linux terminal and Windows PowerShell/CMD once
 `swipl` is on `PATH`; Windows users may write `swipl.exe` equivalently.
 
@@ -165,3 +171,9 @@ The pack server validates the manifest and registers the package. Only after
 that registration can users rely on `swipl pack install asadb` without a URL.
 Do not publish an RC, draft, or unreviewed development commit under the stable
 package name.
+
+## References
+
+- [SWI-Prolog pack manager (`library(prolog_pack)`)](https://www.swi-prolog.org/pldoc/man?section=prologpack)
+- [SWI-Prolog `pack_install/2` options and CLI mapping](https://www.swi-prolog.org/pldoc/doc_for?object=pack_install%2F2)
+- [SWI-Prolog pack format and `pack.pl` metadata](https://www.swi-prolog.org/pldoc/man?section=libpl)

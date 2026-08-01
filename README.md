@@ -13,6 +13,19 @@ Current release: **v1.5.0 Stable**. The publication artifact
 validated for Linux x86_64. It does not bundle SWI-Prolog; see
 [RELEASE.md](RELEASE.md) and [COMPATIBILITY.md](COMPATIBILITY.md).
 
+## Release order
+
+| Version | Status | Main focus |
+| --- | --- | --- |
+| **1.5.0** | **Current Stable** | Local TVCC reader snapshots, view-aware interchange, bounded ordering, and release-integrity checks. |
+| 1.4.0 | Superseded Stable | Backend-owned, integrity-checked `.asb` backup and restore. |
+| 1.3.1 | Superseded Release Candidate | SQL completion/coloring and Windows source-launcher delivery. |
+| 1.3.0 | Historical Stable | Reservoir, paged results, and indexed equality joins. |
+
+The table is newest-first. Detailed release scope, validation, and limits are
+kept in [RELEASE_NOTES.md](RELEASE_NOTES.md); only 1.5.0 describes the current
+supported release contract.
+
 ## SWI-Prolog pack
 
 AsaDB has a first-class `asadb` pack manifest and an embeddable
@@ -35,6 +48,8 @@ Linux and Windows. `swipl install asadb` is not a stock SWI-Prolog command;
 use the documented `swipl pack ...` form instead. See
 [docs/swi-prolog-pack.md](docs/swi-prolog-pack.md) for repository, stable,
 upgrade, remove, API, and publishing commands.
+The command semantics are based on SWI-Prolog's official
+[`library(prolog_pack)` guide](https://www.swi-prolog.org/pldoc/man?section=prologpack).
 
 AsaDB is developed in the open under **GNU GPL v3.0 only**. Bug reports, test
 cases, documentation, storage-engine review, and code contributions are
@@ -54,7 +69,7 @@ welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
 - Asa Process Guardian is an opt-in source-mirror and process-supervision tool;
   it is isolated from SQL execution and the database storage path.
 
-## v1.5.0 Stable Highlights
+## 1.5.0 Stable highlights
 
 v1.5.0 keeps the 1.4.0 backend-owned backup design and adds local snapshot
 reads, view-aware interchange, and faster bounded ordering:
@@ -139,7 +154,14 @@ The Windows ZIP is a source/runtime-launcher package, not a relabelled native
 executable: install SWI-Prolog first. The portable executable remains a
 separate Windows-native build target.
 
-## v1.3.0 Highlights
+## 1.4.0 Stable checkpoint
+
+1.4.0 established the backend-produced `.asb` backup and verified restore
+path. The current 1.5.0 line preserves that production-backup contract while
+adding local reader snapshots, view-aware interchange, and bounded ordering.
+See the ordered comparison in [RELEASE_NOTES.md](RELEASE_NOTES.md).
+
+## 1.3.0 Stable historical highlights
 
 v1.3.0 fixes the aliased JOIN path and makes the source release practical on
 Linux systems with minimal shells:
