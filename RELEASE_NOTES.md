@@ -34,6 +34,17 @@ represented as an instant indexed lookup. The new bounded sorter avoids
 re-evaluating the same order expressions during comparisons and keeps equal sort
 keys in scan order.
 
+## SWI-Prolog distribution
+
+The source package now includes `tools/asadb_pack.pl`, a cross-platform
+repository-channel helper for `install`, `upgrade`, `info`, `version`, and
+`remove`. It invokes SWI-Prolog's supported `library(prolog_pack)` API and
+forces the canonical `asadb` pack name for Git installs, avoiding the
+repository-basename naming difference on current SWI-Prolog versions. The
+standard public-registry commands remain `swipl pack install asadb` and
+`swipl pack install --upgrade asadb`; `swipl install asadb` is not valid stock
+SWI-Prolog syntax and is intentionally not emulated by replacing `swipl`.
+
 ## Production backup and interchange
 
 **Export → AsaDB Backup** creates a backend-produced `.asb` logical backup. The
