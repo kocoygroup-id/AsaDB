@@ -17,19 +17,24 @@ validated for Linux x86_64. It does not bundle SWI-Prolog; see
 
 AsaDB has a first-class `asadb` pack manifest and an embeddable
 `library(asadb)` API. The pack contains the complete CLI, panel backend,
-frontend assets, engine, launchers, examples, documentation, and tests. Until
-a release is registered with the SWI-Prolog pack server, install the public
-repository directly:
+frontend assets, engine, launchers, examples, documentation, and tests. After
+publication to the SWI-Prolog pack server, the normal cross-platform commands
+are:
 
 ```sh
-swipl pack install --git https://github.com/kocoygroup-id/AsaDB.git
+swipl pack install asadb
+swipl pack install --upgrade asadb
+swipl pack info asadb
+swipl pack remove asadb
 ```
 
-After registration, users can install, inspect, upgrade, and remove it with
-`swipl pack install asadb`, `swipl pack info asadb`,
-`swipl pack install --upgrade asadb`, and `swipl pack remove asadb`.
-See [docs/swi-prolog-pack.md](docs/swi-prolog-pack.md) for the exact commands,
-API example, and the controlled publishing step.
+Before publication, an extracted release or checkout includes the portable
+repository helper: `swipl -q -s tools/asadb_pack.pl -- install`. It follows
+the official repository and retains the canonical `asadb` pack name on both
+Linux and Windows. `swipl install asadb` is not a stock SWI-Prolog command;
+use the documented `swipl pack ...` form instead. See
+[docs/swi-prolog-pack.md](docs/swi-prolog-pack.md) for repository, stable,
+upgrade, remove, API, and publishing commands.
 
 AsaDB is developed in the open under **GNU GPL v3.0 only**. Bug reports, test
 cases, documentation, storage-engine review, and code contributions are

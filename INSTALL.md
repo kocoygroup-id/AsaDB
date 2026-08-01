@@ -1,5 +1,30 @@
 # AsaDB Install Guide
 
+## SWI-Prolog pack distribution
+
+After AsaDB is published to the SWI-Prolog pack registry, install, upgrade,
+inspect, or remove it on Linux and Windows with:
+
+```sh
+swipl pack install asadb
+swipl pack install --upgrade asadb
+swipl pack info asadb
+swipl pack remove asadb
+```
+
+`swipl install asadb` is not valid SWI-Prolog syntax. Before registry
+publication, extract or clone AsaDB and use the included cross-platform
+repository helper instead:
+
+```sh
+swipl -q -s tools/asadb_pack.pl -- install
+```
+
+The helper also supports `upgrade`, `info`, `version`, and `remove`, follows
+the official `main` branch by default, and works unchanged with `swipl.exe` on
+Windows. See [docs/swi-prolog-pack.md](docs/swi-prolog-pack.md) for branch and
+portable-directory options.
+
 ## Windows
 
 1. Install SWI-Prolog.
