@@ -32,8 +32,15 @@ swipl -q -g "use_module(library(http/json)),setup_call_cleanup(open('$WORK/.asa-
 tail -n 1 "$WORK/.asa-guardian/guardian.log" | grep -F 'copied:0' >/dev/null
 tail -n 1 "$WORK/.asa-guardian/guardian.log" | grep -F 'kept:3' >/dev/null
 
-"$ROOT/scripts/asadb_guardian.sh" --root "$WORK" -- sh -c 'printf guardian-child'
-grep -F 'child_output' "$WORK/.asa-guardian/guardian.log" >/dev/null
-grep -F 'child_exit' "$WORK/.asa-guardian/guardian.log" >/dev/null
+child=1
+while [ "$child" -le 12 ]; do
+  "$ROOT/scripts/asadb_guardian.sh" --root "$WORK" -- sh -c "printf guardian-child-$child"
+  child=$((child + 1))
+done
+
+child_output_count=$(grep -c -F 'child_output' "$WORK/.asa-guardian/guardian.log")
+child_exit_count=$(grep -c -F 'child_exit' "$WORK/.asa-guardian/guardian.log")
+test "$child_output_count" -eq 12
+test "$child_exit_count" -eq 12
 
 echo 'PASS: Asa Process Guardian snapshot and supervisor checks passed.'
