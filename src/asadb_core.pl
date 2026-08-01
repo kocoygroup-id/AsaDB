@@ -41,6 +41,8 @@
     asadb_backup_restore_current_database/1,
     asadb_backup_stage_catalog_objects/5,
     asadb_backup_restore_catalog_objects/5,
+    asadb_view_definition/3,
+    asadb_view_rows/4,
     asadb_storage_stats/1,
     asadb_database_metadata/1,
     asadb_analysis_json/2,
@@ -2424,6 +2426,20 @@ get_view(DB, Name, View) :-
     member(View, Views),
     View = view(Name, _, _), !.
 
+% Interchange export needs a view's immutable definition for SQL dialect
+% dumps, and its evaluated rows for CSV/XLSX.  Keep the database context
+% thread-local instead of changing the user's selected database globally.
+asadb_view_definition(Database, Name, SelectAST) :-
+    get_view(Database, Name, view(Name, SelectAST, _)).
+
+asadb_view_rows(Database, Name, Columns, Rows) :-
+    asadb_view_definition(Database, Name, SelectAST),
+    setup_call_cleanup(
+        assertz(asadb_tvcc_read_db(Database), Context),
+        execute_statement(SelectAST, table(Columns, Rows)),
+        erase(Context)
+    ).
+
 labels_to_columns([], []).
 labels_to_columns([Name|Names], [col(Name, any, [])|Columns]) :-
     labels_to_columns(Names, Columns).
@@ -2584,6 +2600,10 @@ persistent_order_path_ready(_, _, StoreId, Col) :-
 persistent_order_path_ready(DB, Table, StoreId, Col) :-
     \+ defer_order_index_build(DB, Table, StoreId, Col).
 
+% Building an on-disk B+Tree is valuable for repeated ordered scans, but a
+% fresh large import should not pay that full construction cost for its first
+% couple of small ordered results. The bounded in-memory top-N path remains
+% responsive until the persistent order index becomes hot.
 defer_order_index_build(DB, Table, StoreId, Col) :-
     identifier_cache_key(Col, CacheCol),
     asadb_record_index_file(StoreId, CacheCol, File),
@@ -2807,11 +2827,16 @@ storage_collect_rows(Generator, Row, Where, Order, Limit, Rows) :-
     result_window(Limit, Offset, Count),
     Keep is Offset + Count,
     prepare_row_filter(Where, Filter),
-    Acc = top_rows_acc([], [], 0),
+    % Cache ORDER BY expressions once per matching row.  The previous top-N
+    % sorter reevaluated column lookups for every comparison; a 250k-row
+    % projection sorted by text could therefore spend seconds repeatedly
+    % downcasing the same field names instead of scanning storage.
+    Acc = top_rows_acc([], [], 0, 0),
     forall((call(Generator), row_filter_matches(Filter, Row)),
            buffer_top_row(Acc, Order, Keep, Row)),
     flush_top_row_buffer(Acc, Order, Keep),
-    arg(1, Acc, OrderedWindow),
+    arg(1, Acc, OrderedEntries),
+    keyed_rows_to_rows(OrderedEntries, OrderedWindow),
     drop_n(Offset, OrderedWindow, Rows).
 
 result_window(none, 0, Count) :- !,
@@ -2848,10 +2873,15 @@ buffer_top_row(_, _, 0, _) :- !.
 buffer_top_row(Acc, Order, Keep, Row) :-
     arg(2, Acc, Buffer0),
     arg(3, Acc, Count0),
-    Buffer = [Row|Buffer0],
+    arg(4, Acc, Sequence0),
+    order_row_key(Order, Row, Key),
+    Entry = keyed_row(Key, Sequence0, Row),
+    Buffer = [Entry|Buffer0],
     Count is Count0 + 1,
+    Sequence is Sequence0 + 1,
     nb_setarg(2, Acc, Buffer),
     nb_setarg(3, Acc, Count),
+    nb_setarg(4, Acc, Sequence),
     ( Count >= 256 -> flush_top_row_buffer(Acc, Order, Keep) ; true ).
 
 flush_top_row_buffer(Acc, _, _) :-
@@ -2865,27 +2895,60 @@ flush_top_row_buffer(Acc, Order, Keep) :-
     % merge only the first Keep values.  Equal values take the older Top row
     % first, retaining the stable scan-order tie behaviour of apply_order/3.
     reverse(Buffer, ScanOrderedBuffer),
-    apply_order(Order, ScanOrderedBuffer, OrderedBuffer),
-    merge_top_ordered_rows(Order, Keep, Top, OrderedBuffer, Limited),
+    apply_key_order(Order, ScanOrderedBuffer, OrderedBuffer),
+    merge_top_ordered_entries(Order, Keep, Top, OrderedBuffer, Limited),
     nb_setarg(1, Acc, Limited),
     nb_setarg(2, Acc, []),
     nb_setarg(3, Acc, 0).
 
-merge_top_ordered_rows(_, 0, _, _, []) :- !.
-merge_top_ordered_rows(_, Keep, [], Right, Out) :- !,
+merge_top_ordered_entries(_, 0, _, _, []) :- !.
+merge_top_ordered_entries(_, Keep, [], Right, Out) :- !,
     take_n(Keep, Right, Out).
-merge_top_ordered_rows(_, Keep, Left, [], Out) :- !,
+merge_top_ordered_entries(_, Keep, Left, [], Out) :- !,
     take_n(Keep, Left, Out).
-merge_top_ordered_rows(order(Items), Keep, [Left|LeftRows], [Right|RightRows],
-                       [First|Out]) :-
-    compare_rows(Items, Comparison, Left, Right),
+merge_top_ordered_entries(order(Items), Keep,
+                          [Left|LeftRows], [Right|RightRows], [First|Out]) :-
+    compare_keyed_rows(Items, Comparison, Left, Right),
     Keep1 is Keep - 1,
     ( Comparison == (>) ->
         First = Right,
-        merge_top_ordered_rows(order(Items), Keep1, [Left|LeftRows], RightRows, Out)
+        merge_top_ordered_entries(order(Items), Keep1, [Left|LeftRows], RightRows, Out)
     ; First = Left,
-      merge_top_ordered_rows(order(Items), Keep1, LeftRows, [Right|RightRows], Out)
+      merge_top_ordered_entries(order(Items), Keep1, LeftRows, [Right|RightRows], Out)
     ).
+
+order_row_key(order(Items), Row, Key) :- !,
+    order_row_key_values(Items, Row, Key).
+order_row_key(_, _, []).
+
+order_row_key_values([], _, []).
+order_row_key_values([order(Expr, _)|Items], Row, [Value|Values]) :-
+    eval_expr(Row, Expr, Value),
+    order_row_key_values(Items, Row, Values).
+
+apply_key_order(order(Items), Entries, Ordered) :-
+    predsort(compare_keyed_rows(Items), Entries, Ordered).
+
+compare_keyed_rows(Items, Order,
+                   keyed_row(KeysA, SequenceA, _),
+                   keyed_row(KeysB, SequenceB, _)) :-
+    compare_order_key_values(Items, KeysA, KeysB, KeyOrder), !,
+    ( KeyOrder == (=) -> compare(Order, SequenceA, SequenceB)
+    ; Order = KeyOrder
+    ).
+compare_keyed_rows(_, =, _, _).
+
+compare_order_key_values([], [], [], =).
+compare_order_key_values([order(_, Direction)|Items], [A|As], [B|Bs], Order) :-
+    compare_sql_values(Comparison, A, B),
+    orient_order(Direction, Comparison, Oriented),
+    ( Oriented == (=) -> compare_order_key_values(Items, As, Bs, Order)
+    ; Order = Oriented
+    ).
+
+keyed_rows_to_rows([], []).
+keyed_rows_to_rows([keyed_row(_, _, Row)|Entries], [Row|Rows]) :-
+    keyed_rows_to_rows(Entries, Rows).
 
 count_all_projection([projection(Label, Expr)], Label) :-
     aggregate_expr(Expr, count, all).

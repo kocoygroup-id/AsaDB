@@ -1,138 +1,97 @@
-# AsaDB 1.4.0 Stable Release Notes
+# AsaDB 1.5.0 Stable Release Notes
 
-Stable release prepared: 2026-07-23
-Status: **Stable** for the documented Linux/PCLinuxOS backend and source-package
-scope
+Stable release prepared: 2026-08-02
+Status: **Stable** for the documented Linux/PCLinuxOS backend and source-package scope
 
 Publication summary: [RELEASE.md](RELEASE.md)  
 Compatibility matrix: [COMPATIBILITY.md](COMPATIBILITY.md)
 
-## Post-1.4.0 development branch: local TVCC (not a release)
+## 1.4.0 Stable to 1.5.0 Stable
 
-The development branch adds local three-version concurrency control for
-AsAPanel `SELECT` requests. A reader receives one immutable catalog and
-heap/index generation while the established single-writer path continues to
-handle import, update, backup, restore, and transaction work. Up to three
-committed generations are retained; a writer waits if an old reader pins the
-oldest one, rather than deleting a live snapshot.
-
-Generation publication flushes pager pages before moving the reader-visible
-generation. Changed table files are copied, while unchanged immutable files are
-hard-linked from the preceding generation when supported (with a safe copy
-fallback). This is local-process TVCC, not a distributed protocol or a
-replacement for the documented recovery model. See [docs/tvcc.md](docs/tvcc.md).
-
-Hardening on the development branch ensures active transactions keep using the
-primary executor for read-your-writes; the public snapshot executor rejects
-mutations and mixed SQL; an unpublished temporary generation is built before a
-committed slot is retired; and each reader generation binds its selected
-database together with catalog and record files. Windows CI now runs the core
-and TVCC suites on NTFS paths.
-
-## 1.3.1 RC to 1.4.0 Stable
-
-| Area | 1.3.1 RC | 1.4.0 Stable | Benefit |
+| Area | 1.4.0 Stable | 1.5.0 Stable | Operational benefit |
 | --- | --- | --- | --- |
-| Production export | Export could be assembled from browser state, which might hold only metadata or a loaded subset of a large table. | The backend scans every stored page and creates an `.asb` backup containing schema, records, indexes, and catalog objects. | Backup completeness no longer depends on browser memory or the visible result window. |
-| Portable interchange | CSV/XLSX conversion and dialect export could depend on sandbox rows, while uploaded dialect dumps had no backend normalization stage. | MySQL, PostgreSQL, CSV, and XLSX exchange is implemented in Prolog over backend storage; imports enter Reservoir and the transactional streaming importer. | Selected-table exchange scales independently of browser row hydration and retains rollback, cancellation, and capacity controls. |
-| Restore integrity | Generic import could not prove a backup was complete before commit. | Restore verifies the payload and integrity manifest, then confirms rebuilt table and row totals before committing one transaction. | Altered, truncated, and incomplete backup artifacts are rejected. |
-| Backup consistency | No explicit production transaction guard protected export and restore. | Create and restore reject an active database transaction; the shared backend execution lock gives the operation one logical view. | Backup data cannot mix with an unrelated in-flight write transaction. |
-| Large-data query safety | The RC fixed `ORDER BY *` and bounded browser results. | Stable keeps those fixes and regression-tests backup, paging, bounded results, restart persistence, and a 100,000-row storage scenario together. | Large datasets receive a broader end-to-end release gate. |
-| SQL guidance | Schema-aware completion, SQL coloring, aliases, columns, database objects, and supported syntax were introduced in the RC. | Stable retains the same lightweight modern and legacy browser implementations and checks their release contract. | Editor assistance remains available without adding a large editor framework. |
-| Compatibility diagnostics | The MySQL 5.5 compatibility manifest was descriptive only. | Parser fallback consumes the manifest and reports the actual status of known unavailable statements. | Planned compatibility syntax is distinguishable from unknown SQL. |
-| Operational resilience | The opt-in process companion could mirror source and launcher files. | It can also validate and mirror complete `.asb` artifacts from a separate backup directory. | Backups can enter the integrity-audited retention workflow without entering SQL execution. |
+| Concurrent panel reads | One mutable local store was used by every request. | Local TVCC gives read-only panel `SELECT` requests an immutable catalog plus heap/index generation while retaining one authoritative writer. | A reader cannot pair an old catalog with new pages during a committed write. |
+| TVCC publication safety | The initial local snapshot path existed on the development branch. | Publication flushes before exposure, builds an unpublished generation before retiring an old one, binds database context with files, and preserves read-your-writes inside transactions. | Snapshot visibility and transaction semantics have explicit regression coverage. |
+| Portable view export | Tables were backend-scanned, but saved views were absent from export selection. | MySQL/PostgreSQL export preserves selected view definitions; CSV/XLSX evaluates selected views against backend storage and exports their rows. | The export menu represents tables and views without falling back to browser cache. |
+| Large result ordering | `ORDER BY *` was a compatibility no-op, while projected ordered results could repeatedly evaluate sort expressions. | The bounded top-window sorter caches each matching row's order key once and merges sorted buffers deterministically. | Filtered, projected text ordering avoids repeated expression work while preserving stable tie order. |
+| Production backup | Backend `.asb` backup and verified restore were introduced in 1.4.0. | The backup route remains backend-owned and is re-audited together with TVCC, portable interchange, and view export. | Complete logical backup never depends on loaded browser rows or visible result pages. |
+| Release integrity | Linux/Windows-source package checks existed. | Version, engine metadata, pack manifest, runtime sources, docs, archive checksums, and release artifacts are released as one 1.5.0 set. | Operators can match a package, its checksum, and its reported engine version. |
 
-## Production backup design
+## SQL surface and performance
 
-The online Export control now requests a backend-produced **AsaDB Backup**
-(`.asb`) instead of reconstructing a database from browser state. The backend
-uses the existing pager and record path to scan all rows while holding the
-shared execution lock. The backup envelope records database identity, catalog
-objects, payload length, table count, and row count, with SHA-256 checks for
-the SQL payload and the complete integrity record.
+The documented SQL surface remains the supported contract: database and table DDL;
+`INSERT`, `SELECT`, `UPDATE`, and `DELETE`; filters; ordering and limits;
+INNER/LEFT/RIGHT/CROSS and comma joins; grouping and aggregate functions; basic
+scalar/`IN`/`EXISTS` subqueries; `UNION`; `CASE`; views; transaction commands;
+and the documented metadata/user catalog commands. The parser and executor suites
+exercise aliases, qualified columns, `JOIN ... USING`, `ORDER BY *`, view
+selection, restart persistence, recovery, and compatibility diagnostics.
 
-Restore validates the envelope before opening the normal import transaction.
-Before commit, AsaDB re-scans stored rows and checks manifest totals, then
-stages views, functions, procedures, and triggers with the table data. Backup
-creation and restore reject an already-active database transaction.
+For large result sets, 1.5.0 retains the bounded result window and the historical
+no-op meaning of `ORDER BY *`. A regular `ORDER BY column` still must inspect and
+order qualifying rows when no usable index can provide that order; it is not
+represented as an instant indexed lookup. The new bounded sorter avoids
+re-evaluating the same order expressions during comparisons and keeps equal sort
+keys in scan order.
 
-The regression suite covers a multi-page 6,141-row backup, Unicode and
-multiline values, indexes, column comments, scientific floating-point values,
-tampering, authenticated HTTP download and restore, and rollback behavior.
+## Production backup and interchange
 
-This is a logical database backup, not a storage-level hot-copy format. Normal
-writes wait while the backend scans a consistent database view. Operators
-should retain multiple verified backup generations, monitor available local
-disk space, and regularly test restore procedures.
+**Export → AsaDB Backup** creates a backend-produced `.asb` logical backup. The
+backend scans paged storage under the execution lock and writes schema, all rows,
+indexes, and catalog objects with integrity fields for both payload and manifest.
+Restore validates those fields, rebuilds in a transaction, rescans table/row totals
+before commit, and rejects restore or creation while another database transaction
+is active.
 
-## 1.3.1 RC capabilities retained
+MySQL SQL, PostgreSQL SQL, CSV, and XLSX are selected-object interchange formats,
+not substitutes for an `.asb` disaster-recovery backup. They scan the backend rather
+than browser state. MySQL/PostgreSQL preserve selected views as definitions;
+CSV/XLSX materialize selected views through the normal executor. Unsupported
+vendor-specific procedural dump syntax is rejected or remains outside the portable
+dialect surface rather than being silently changed.
 
-- Schema-aware SQL completion for lexer keywords, supported types,
-  scalar/aggregate functions, databases, tables, views, columns, and aliases
-  declared in `FROM` and `JOIN`.
-- Completion keyboard controls: Up/Down, Enter or Tab, Escape, and
-  Ctrl+Space.
-- SQL syntax coloring across the supported command surface in both current
-  and legacy browser bundles.
-- Consistent Noto Sans JP selection for the ID, JP, and EN interfaces.
-- `ORDER BY *` treated as the supported historical no-op without sorting a
-  full result set.
-- Stale semicolon diagnostics invalidated immediately when the SQL text
-  changes.
-- Opt-in Asa Process Guardian with SHA-256 source mirroring, bounded audit
-  retention, heartbeat checks, and bounded external-process recovery.
+## Release validation profile
 
-## PCLinuxOS release audit
+The release audit runs on **PCLinuxOS 2026**, Linux `6.18.37-pclos1`, x86_64, with
+SWI-Prolog `10.0.2`. The release gates cover core parser/executor, catalog
+persistence, metadata upgrade, recovery, local TVCC, 15,000-row indexed JOIN,
+production backup/restore including authenticated HTTP, backend interchange
+including selected views and 20,000-row stress, and 100,000-row storage stress.
+Module loading, launchers, Guardian, Linux archive, Windows source archive, pack
+installation/removal, and SHA-256 verification are also covered.
 
-The stable audit was exercised on **PCLinuxOS 2026**, Linux
-`6.18.37-pclos1`, x86_64, with SWI-Prolog 10.0.2. The following gates passed:
-
-- Linux runtime probe and backend/core suite.
-- Reservoir queue, reload, cancellation, and recovery suite.
-- JOIN and paging regressions.
-- Production backup unit and authenticated HTTP create/restore regressions.
-- Backend MySQL/PostgreSQL/CSV/XLSX round trips plus authenticated export and
-  Reservoir CSV/XLSX import regressions.
-- Process companion, launcher, release contract, and package checks.
-- Windows source-package structure and archive-integrity checks.
-- 100,000-row storage stress: import, indexed lookup, order/limit, update,
-  delete, bounded result, cleanup, and restart assertions. The measured import
-  stage was 27,309 ms on the audit host.
-- A 20,000-row interchange stress covered four backend exports plus CSV/XLSX
-  streaming preparation in about 9.7 seconds on the audit host.
-
-Node.js was not installed on the audit host, so the Node-only browser
-regression is not claimed as executed there. The checked-in modern and legacy
-browser bundles passed the static release-contract gate. Native Windows
-execution is also not claimed from this Linux audit; the Windows deliverable
-is a source-launcher ZIP requiring a compatible SWI-Prolog on `PATH`.
+Node.js is not installed on the PCLinuxOS audit host. The Node-only browser
+regression is therefore executed by GitHub Actions, while the checked-in
+modern/legacy bundle contract is checked locally. Native Windows execution is not
+claimed from Linux; the Windows deliverable is a complete source-launcher ZIP that
+requires a compatible SWI-Prolog installation on Windows.
 
 ## Release artifacts
 
-- `AsaDB-1.4.0-linux-x86_64.tar.Z` and SHA-256.
-- `AsaDB-1.4.0-windows-source.zip` and SHA-256, including
-  `run_asadb.bat` and `run_panel.bat`.
-- `AsaDB-1.4.0-main-repo.tar.Z` and SHA-256.
-- Unpacked `AsaDB-1.4.0-main-repo` source tree.
+- `AsaDB-1.5.0-linux-x86_64.tar.Z` and SHA-256.
+- `AsaDB-1.5.0-windows-source.zip` and SHA-256, including `run_asadb.bat` and `run_panel.bat`.
+- `AsaDB-1.5.0-main-repo.tar.Z` and SHA-256.
+- Unpacked `AsaDB-1.5.0-main-repo` source tree.
 
-All source artifacts contain the SQL engine, paged storage, indexes,
-Reservoir, web panel bundles, localization assets, launchers, build scripts,
-tests, and GPL notices from the same release tree.
+Every source artifact is built from the same release tree and contains the engine,
+storage modules, TVCC, backup/interchange, AsAPanel bundles, launchers, tests,
+documentation, pack manifest, and GPL notices.
 
 ## Stable scope and known limits
 
-- Stable means the documented PCLinuxOS/Linux backend and source-package
-  gates passed. It is not a claim that every deployment topology or native
-  Windows runtime has been certified.
-- The panel binds to localhost by default and is not an internet-facing
-  authentication or TLS boundary.
-- Production rollout should still use staged deployment, external monitoring,
-  least-privilege host controls, verified off-host backup copies, and tested
-  disaster-recovery procedures.
-- Complex joins may materialize intermediate data; validate workload-specific
-  latency and capacity before setting commercial service objectives.
-- AsaDB does not claim ARIES, MVCC, or a physical point-in-time recovery log.
+- Stable applies to the documented PCLinuxOS/Linux backend and source-package
+  validation scope; it is not a certification for every operating system or
+  deployment topology.
+- TVCC is local to one AsaDB process and localhost panel. It keeps at most three
+  committed generations and is neither distributed concurrency control nor full
+  SQL-standard MVCC.
+- `.asb` is a verified logical backup, not a filesystem hot-copy or point-in-time
+  recovery log. Keep tested, verified off-host generations.
+- Complex joins may use a compatible nested-loop path; capacity-test real workloads
+  before setting service objectives.
+- AsaDB does not claim ARIES, MySQL wire compatibility, or a blanket performance
+  comparison with a server-class database.
 
 ## License
 
-AsaDB is distributed under the GNU General Public License v3.0 or later.
+AsaDB is distributed under the GNU General Public License v3.0 only.

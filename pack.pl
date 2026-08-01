@@ -7,7 +7,7 @@
 
 name(asadb).
 title('AsaDB local SQL database engine').
-version('1.4.0').
+version('1.5.0').
 author('Kocoy Group', 'https://github.com/kocoygroup-id').
 maintainer('Kocoy Group', 'https://github.com/kocoygroup-id').
 packager('Kocoy Group', 'https://github.com/kocoygroup-id').

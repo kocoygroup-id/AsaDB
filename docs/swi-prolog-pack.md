@@ -99,7 +99,7 @@ To embed the engine in another Prolog program, load its stable pack API:
 :- use_module(library(asadb)).
 
 ?- asadb_version(Version).
-Version = '1.4.0'.
+Version = '1.5.0'.
 
 ?- asadb_boot('company.asa'),
    asadb_exec_sql("CREATE DATABASE company; USE company;", Result),

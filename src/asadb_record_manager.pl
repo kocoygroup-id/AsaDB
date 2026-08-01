@@ -692,11 +692,18 @@ select_row_pairs(Names, [Name=Value|Pairs], [Name=Value|Selected]) :-
 select_row_pairs(Names, [_|Pairs], Selected) :-
     select_row_pairs(Names, Pairs, Selected).
 
+% Most records use the exact identifier spelling from the table schema.
+% Keep that hot path allocation-free: the case-insensitive compatibility
+% fallback below is only needed for legacy/mixed-case catalogs.
+record_identifier_member(Name, Names) :-
+    memberchk(Name, Names), !.
 record_identifier_member(Name, [Candidate|_]) :-
     same_record_identifier(Name, Candidate), !.
 record_identifier_member(Name, [_|Names]) :-
     record_identifier_member(Name, Names).
 
+same_record_identifier(A, B) :-
+    A == B, !.
 same_record_identifier(A, B) :-
     atom(A), atom(B),
     downcase_atom(A, LowerA),

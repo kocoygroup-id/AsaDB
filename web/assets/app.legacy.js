@@ -5700,23 +5700,40 @@ function renderExportTablePicker() {
   var current = collectExportSelections();
   var activeDb = currentDbName();
   var db = activeDb ? sandbox.dbs[activeDb] || {} : {};
-  var tables = Object.keys(db).sort(function (a, b) {
-    return a.localeCompare(b);
+  var dbViews = activeDb ? sandbox.views && sandbox.views[activeDb] || {} : {};
+  var relations = [].concat(Object.keys(db).map(function (name) {
+    return {
+      name: name,
+      kind: 'table',
+      value: db[name]
+    };
+  }), Object.keys(dbViews).filter(function (name) {
+    return !db[name];
+  }).map(function (name) {
+    return {
+      name: name,
+      kind: 'view',
+      value: dbViews[name]
+    };
+  })).sort(function (a, b) {
+    return a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind);
   });
   exportDbName.textContent = activeDb || t('database.noneSelected');
   exportTableRows.innerHTML = '';
-  var _iterator23 = _createForOfIteratorHelper(tables),
+  var _iterator23 = _createForOfIteratorHelper(relations),
     _step23;
   try {
     for (_iterator23.s(); !(_step23 = _iterator23.n()).done;) {
       var _current$tables$table, _current$data$table;
-      var table = _step23.value;
+      var relation = _step23.value;
+      var table = relation.name;
+      var kind = relation.kind;
       var row = document.createElement('tr');
       var tableChecked = (_current$tables$table = current.tables[table]) !== null && _current$tables$table !== void 0 ? _current$tables$table : true;
       var dataChecked = (_current$data$table = current.data[table]) !== null && _current$data$table !== void 0 ? _current$data$table : true;
       row.innerHTML = `
-      <td><label><input class="export-table-check" data-table="${escapeHtml(table)}" type="checkbox" ${tableChecked ? 'checked' : ''} /> ${escapeHtml(table)}</label></td>
-      <td><input class="export-data-check" data-table="${escapeHtml(table)}" type="checkbox" ${dataChecked ? 'checked' : ''} /></td>
+      <td><label><input class="export-table-check" data-table="${escapeHtml(table)}" data-kind="${kind}" type="checkbox" ${tableChecked ? 'checked' : ''} /> ${escapeHtml(table)}${kind === 'view' ? ' <span class="relation-badge">VIEW</span>' : ''}</label></td>
+      <td><input class="export-data-check" data-table="${escapeHtml(table)}" data-kind="${kind}" type="checkbox" ${dataChecked ? 'checked' : ''} /></td>
     `;
       exportTableRows.appendChild(row);
     }
@@ -5743,20 +5760,34 @@ function collectExportSelections() {
 function getExportSelection() {
   var activeDb = currentDbName();
   var db = activeDb ? sandbox.dbs[activeDb] || {} : {};
+  var dbViews = activeDb ? sandbox.views && sandbox.views[activeDb] || {} : {};
   var checked = collectExportSelections();
   var includeDataGlobally = exportDataMode.value !== 'none';
   var includeSchema = exportTableMode.value !== 'none';
-  return Object.keys(db).filter(function (table) {
-    var _checked$tables$table;
-    return (_checked$tables$table = checked.tables[table]) !== null && _checked$tables$table !== void 0 ? _checked$tables$table : true;
-  }).map(function (table) {
-    var _checked$data$table;
+  var relations = [].concat(Object.keys(db).map(function (name) {
     return {
-      name: table,
-      table: db[table],
-      includeData: includeDataGlobally && ((_checked$data$table = checked.data[table]) !== null && _checked$data$table !== void 0 ? _checked$data$table : true),
-      includeSchema
+      name: name,
+      kind: 'table',
+      table: db[name]
     };
+  }), Object.keys(dbViews).filter(function (name) {
+    return !db[name];
+  }).map(function (name) {
+    return {
+      name: name,
+      kind: 'view',
+      table: dbViews[name]
+    };
+  }));
+  return relations.filter(function (relation) {
+    var _checked$tables$relation;
+    return (backendOnline || relation.kind !== 'view') && ((_checked$tables$relation = checked.tables[relation.name]) !== null && _checked$tables$relation !== void 0 ? _checked$tables$relation : true);
+  }).map(function (relation) {
+    var _checked$data$relation;
+    return Object.assign({}, relation, {
+      includeData: includeDataGlobally && ((_checked$data$relation = checked.data[relation.name]) !== null && _checked$data$relation !== void 0 ? _checked$data$relation : true),
+      includeSchema
+    });
   });
 }
 function escapeHtml(s) {

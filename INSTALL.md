@@ -4,7 +4,7 @@
 
 1. Install SWI-Prolog.
 2. Pastikan `swipl` masuk PATH.
-3. Extract `AsaDB-1.4.0-windows-source.zip`.
+3. Extract `AsaDB-1.5.0-windows-source.zip`.
 4. Buka PowerShell/CMD di folder `AsaDB`.
 5. Jalankan demo:
 
@@ -35,9 +35,9 @@ launchers use POSIX `/bin/sh`; Bash is not required.
 For the published Linux x86_64 package:
 
 ```sh
-sha256sum -c AsaDB-1.4.0-linux-x86_64.tar.Z.sha256
-tar -xzf AsaDB-1.4.0-linux-x86_64.tar.Z
-cd AsaDB-1.4.0-linux-x86_64
+sha256sum -c AsaDB-1.5.0-linux-x86_64.tar.Z.sha256
+tar -xzf AsaDB-1.5.0-linux-x86_64.tar.Z
+cd AsaDB-1.5.0-linux-x86_64
 ```
 
 The `.tar.Z` suffix is retained for release naming compatibility, but the file
@@ -74,7 +74,7 @@ local build or a separately supplied installation—and make `swipl` visible on
 After extracting AsaDB:
 
 ```sh
-cd AsaDB-1.4.0-linux-x86_64
+cd AsaDB-1.5.0-linux-x86_64
 chmod +x bin/asadb scripts/*.sh
 ./scripts/check_linux_runtime.sh
 ./scripts/run_panel.sh data.asa 8088
