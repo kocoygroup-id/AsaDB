@@ -3,6 +3,9 @@
 :- use_module('../src/asadb_core.pl').
 :- use_module('../src/asadb_mysql55_compat.pl').
 :- use_module(library(filesex)).
+:- if(exists_source(library(time))).
+:- use_module(library(time)).
+:- endif.
 :- initialization(main, main).
 
 main :-
@@ -88,7 +91,7 @@ run_metadata_persistence_assertions :-
     ),
     asadb_database_metadata(Before),
     DatabaseId = Before.database_id,
-    ( Before.engine_version == '1.4.0',
+    ( Before.engine_version == '1.5.0',
       Before.storage_format =:= 3,
       Before.summary.row_count =:= 3 ->
         true
@@ -133,7 +136,7 @@ run_metadata_version_upgrade_assertions :-
     ),
     asadb_boot('tests/testdata.asa'),
     asadb_database_metadata(Upgraded),
-    ( Upgraded.engine_version == '1.4.0',
+    ( Upgraded.engine_version == '1.5.0',
       Upgraded.storage_format =:= 3,
       Upgraded.database_id == 'asa-upgrade-regression',
       Upgraded.checkpoint_count =:= 7 ->
@@ -261,11 +264,14 @@ run_order_by_wildcard_assertions :-
 % A paged table must be able to sort by a selected text column while WHERE
 % filters on another column.  This crosses multiple sorter buffers, covering
 % the production Double_Company query shape without making the core suite
-% depend on an external stress-import file.
+% depend on an external stress-import file.  Keep this large enough that a
+% comparator which reevaluates expressions for every comparison is visible,
+% while the bound catches the former multi-second-to-minute regression rather
+% than enforcing a fragile microbenchmark.
 run_order_by_filtered_projection_assertions :-
     cleanup,
     asadb_boot('tests/testdata.asa'),
-    order_by_filtered_projection_fixture(1024, Setup),
+    order_by_filtered_projection_fixture(8192, Setup),
     asadb_exec_sql(Setup, SetupResult),
     ( result_has_error(SetupResult) ->
         asadb_format_result(SetupResult),
@@ -274,13 +280,20 @@ run_order_by_filtered_projection_assertions :-
         halt(1)
     ; true
     ),
-    Query = 'SELECT department FROM Double_Company WHERE transaction_count < 1000 ORDER BY department;',
-    asadb_exec_sql_limited(Query, 500, Result),
+    Query = 'SELECT department FROM Double_Company WHERE sales_yen > 100000 ORDER BY department;',
+    statistics(walltime, [Started|_]),
+    catch(call_with_time_limit(15, asadb_exec_sql_limited(Query, 500, Result)),
+          time_limit_exceeded,
+          Result = timeout),
+    statistics(walltime, [Finished|_]),
+    QueryMilliseconds is Finished - Started,
     ( Result = multi([table([department], Rows)]),
       length(Rows, 500),
-      rows_are_ascending(Rows) ->
+      rows_are_ascending(Rows),
+      QueryMilliseconds =< 15000 ->
         true
-    ; format('ASSERTION FAILED: filtered projected ORDER BY result: ~q.~n', [Result]),
+    ; format('ASSERTION FAILED: filtered projected ORDER BY result (ms=~w): ~q.~n',
+             [QueryMilliseconds, Result]),
       asadb_shutdown,
       cleanup,
       halt(1)
@@ -293,13 +306,14 @@ order_by_filtered_projection_fixture(RowCount, SQL) :-
             ( between(1, RowCount, Id),
               order_fixture_department(Id, Department),
               TransactionCount is Id,
-              format(atom(Row), '(~w, ''~w'', ~w)',
-                     [Id, Department, TransactionCount])
+              SalesYen is 100000 + Id,
+              format(atom(Row), '(~w, ''~w'', ~w, ~w)',
+                     [Id, Department, TransactionCount, SalesYen])
             ),
             Rows),
     atomic_list_concat(Rows, ', ', Values),
     format(atom(SQL),
-           'CREATE DATABASE order_projection_assert; USE order_projection_assert; CREATE TABLE Double_Company (company_id INT, department VARCHAR(60), transaction_count INT); INSERT INTO Double_Company VALUES ~w;',
+           'CREATE DATABASE order_projection_assert; USE order_projection_assert; CREATE TABLE Double_Company (company_id INT, department VARCHAR(60), transaction_count INT, sales_yen INT); INSERT INTO Double_Company VALUES ~w;',
            [Values]).
 
 order_fixture_department(Id, 'Accounting') :- Id mod 3 =:= 0, !.

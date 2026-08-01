@@ -1,15 +1,15 @@
 # AsaDB
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Release: 1.4.0 Stable](https://img.shields.io/badge/release-1.4.0%20Stable-16803c.svg)](RELEASE_NOTES.md)
+[![Release: 1.5.0 Stable](https://img.shields.io/badge/release-1.5.0%20Stable-16803c.svg)](RELEASE_NOTES.md)
 [![Runtime: SWI-Prolog](https://img.shields.io/badge/runtime-SWI--Prolog-E61B23.svg)](https://www.swi-prolog.org/)
 
 AsaDB is a local SQL database experiment powered by SWI-Prolog. It ships with
 AsAPanel, a small local web workspace for creating databases, running SQL,
 importing/exporting data, and inspecting tables without a cloud server.
 
-Current release: **v1.4.0 Stable**. The publication artifact
-`AsaDB-1.4.0-linux-x86_64.tar.Z` is a complete open-source distribution
+Current release: **v1.5.0 Stable**. The publication artifact
+`AsaDB-1.5.0-linux-x86_64.tar.Z` is a complete open-source distribution
 validated for Linux x86_64. It does not bundle SWI-Prolog; see
 [RELEASE.md](RELEASE.md) and [COMPATIBILITY.md](COMPATIBILITY.md).
 
@@ -49,10 +49,10 @@ welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the
 - Asa Process Guardian is an opt-in source-mirror and process-supervision tool;
   it is isolated from SQL execution and the database storage path.
 
-## v1.4.0 Stable Highlights
+## v1.5.0 Stable Highlights
 
-v1.4.0 retains the 1.3.1 RC editor and query-stability work, then adds production
-backup integrity and source-wiring verification:
+v1.5.0 keeps the 1.4.0 backend-owned backup design and adds local snapshot
+reads, view-aware interchange, and faster bounded ordering:
 
 - The SQL editor offers lightweight schema-aware completion for AsaDB keywords,
   supported types and functions, local database/table/view names, declared
@@ -67,8 +67,16 @@ backup integrity and source-wiring verification:
 - Asa Process Guardian provides an opt-in, SQL-isolated SHA-256 source mirror
   and bounded process supervision for operators who want launcher health and
   recovery records.
-- The release set now includes a checksummed Windows source-launcher ZIP with
-  the same source revision and batch launchers for an installed SWI-Prolog.
+- Local TVCC gives eligible read-only panel `SELECT` requests an immutable
+  catalog plus storage generation. It retains one writer and keeps active SQL
+  transactions on their established read-your-writes path.
+- Selected views appear in the export picker. MySQL/PostgreSQL preserve their
+  definitions, while CSV/XLSX materialize view rows through the backend.
+- The bounded projected `ORDER BY` path caches each matching row's sort key and
+  merges sorted buffers; equal keys retain scan order. An unindexed order still
+  scans qualifying rows, while `ORDER BY *` stays the historical no-op.
+- The release set includes a checksummed Windows source-launcher ZIP with the
+  same source revision and batch launchers for an installed SWI-Prolog.
 - **Production export is now a real backend backup.** AsAPanel creates an
   `.asb` artifact by scanning the database record store on the server; it does
   not reconstruct a database from browser cache or the visible result window.
@@ -102,24 +110,20 @@ same Export page. These are portable interchange artifacts rather than
 authenticated backups. See [docs/interchange.md](docs/interchange.md) for
 format behavior, input limits, and regression commands.
 
-## Why 1.4.0 Stable improves on 1.3.1 RC
+## Why 1.5.0 Stable improves on 1.4.0 Stable
 
-- Database Export is now a server-produced AsaDB Backup (`.asb`), built by
-  scanning backend record storage rather than browser cache. This closes the
-  risk that a large database backup contains only schema or loaded rows.
-- Restore validates payload and manifest integrity, restores in a transaction,
-  verifies physical table/row totals before commit, and stages catalog objects
-  atomically with the table data.
-- Backup behavior has direct multi-page, HTTP, tamper, transaction, Unicode,
-  index, and schema-option regressions. The source audit also connected the
-  MySQL compatibility manifest to parser fallback diagnostics, replacing an
-  inactive status table with a tested execution path.
-- Asa Process Guardian can verify and mirror retained production backup
-  artifacts, while remaining outside SQL execution.
+- Read-only panel queries can use a bounded immutable local snapshot, so a
+  reader sees catalog and page files from the same committed generation.
+- Production backup remains a backend-produced, checksummed `.asb` snapshot;
+  it is regression-tested with TVCC rather than reverting to browser state.
+- Portable interchange now includes selected views without silently dropping
+  them: SQL dialects retain definitions and CSV/XLSX export backend results.
+- Filtered, projected ordering no longer reevaluates sort expressions for every
+  comparison in the bounded result window.
 
-## 1.4.0 Stable Package Contents
+## 1.5.0 Stable Package Contents
 
-Every 1.4.0 source package includes the SQL engine, page storage, B+Tree and
+Every 1.5.0 source package includes the SQL engine, page storage, B+Tree and
 metadata layers, Reservoir bridge, AsAPanel modern and compatibility bundles,
 ID/JP/EN assets, tests, build scripts, Linux/POSIX launchers, Windows batch
 launchers, operational guardian, and GPL notices. The Linux and main-source
@@ -245,9 +249,9 @@ with its matching `.asa.store` directory when moving a database.
 Verify and extract the publication files:
 
 ```sh
-sha256sum -c AsaDB-1.4.0-linux-x86_64.tar.Z.sha256
-tar -xzf AsaDB-1.4.0-linux-x86_64.tar.Z
-cd AsaDB-1.4.0-linux-x86_64
+sha256sum -c AsaDB-1.5.0-linux-x86_64.tar.Z.sha256
+tar -xzf AsaDB-1.5.0-linux-x86_64.tar.Z
+cd AsaDB-1.5.0-linux-x86_64
 ./scripts/check_linux_runtime.sh
 ./scripts/run_panel.sh data.asa 8088
 ```

@@ -26,7 +26,7 @@ main :-
 
 run_interchange_regression :-
     exec_ok(fixture,
-            "CREATE DATABASE interchange; USE interchange; CREATE TABLE people (id INT PRIMARY KEY, name TEXT, score DOUBLE, note TEXT); INSERT INTO people VALUES (1, 'Ayu', 98.5, 'comma,quote\"'), (2, '日本', 87, NULL), (3, 'O\\'Brien', -4.25, 'line\\nnext'); CREATE TABLE teams (id INT PRIMARY KEY, team TEXT); INSERT INTO teams VALUES (1, '001'), (2, 'blue');"),
+            "CREATE DATABASE interchange; USE interchange; CREATE TABLE people (id INT PRIMARY KEY, name TEXT, score DOUBLE, note TEXT); INSERT INTO people VALUES (1, 'Ayu', 98.5, 'comma,quote\"'), (2, '日本', 87, NULL), (3, 'O\\'Brien', -4.25, 'line\\nnext'); CREATE TABLE teams (id INT PRIMARY KEY, team TEXT); INSERT INTO teams VALUES (1, '001'), (2, 'blue'); CREATE VIEW people_ranked AS SELECT name, score FROM people WHERE score > 0 ORDER BY name;"),
     ExportOptions = _{
         tables:[people],
         include_schema:true,
@@ -39,6 +39,8 @@ run_interchange_regression :-
     test_step(mysql, test_sql_format(mysql, ExportOptions)),
     test_step(postgresql, test_sql_format(postgresql, ExportOptions)),
     test_step(export_selection, test_export_selection_controls),
+    test_step(view_sql_export, test_view_sql_export),
+    test_step(view_csv_export, test_view_csv_export),
     test_step(dialect_literal_safety, test_dialect_literal_safety),
     test_step(xlsx_dtd_rejected, test_xlsx_dtd_rejected).
 
@@ -201,6 +203,67 @@ test_export_selection_controls :-
         asadb_interchange_cleanup(File)
     ).
 
+test_view_sql_export :-
+    Options = _{
+        tables:[people_ranked],
+        include_schema:true,
+        include_data:true,
+        create_database:false,
+        drop_tables:true
+    },
+    asadb_interchange_export(interchange, mysql, Options, File, Metadata),
+    setup_call_cleanup(
+        true,
+        ( Metadata.table_count =:= 0,
+          Metadata.view_count =:= 1,
+          Metadata.object_count =:= 1,
+          read_file_to_string(File, SQL, [encoding(utf8)]),
+          sub_string(SQL, _, _, _, 'CREATE VIEW `people_ranked` AS SELECT'),
+          sub_string(SQL, _, _, _, 'ORDER BY `name` ASC'),
+          asadb_interchange_prepare_import(File, 'people-ranked.sql', mysql,
+                                           ignored, replace, Prepared, _),
+          setup_call_cleanup(
+              true,
+              ( exec_sql_file(view_sql_import, Prepared),
+                expect_query('SELECT name FROM people_ranked ORDER BY name;',
+                             table([name], [['Ayu'],['日本']]))
+              ),
+              asadb_interchange_cleanup(Prepared)
+          )
+        ),
+        asadb_interchange_cleanup(File)
+    ).
+
+test_view_csv_export :-
+    Options = _{
+        tables:[people_ranked],
+        data_tables:[people_ranked],
+        include_schema:true,
+        include_data:true,
+        create_database:false
+    },
+    asadb_interchange_export(interchange, csv, Options, File, Metadata),
+    setup_call_cleanup(
+        true,
+        ( Metadata.table_count =:= 0,
+          Metadata.view_count =:= 1,
+          Metadata.row_count =:= 2,
+          asadb_interchange_prepare_import(File, 'people_ranked.csv', csv,
+                                           people_ranked_copy, replace,
+                                           Prepared, _),
+          setup_call_cleanup(
+              true,
+              ( exec_sql_file(view_csv_import, Prepared),
+                expect_count(people_ranked_copy, 2),
+                expect_query('SELECT name FROM people_ranked_copy ORDER BY name;',
+                             table([name], [['Ayu'],['日本']]))
+              ),
+              asadb_interchange_cleanup(Prepared)
+          )
+        ),
+        asadb_interchange_cleanup(File)
+    ).
+
 test_dialect_literal_safety :-
     tmp_file_stream(utf8, Source, Out),
     setup_call_cleanup(
@@ -320,6 +383,13 @@ expect_value(Table, Column, KeyColumn, Key, Value) :-
 
 single_result(multi([Result]), Result) :- !.
 single_result(Result, Result).
+
+expect_query(SQL, Expected) :-
+    asadb_exec_sql(SQL, Result0),
+    single_result(Result0, Result),
+    ( Result == Expected -> true
+    ; throw(error(assertion_failed(query(SQL, Expected, Result)), _))
+    ).
 
 cleanup_database(DbFile) :-
     maplist(delete_if_exists, [DbFile]),

@@ -121,6 +121,10 @@ for (const format of ['mysql', 'postgresql', 'csv', 'xlsx']) {
     `export UI must expose ${format}`);
 }
 assert.match(app, /function exportDatabaseFromBackend/, 'modern UI must submit production backups to the backend');
+assert.match(app, /dbViews.*sandbox\.views/s, 'modern export picker must include catalog views');
+assert.match(legacyApp, /dbViews.*sandbox\.views/s, 'legacy export picker must include catalog views');
+assert.match(interchangeBackend, /interchange_select_views/, 'backend export must retain selected views');
+assert.match(interchangeBackend, /interchange_materialize_views/, 'CSV/XLSX export must materialize selected views in the backend');
 assert.match(app, /form\.action = format === 'asadb' \? '\/api\/backup' : '\/api\/export'/,
   'modern UI must separate backup and portable export endpoints');
 assert.match(legacyApp, /function exportDatabaseFromBackendLegacy/, 'legacy UI must submit production backups to the backend');

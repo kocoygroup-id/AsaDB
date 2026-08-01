@@ -4299,17 +4299,22 @@ function renderExportTablePicker() {
   const current = collectExportSelections();
   const activeDb = currentDbName();
   const db = activeDb ? (sandbox.dbs[activeDb] || {}) : {};
-  const tables = Object.keys(db).sort((a, b) => a.localeCompare(b));
+  const dbViews = activeDb ? (sandbox.views?.[activeDb] || {}) : {};
+  const relations = [
+    ...Object.keys(db).map(name => ({ name, kind: 'table', value: db[name] })),
+    ...Object.keys(dbViews).filter(name => !db[name]).map(name => ({ name, kind: 'view', value: dbViews[name] })),
+  ].sort((a, b) => a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind));
   exportDbName.textContent = activeDb || t('database.noneSelected');
   exportTableRows.innerHTML = '';
 
-  for (const table of tables) {
+  for (const relation of relations) {
+    const { name, kind } = relation;
     const row = document.createElement('tr');
-    const tableChecked = current.tables[table] ?? true;
-    const dataChecked = current.data[table] ?? true;
+    const tableChecked = current.tables[name] ?? true;
+    const dataChecked = current.data[name] ?? true;
     row.innerHTML = `
-      <td><label><input class="export-table-check" data-table="${escapeHtml(table)}" type="checkbox" ${tableChecked ? 'checked' : ''} /> ${escapeHtml(table)}</label></td>
-      <td><input class="export-data-check" data-table="${escapeHtml(table)}" type="checkbox" ${dataChecked ? 'checked' : ''} /></td>
+      <td><label><input class="export-table-check" data-table="${escapeHtml(name)}" data-kind="${kind}" type="checkbox" ${tableChecked ? 'checked' : ''} /> ${escapeHtml(name)}${kind === 'view' ? ' <span class="relation-badge">VIEW</span>' : ''}</label></td>
+      <td><input class="export-data-check" data-table="${escapeHtml(name)}" data-kind="${kind}" type="checkbox" ${dataChecked ? 'checked' : ''} /></td>
     `;
     exportTableRows.appendChild(row);
   }
@@ -4326,13 +4331,19 @@ function collectExportSelections() {
 function getExportSelection() {
   const activeDb = currentDbName();
   const db = activeDb ? (sandbox.dbs[activeDb] || {}) : {};
+  const dbViews = activeDb ? (sandbox.views?.[activeDb] || {}) : {};
   const checked = collectExportSelections();
   const includeDataGlobally = exportDataMode.value !== 'none';
   const includeSchema = exportTableMode.value !== 'none';
-  return Object.keys(db).filter(table => checked.tables[table] ?? true).map(table => ({
-    name: table,
-    table: db[table],
-    includeData: includeDataGlobally && (checked.data[table] ?? true),
+  const relations = [
+    ...Object.keys(db).map(name => ({ name, kind: 'table', table: db[name] })),
+    ...Object.keys(dbViews).filter(name => !db[name]).map(name => ({ name, kind: 'view', table: dbViews[name] })),
+  ];
+  return relations.filter(relation =>
+    (backendOnline || relation.kind !== 'view') && (checked.tables[relation.name] ?? true)
+  ).map(relation => ({
+    ...relation,
+    includeData: includeDataGlobally && (checked.data[relation.name] ?? true),
     includeSchema,
   }));
 }
@@ -5456,6 +5467,10 @@ async function buildExportPackage(format) {
   if (!db) throw new Error(t('database.selectFirst'));
   const selection = getExportSelection();
   if (!selection.length) throw new Error(t('export.noTables'));
+
+  if (selection.some(item => item.kind === 'view')) {
+    throw new Error(t('export.backendRequired'));
+  }
 
   if (format === 'asadb') {
     const bytes = makeAsaDbBytes(db, selection);

@@ -5,8 +5,8 @@ CSV, and XLSX. Portable interchange is separate from the authenticated
 `.asb` production-backup format:
 
 - use `.asb` for complete logical backup and verified disaster recovery;
-- use MySQL/PostgreSQL SQL, CSV, or XLSX to exchange selected tables with
-  other tools.
+- use MySQL/PostgreSQL SQL, CSV, or XLSX to exchange selected tables and views
+  with other tools.
 
 The browser sends only format and selection controls.
 `src/asadb_interchange.pl` holds the normal backend execution lock for export
@@ -17,10 +17,10 @@ rows currently loaded in AsAPanel.
 
 | Format | Export | Import behavior |
 | --- | --- | --- |
-| MySQL SQL | `CREATE TABLE`, indexes, and 256-row multi-value `INSERT` batches | Common dump controls are removed and portable DDL/DML enters the normal AsaDB parser and transaction path. |
-| PostgreSQL SQL | PostgreSQL identifiers/types plus streaming `COPY ... FROM stdin` data | `COPY` rows become bounded multi-value inserts; common schema qualifiers and portable type casts are normalized. |
-| CSV | One selected table produces `.csv`; multiple tables produce a ZIP containing one CSV per table | Plain CSV and AsaDB `-csv.zip` packages are accepted. Header names are sanitized and deduplicated; the first 256 rows infer `BIGINT`, `DOUBLE`, or `TEXT`; remaining rows stream to bounded inserts. |
-| XLSX | A valid OOXML workbook with one sheet per selected table | ZIP paths/counts/sizes are validated; worksheets are parsed row by row; a 256-row sample infers column types without materializing the workbook. |
+| MySQL SQL | Selected tables plus `CREATE VIEW` for selected views, indexes, and 256-row multi-value `INSERT` batches | Common dump controls are removed and portable DDL/DML enters the normal AsaDB parser and transaction path. |
+| PostgreSQL SQL | PostgreSQL identifiers/types, selected view definitions, plus streaming `COPY ... FROM stdin` table data | `COPY` rows become bounded multi-value inserts; common schema qualifiers and portable type casts are normalized. |
+| CSV | One selected relation produces `.csv`; multiple relations produce a ZIP containing one CSV per relation | Tables scan backend pages; views are evaluated by the normal backend executor. Plain CSV and AsaDB `-csv.zip` packages are accepted. |
+| XLSX | A valid OOXML workbook with one sheet per selected relation | Tables scan backend pages; views are evaluated by the normal backend executor. ZIP paths/counts/sizes are validated; worksheets are parsed row by row; a 256-row sample infers column types without materializing the workbook. |
 
 CSV and XLSX imports support `replace` (`DROP` then `CREATE`) and `append`
 (`CREATE IF NOT EXISTS`, then insert). The target table field names the first
@@ -52,7 +52,7 @@ Authenticated portable export uses `POST /api/export` with:
 
 - `database`;
 - `format=mysql|postgresql|csv|xlsx`;
-- `tables` and `data_tables` as comma-separated backend table names;
+- `tables` and `data_tables` as comma-separated backend table or view names;
 - `include_schema`, `include_data`, `create_database`, and `drop_tables`;
 - `output=save|open`.
 
@@ -74,7 +74,7 @@ make test-interchange-stress
 The regression covers Unicode, `NULL`, quotes, multiline values, MySQL
 multi-row inserts, PostgreSQL `COPY`, CSV quoting/type inference, XLSX
 OOXML/ZIP validation, authenticated HTTP export, Reservoir import, and
-backend row verification. On the recorded PCLinuxOS audit host, four exports
-plus CSV and XLSX preparation over 20,000 rows per format completed in about
-9.7 seconds. This is a development measurement, not a universal latency
+backend row verification. On the recorded PCLinuxOS 1.5.0 audit run, four
+exports plus CSV and XLSX preparation over 20,000 rows per format completed in
+13.8 seconds. This is a development measurement, not a universal latency
 guarantee.

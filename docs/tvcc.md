@@ -1,7 +1,7 @@
 # Local TVCC
 
-This document describes development-branch work. It is not a release claim or
-a cross-process concurrency guarantee.
+TVCC is part of the 1.5.0 Stable local backend scope. It is not a cross-process
+concurrency guarantee.
 
 ## What it provides
 

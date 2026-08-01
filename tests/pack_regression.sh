@@ -36,7 +36,7 @@ done
 SOURCE_URI="file://$STAGE"
 
 swipl -q -g "use_module(library(prolog_pack)), current_prolog_flag(version_data, swi(Major, _, _, _)), ( Major >= 10 -> DirectoryOption = pack_directory('$PACK_HOME') ; DirectoryOption = package_directory('$PACK_HOME') ), pack_install('$SOURCE_URI', [DirectoryOption, interactive(false), test(false)]), halt"
-swipl -q -g "use_module(library(prolog_pack)), attach_packs('$PACK_HOME', [replace(true)]), pack_property(asadb, version('1.4.0')), halt"
+swipl -q -g "use_module(library(prolog_pack)), attach_packs('$PACK_HOME', [replace(true)]), pack_property(asadb, version('1.5.0')), halt"
 INSTALLED="$PACK_HOME/asadb"
 for required in \
   bin/asadb src/asadb.pl src/asadb_web.pl src/asa_portable.pl \
@@ -51,7 +51,7 @@ done
 # verifies the complete installed engine rather than local file permissions.
 (cd "$INSTALLED" &&
   swipl -q -s src/asadb.pl -- "$TMP_ROOT/pack-cli.asa" examples/demo.sql >/dev/null)
-swipl -q -g "use_module(library(prolog_pack)), attach_packs('$PACK_HOME', [replace(true)]), use_module(library(asadb)), asadb:asadb_version('1.4.0'), asadb:asadb_parse_sql(\"SELECT 1;\", [_]), halt"
+swipl -q -g "use_module(library(prolog_pack)), attach_packs('$PACK_HOME', [replace(true)]), use_module(library(asadb)), asadb:asadb_version('1.5.0'), asadb:asadb_parse_sql(\"SELECT 1;\", [_]), halt"
 swipl -q -g "use_module(library(prolog_pack)), attach_packs('$PACK_HOME', [replace(true)]), ( current_predicate(pack_remove/2) -> pack_remove(asadb, [pack_directory('$PACK_HOME'), interactive(false)]) ; pack_remove(asadb) ), halt"
 
 test ! -e "$PACK_HOME/asadb"

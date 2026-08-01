@@ -108,16 +108,17 @@ asadb_interchange_cleanup(File) :-
 interchange_export_locked(Database, Format, Options, File, Metadata) :-
     asadb_get_state(State),
     interchange_database(State, Database, Db),
-    interchange_db_parts(Db, CanonicalDatabase, Tables0),
+    interchange_db_parts(Db, CanonicalDatabase, Tables0, Views0),
     interchange_select_tables(Tables0, Options.tables, Tables),
-    Tables \= [],
+    interchange_select_views(Views0, Options.tables, Views),
+    ( Tables \= [] ; Views \= [] ),
     ( Format == mysql ->
         temporary_interchange_file(text, File),
         setup_call_cleanup(
             open(File, write, Out, [encoding(utf8), newline(posix)]),
             once(interchange_write_mysql(
-                Out, CanonicalDatabase, Tables, Options,
-                TableCount, RowCount)),
+                Out, CanonicalDatabase, Tables, Views, Options,
+                _, ViewCount, RowCount)),
             close(Out)
         ),
         interchange_filename(CanonicalDatabase, '-mysql.sql', Filename),
@@ -127,30 +128,41 @@ interchange_export_locked(Database, Format, Options, File, Metadata) :-
         setup_call_cleanup(
             open(File, write, Out, [encoding(utf8), newline(posix)]),
             once(interchange_write_postgresql(
-                Out, CanonicalDatabase, Tables, Options,
-                TableCount, RowCount)),
+                Out, CanonicalDatabase, Tables, Views, Options,
+                _, ViewCount, RowCount)),
             close(Out)
         ),
         interchange_filename(CanonicalDatabase, '-postgresql.sql', Filename),
         ContentType = 'application/sql; charset=UTF-8'
     ; Format == csv ->
-        interchange_write_csv_package(CanonicalDatabase, Tables, Options,
+        interchange_materialize_views(CanonicalDatabase, Views, ViewTables),
+        append(Tables, ViewTables, ExportTables),
+        interchange_write_csv_package(CanonicalDatabase, ExportTables, Options,
                                       File, Filename, ContentType,
-                                      TableCount, RowCount)
+                                      _, RowCount),
+        length(Views, ViewCount)
     ; Format == xlsx ->
-        interchange_write_xlsx(CanonicalDatabase, Tables, Options, File,
-                               TableCount, RowCount),
+        interchange_materialize_views(CanonicalDatabase, Views, ViewTables),
+        append(Tables, ViewTables, ExportTables),
+        interchange_write_xlsx(CanonicalDatabase, ExportTables, Options, File,
+                               _, RowCount),
+        length(Views, ViewCount),
         interchange_filename(CanonicalDatabase, '.xlsx', Filename),
         ContentType =
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     ),
     size_file(File, Bytes),
+    length(Tables, PhysicalTableCount),
+    length(Views, ViewCount),
+    ObjectCount is PhysicalTableCount + ViewCount,
     Metadata = interchange{
         format:Format,
         database:CanonicalDatabase,
         filename:Filename,
         content_type:ContentType,
-        table_count:TableCount,
+        table_count:PhysicalTableCount,
+        view_count:ViewCount,
+        object_count:ObjectCount,
         row_count:RowCount,
         bytes:Bytes,
         source:backend_storage,
@@ -210,8 +222,17 @@ interchange_select_tables(Tables, all, Tables) :- !.
 interchange_select_tables(Tables0, Names, Tables) :-
     include(interchange_selected_table(Names), Tables0, Tables).
 
+interchange_select_views(Views, all, Views) :- !.
+interchange_select_views(Views0, Names, Views) :-
+    include(interchange_selected_view(Names), Views0, Views).
+
 interchange_selected_table(Names, Table) :-
     interchange_table_parts(Table, Name, _, _, _),
+    member(Selected, Names),
+    interchange_same_identifier(Name, Selected), !.
+
+interchange_selected_view(Names, View) :-
+    interchange_view_parts(View, Name, _),
     member(Selected, Names),
     interchange_same_identifier(Name, Selected), !.
 
@@ -228,11 +249,40 @@ interchange_table_options(Options, Name, TableOptions) :-
     ; TableOptions = Options.put(include_data, false)
     ).
 
+% Spreadsheet/CSV formats encode rows, not database objects.  Materialize
+% only the explicitly selected views and give their result columns a portable
+% TEXT-like type; the exact view definition remains available in SQL exports
+% and native .asb backups.
+interchange_materialize_views(_, [], []).
+interchange_materialize_views(Database, [View|Views], [Table|Tables]) :-
+    interchange_view_parts(View, Name, _),
+    asadb_view_rows(Database, Name, Labels, Rows),
+    interchange_view_columns(Labels, Columns),
+    interchange_rows_from_lists(Labels, Rows, Storage),
+    Table = table(Name, Columns, Storage, []),
+    interchange_materialize_views(Database, Views, Tables).
+
+interchange_view_columns([], []).
+interchange_view_columns([Name|Names], [col(Name, text, [])|Columns]) :-
+    interchange_view_columns(Names, Columns).
+
+interchange_rows_from_lists(_, [], []).
+interchange_rows_from_lists(Labels, [Values|Rows], [row(Pairs)|Storage]) :-
+    interchange_zip_pairs(Labels, Values, Pairs),
+    interchange_rows_from_lists(Labels, Rows, Storage).
+
+interchange_zip_pairs([], _, []).
+interchange_zip_pairs([Name|Names], [Value|Values], [Name=Value|Pairs]) :- !,
+    interchange_zip_pairs(Names, Values, Pairs).
+interchange_zip_pairs([Name|Names], [], [Name=null|Pairs]) :-
+    interchange_zip_pairs(Names, [], Pairs).
+
 /* -------------------------------------------------------------------------
    MySQL and PostgreSQL export
    ------------------------------------------------------------------------- */
 
-interchange_write_mysql(Out, Database, Tables, Options, TableCount, RowCount) :-
+interchange_write_mysql(Out, Database, Tables, Views, Options,
+                        TableCount, ViewCount, RowCount) :-
     format(Out, '-- AsaDB backend interchange: MySQL~n', []),
     format(Out, 'SET NAMES utf8mb4;~nSET FOREIGN_KEY_CHECKS=0;~n', []),
     ( Options.create_database == true ->
@@ -242,10 +292,12 @@ interchange_write_mysql(Out, Database, Tables, Options, TableCount, RowCount) :-
     ),
     interchange_write_sql_tables(mysql, Out, Tables, Options,
                                  0, TableCount, 0, RowCount),
+    interchange_write_sql_views(mysql, Out, Database, Views, Options,
+                                0, ViewCount),
     format(Out, 'SET FOREIGN_KEY_CHECKS=1;~n', []).
 
-interchange_write_postgresql(Out, Database, Tables, Options,
-                             TableCount, RowCount) :-
+interchange_write_postgresql(Out, Database, Tables, Views, Options,
+                             TableCount, ViewCount, RowCount) :-
     format(Out, '-- AsaDB backend interchange: PostgreSQL~n', []),
     format(Out, 'SET client_encoding = ''UTF8'';~n', []),
     ( Options.create_database == true ->
@@ -255,7 +307,9 @@ interchange_write_postgresql(Out, Database, Tables, Options,
     ; true
     ),
     interchange_write_sql_tables(postgresql, Out, Tables, Options,
-                                 0, TableCount, 0, RowCount).
+                                 0, TableCount, 0, RowCount),
+    interchange_write_sql_views(postgresql, Out, Database, Views, Options,
+                                0, ViewCount).
 
 interchange_write_sql_tables(_, _, [], _, TableCount, TableCount,
                              RowCount, RowCount).
@@ -277,6 +331,32 @@ interchange_write_sql_tables(Dialect, Out, [Table|Tables], Options,
     interchange_write_sql_tables(Dialect, Out, Tables, Options,
                                  TableCount1, TableCount,
                                  RowCount1, RowCount).
+
+% SQL formats retain a view as a view definition.  CSV/XLSX do not have a
+% view DDL concept, so their path materializes the same definition below.
+interchange_write_sql_views(_, _, _, [], _, Count, Count).
+interchange_write_sql_views(Dialect, Out, Database, [View|Views], Options,
+                            Count0, Count) :-
+    ( Options.include_schema == true ->
+        interchange_write_view_schema(Dialect, Out, Database, View, Options)
+    ; true
+    ),
+    Count1 is Count0 + 1,
+    interchange_write_sql_views(Dialect, Out, Database, Views, Options,
+                                Count1, Count).
+
+interchange_write_view_schema(Dialect, Out, Database, View, Options) :-
+    interchange_view_parts(View, Name, SelectAST),
+    sql_identifier(Dialect, Name, ViewSQL),
+    ( Options.drop_tables == true ->
+        format(Out, 'DROP VIEW IF EXISTS ~w;~n', [ViewSQL])
+    ; true
+    ),
+    interchange_select_sql(Dialect, SelectAST, SelectSQL),
+    format(Out, 'CREATE VIEW ~w AS ~w;~n~n', [ViewSQL, SelectSQL]),
+    % Resolve the definition while the database is explicit.  It catches a
+    % stale/corrupt catalog entry before we hand an export to the caller.
+    asadb_view_definition(Database, Name, SelectAST).
 
 interchange_write_table_schema(Dialect, Out, Name, Columns, Indexes, Options) :-
     sql_identifier(Dialect, Name, TableSQL),
@@ -443,6 +523,199 @@ postgres_copy_escape([13|Codes], [92,114|Escaped]) :- !,
     postgres_copy_escape(Codes, Escaped).
 postgres_copy_escape([Code|Codes], [Code|Escaped]) :-
     postgres_copy_escape(Codes, Escaped).
+
+/* -------------------------------------------------------------------------
+   View SQL rendering
+   ------------------------------------------------------------------------- */
+
+% Views are stored as parsed AsaDB SELECT terms, not as untrusted source SQL.
+% Render that AST with dialect quoting so an interchange file can recreate the
+% view without relying on a browser cache or on a lossy Prolog-term comment.
+interchange_select_sql(Dialect,
+                       select(Projection, Source, Where, Group, Order, Limit),
+                       SQL) :-
+    interchange_projection_sql(Dialect, Projection, ProjectionSQL),
+    interchange_source_sql(Dialect, Source, SourceSQL),
+    interchange_where_sql(Dialect, Where, WhereSQL),
+    interchange_group_sql(Dialect, Group, GroupSQL),
+    interchange_order_sql(Dialect, Order, OrderSQL),
+    interchange_limit_sql(Limit, LimitSQL),
+    atomic_list_concat(['SELECT ', ProjectionSQL, ' FROM ', SourceSQL,
+                        WhereSQL, GroupSQL, OrderSQL, LimitSQL], SQL).
+interchange_select_sql(Dialect, union(Left, Right, Mode), SQL) :-
+    interchange_select_sql(Dialect, Left, LeftSQL),
+    interchange_select_sql(Dialect, Right, RightSQL),
+    ( Mode == all -> Keyword = ' UNION ALL ' ; Keyword = ' UNION ' ),
+    atomic_list_concat([LeftSQL, Keyword, RightSQL], SQL).
+interchange_select_sql(_, SelectAST, _) :-
+    throw(error(domain_error(exportable_view_select, SelectAST), _)).
+
+interchange_projection_sql(_, all, '*') :- !.
+interchange_projection_sql(Dialect, Projections, SQL) :-
+    maplist(interchange_projection_item_sql(Dialect), Projections, Items),
+    atomic_list_concat(Items, ', ', SQL).
+
+interchange_projection_item_sql(Dialect, Name, SQL) :-
+    atom(Name), !,
+    sql_identifier(Dialect, Name, SQL).
+interchange_projection_item_sql(Dialect, projection(Label, Expr), SQL) :-
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    ( interchange_expr_label(Expr, Label) -> SQL = ExprSQL
+    ; sql_identifier(Dialect, Label, LabelSQL),
+      atomic_list_concat([ExprSQL, ' AS ', LabelSQL], SQL)
+    ).
+
+interchange_expr_label(col(Name), Name) :- !.
+interchange_expr_label(qcol(Qualifier, Name), Label) :- !,
+    atomic_list_concat([Qualifier, Name], '.', Label).
+interchange_expr_label(func(Name, _), Name) :- !.
+interchange_expr_label(Expr, Label) :- atom(Expr), Expr == Label.
+
+interchange_source_sql(Dialect, table_ref(Name, none), SQL) :- !,
+    sql_identifier(Dialect, Name, SQL).
+interchange_source_sql(Dialect, table_ref(Name, Alias), SQL) :- !,
+    sql_identifier(Dialect, Name, NameSQL),
+    sql_identifier(Dialect, Alias, AliasSQL),
+    atomic_list_concat([NameSQL, ' AS ', AliasSQL], SQL).
+interchange_source_sql(Dialect, join(Kind, Left, Right, On), SQL) :- !,
+    interchange_source_sql(Dialect, Left, LeftSQL),
+    interchange_source_sql(Dialect, Right, RightSQL),
+    interchange_join_keyword(Kind, Keyword),
+    interchange_expr_sql(Dialect, On, OnSQL),
+    atomic_list_concat([LeftSQL, ' ', Keyword, ' ', RightSQL, ' ON ', OnSQL], SQL).
+interchange_source_sql(_, Source, _) :-
+    throw(error(domain_error(exportable_view_source, Source), _)).
+
+interchange_join_keyword(inner, 'INNER JOIN').
+interchange_join_keyword(left, 'LEFT JOIN').
+interchange_join_keyword(right, 'RIGHT JOIN').
+interchange_join_keyword(cross, 'CROSS JOIN').
+
+interchange_where_sql(_, true, '') :- !.
+interchange_where_sql(Dialect, Expr, SQL) :-
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    atomic_list_concat([' WHERE ', ExprSQL], SQL).
+
+interchange_group_sql(_, none, '') :- !.
+interchange_group_sql(Dialect, group(Exprs), SQL) :-
+    maplist(interchange_expr_sql(Dialect), Exprs, Items),
+    atomic_list_concat(Items, ', ', Text),
+    atomic_list_concat([' GROUP BY ', Text], SQL).
+
+interchange_order_sql(_, none, '') :- !.
+interchange_order_sql(_, order([]), '') :- !.
+interchange_order_sql(Dialect, order(Items), SQL) :-
+    maplist(interchange_order_item_sql(Dialect), Items, TextItems),
+    atomic_list_concat(TextItems, ', ', Text),
+    atomic_list_concat([' ORDER BY ', Text], SQL).
+
+interchange_order_item_sql(Dialect, order(Expr, Direction), SQL) :-
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    upcase_atom(Direction, DirectionSQL),
+    atomic_list_concat([ExprSQL, ' ', DirectionSQL], SQL).
+
+interchange_limit_sql(none, '') :- !.
+interchange_limit_sql(limit(0, Count), SQL) :- !,
+    format(atom(SQL), ' LIMIT ~w', [Count]).
+interchange_limit_sql(limit(Offset, Count), SQL) :-
+    format(atom(SQL), ' LIMIT ~w OFFSET ~w', [Count, Offset]).
+
+interchange_expr_sql(_, all, '*') :- !.
+interchange_expr_sql(_, value(current_timestamp), 'CURRENT_TIMESTAMP') :- !.
+interchange_expr_sql(Dialect, value(Value), SQL) :- !,
+    sql_value(Dialect, Value, SQL).
+interchange_expr_sql(Dialect, col(Name), SQL) :- !,
+    sql_identifier(Dialect, Name, SQL).
+interchange_expr_sql(Dialect, qcol(Qualifier, Name), SQL) :- !,
+    sql_identifier(Dialect, Qualifier, QualifierSQL),
+    sql_identifier(Dialect, Name, NameSQL),
+    atomic_list_concat([QualifierSQL, '.', NameSQL], SQL).
+interchange_expr_sql(Dialect, func(Name, Args), SQL) :- !,
+    upcase_atom(Name, Function),
+    maplist(interchange_expr_sql(Dialect), Args, ArgSQL),
+    atomic_list_concat(ArgSQL, ', ', Arguments),
+    atomic_list_concat([Function, '(', Arguments, ')'], SQL).
+interchange_expr_sql(Dialect, cmp(Op, Left, Right), SQL) :- !,
+    interchange_binary_expr_sql(Dialect, Left, Op, Right, SQL).
+interchange_expr_sql(Dialect, and(Left, Right), SQL) :- !,
+    interchange_binary_expr_sql(Dialect, Left, 'AND', Right, SQL).
+interchange_expr_sql(Dialect, or(Left, Right), SQL) :- !,
+    interchange_binary_expr_sql(Dialect, Left, 'OR', Right, SQL).
+interchange_expr_sql(Dialect, xor(Left, Right), SQL) :- !,
+    interchange_binary_expr_sql(Dialect, Left, 'XOR', Right, SQL).
+interchange_expr_sql(Dialect, not(Expr), SQL) :- !,
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    atomic_list_concat(['(NOT ', ExprSQL, ')'], SQL).
+interchange_expr_sql(Dialect, is_null(Expr), SQL) :- !,
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    atomic_list_concat(['(', ExprSQL, ' IS NULL)'], SQL).
+interchange_expr_sql(Dialect, is_not_null(Expr), SQL) :- !,
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    atomic_list_concat(['(', ExprSQL, ' IS NOT NULL)'], SQL).
+interchange_expr_sql(Dialect, is_true(Expr), SQL) :- !,
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    atomic_list_concat(['(', ExprSQL, ' IS TRUE)'], SQL).
+interchange_expr_sql(Dialect, is_false(Expr), SQL) :- !,
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    atomic_list_concat(['(', ExprSQL, ' IS FALSE)'], SQL).
+interchange_expr_sql(Dialect, is_unknown(Expr), SQL) :- !,
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    atomic_list_concat(['(', ExprSQL, ' IS UNKNOWN)'], SQL).
+interchange_expr_sql(Dialect, like(Left, Right), SQL) :- !,
+    interchange_binary_expr_sql(Dialect, Left, 'LIKE', Right, SQL).
+interchange_expr_sql(Dialect, between(Expr, Low, High), SQL) :- !,
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    interchange_expr_sql(Dialect, Low, LowSQL),
+    interchange_expr_sql(Dialect, High, HighSQL),
+    atomic_list_concat(['(', ExprSQL, ' BETWEEN ', LowSQL, ' AND ', HighSQL, ')'], SQL).
+interchange_expr_sql(Dialect, in_list(Expr, Values), SQL) :- !,
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    maplist(interchange_expr_sql(Dialect), Values, ValueSQL),
+    atomic_list_concat(ValueSQL, ', ', Text),
+    atomic_list_concat(['(', ExprSQL, ' IN (', Text, '))'], SQL).
+interchange_expr_sql(Dialect, in_subquery(Expr, SelectAST), SQL) :- !,
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    interchange_select_sql(Dialect, SelectAST, SelectSQL),
+    atomic_list_concat(['(', ExprSQL, ' IN (', SelectSQL, '))'], SQL).
+interchange_expr_sql(Dialect, exists_subquery(SelectAST), SQL) :- !,
+    interchange_select_sql(Dialect, SelectAST, SelectSQL),
+    atomic_list_concat(['EXISTS (', SelectSQL, ')'], SQL).
+interchange_expr_sql(Dialect, subquery(SelectAST), SQL) :- !,
+    interchange_select_sql(Dialect, SelectAST, SelectSQL),
+    atomic_list_concat(['(', SelectSQL, ')'], SQL).
+interchange_expr_sql(Dialect, add(Left, Right), SQL) :- !,
+    interchange_binary_expr_sql(Dialect, Left, '+', Right, SQL).
+interchange_expr_sql(Dialect, sub(Left, Right), SQL) :- !,
+    interchange_binary_expr_sql(Dialect, Left, '-', Right, SQL).
+interchange_expr_sql(Dialect, mul(Left, Right), SQL) :- !,
+    interchange_binary_expr_sql(Dialect, Left, '*', Right, SQL).
+interchange_expr_sql(Dialect, div(Left, Right), SQL) :- !,
+    interchange_binary_expr_sql(Dialect, Left, '/', Right, SQL).
+interchange_expr_sql(Dialect, neg(Expr), SQL) :- !,
+    interchange_expr_sql(Dialect, Expr, ExprSQL),
+    atomic_list_concat(['(-', ExprSQL, ')'], SQL).
+interchange_expr_sql(Dialect, tuple(Exprs), SQL) :- !,
+    maplist(interchange_expr_sql(Dialect), Exprs, Items),
+    atomic_list_concat(Items, ', ', Text),
+    atomic_list_concat(['(', Text, ')'], SQL).
+interchange_expr_sql(Dialect, case(Whens, Else), SQL) :- !,
+    interchange_case_when_sql(Dialect, Whens, WhenSQL),
+    interchange_expr_sql(Dialect, Else, ElseSQL),
+    atomic_list_concat(['CASE ', WhenSQL, ' ELSE ', ElseSQL, ' END'], SQL).
+interchange_expr_sql(_, Expr, _) :-
+    throw(error(domain_error(exportable_view_expression, Expr), _)).
+
+interchange_binary_expr_sql(Dialect, Left, Operator, Right, SQL) :-
+    interchange_expr_sql(Dialect, Left, LeftSQL),
+    interchange_expr_sql(Dialect, Right, RightSQL),
+    atomic_list_concat(['(', LeftSQL, ' ', Operator, ' ', RightSQL, ')'], SQL).
+
+interchange_case_when_sql(_, [], '').
+interchange_case_when_sql(Dialect, [when(Condition, Value)|Whens], SQL) :-
+    interchange_expr_sql(Dialect, Condition, ConditionSQL),
+    interchange_expr_sql(Dialect, Value, ValueSQL),
+    interchange_case_when_sql(Dialect, Whens, Tail),
+    atomic_list_concat(['WHEN ', ConditionSQL, ' THEN ', ValueSQL, ' ', Tail], SQL).
 
 /* -------------------------------------------------------------------------
    CSV export
@@ -720,7 +993,10 @@ interchange_write_format(Out, Template, Arguments) :-
     ( stream_property(Out, encoding(octet)) ->
         string_codes(Text, Unicode),
         utf8_encode_codes(Unicode, Bytes),
-        maplist(put_byte(Out), Bytes)
+        % `format/3` writes an octet list in one buffered stream operation.
+        % Calling put_byte/2 through maplist for every UTF-8 byte dominated
+        % large XLSX/ZIP exports despite the rows themselves being streamed.
+        format(Out, '~s', [Bytes])
     ; format(Out, '~s', [Text])
     ).
 
@@ -1778,19 +2054,22 @@ take_prefix(N, [X|Xs], [X|Ys]) :-
 
 interchange_database(state(_, DBs), Database, Db) :-
     member(Db, DBs),
-    interchange_db_parts(Db, Name, _),
+    interchange_db_parts(Db, Name, _, _),
     interchange_same_identifier(Name, Database),
     \+ interchange_internal_database(Name), !.
 interchange_database(_, Database, _) :-
     throw(error(existence_error(database, Database), _)).
 
-interchange_db_parts(db(Name, Tables, _, _, _, _), Name, Tables) :- !.
-interchange_db_parts(db(Name, Tables), Name, Tables).
+interchange_db_parts(db(Name, Tables, Views, _, _, _), Name, Tables, Views) :- !.
+interchange_db_parts(db(Name, Tables), Name, Tables, []).
 
 interchange_table_parts(table(Name, Columns, Storage, Indexes),
                         Name, Columns, Storage, Indexes) :- !.
 interchange_table_parts(table(Name, Columns, Storage),
                         Name, Columns, Storage, []).
+
+interchange_view_parts(view(Name, SelectAST, _), Name, SelectAST) :- !.
+interchange_view_parts(view(Name, SelectAST), Name, SelectAST).
 
 interchange_internal_database(Name) :-
     atom(Name), sub_atom(Name, 0, 2, _, '__').

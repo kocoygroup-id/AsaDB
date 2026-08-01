@@ -12,7 +12,7 @@
 :- dynamic metadata_file/1.
 :- dynamic metadata_state/1.
 
-metadata_engine_version('1.4.0').
+metadata_engine_version('1.5.0').
 metadata_storage_format(3).
 
 asadb_metadata_open(BaseFile) :-
@@ -91,7 +91,7 @@ asadb_metadata_snapshot_locked(metadata{
     updated_at:unknown,
     last_checkpoint_at:unknown,
     checkpoint_count:0,
-    engine_version:'1.4.0',
+    engine_version:'1.5.0',
     storage_format:3,
     summary:summary{}
 }).
