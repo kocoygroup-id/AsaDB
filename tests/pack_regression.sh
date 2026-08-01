@@ -42,7 +42,7 @@ for required in \
   bin/asadb src/asadb.pl src/asadb_web.pl src/asa_portable.pl \
   scripts/run_asadb.sh scripts/run_panel.sh \
   web/index.html web/assets/app.js web/assets/app.legacy.js \
-  examples/demo.sql docs/swi-prolog-pack.md prolog/asadb.pl
+  examples/demo.sql docs/swi-prolog-pack.md prolog/asadb.pl tools/asadb_pack.pl
 do
   test -e "$INSTALLED/$required"
 done
@@ -52,6 +52,8 @@ done
 (cd "$INSTALLED" &&
   swipl -q -s src/asadb.pl -- "$TMP_ROOT/pack-cli.asa" examples/demo.sql >/dev/null)
 swipl -q -g "use_module(library(prolog_pack)), attach_packs('$PACK_HOME', [replace(true)]), use_module(library(asadb)), asadb:asadb_version('1.5.0'), asadb:asadb_parse_sql(\"SELECT 1;\", [_]), halt"
+HELPER_VERSION=$(swipl -q -g "use_module(library(prolog_pack)), attach_packs('$PACK_HOME', [replace(true)])" -s "$INSTALLED/tools/asadb_pack.pl" -- version)
+test "$HELPER_VERSION" = '1.5.0'
 swipl -q -g "use_module(library(prolog_pack)), attach_packs('$PACK_HOME', [replace(true)]), ( current_predicate(pack_remove/2) -> pack_remove(asadb, [pack_directory('$PACK_HOME'), interactive(false)]) ; pack_remove(asadb) ), halt"
 
 test ! -e "$PACK_HOME/asadb"

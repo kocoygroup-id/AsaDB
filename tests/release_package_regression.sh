@@ -39,7 +39,7 @@ for required in \
   web/assets/app.legacy.js web/assets/app-loader.js \
   web/assets/fonts/noto-sans-jp-japanese-400-normal.woff2 web/assets/fonts/noto-sans-jp-japanese-400-normal.woff \
   tests/run_tests.pl tests/join_15000_regression.pl tests/production_backup_regression.pl tests/production_backup_http_regression.sh tests/interchange_regression.pl tests/interchange_http_regression.sh tests/interchange_stress.pl tests/prolog_module_audit.sh tests/guardian_regression.sh tests/windows_source_package_regression.sh tests/ui_regression.js \
-  tests/launcher_regression.sh tests/release_package_regression.sh tests/pack_regression.sh
+  tests/launcher_regression.sh tests/release_package_regression.sh tests/pack_regression.sh tools/asadb_pack.pl
 do
   if ! grep -Fx "$NAME/$required" "$LIST_FILE" >/dev/null; then
     echo "Release is missing required path: $required" >&2
