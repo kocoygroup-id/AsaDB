@@ -954,6 +954,7 @@ th {
 
 .sql-highlight,
 #sqlInput {
+  box-sizing: border-box;
   position: absolute;
   inset: 0;
   width: 100%;
@@ -970,6 +971,8 @@ th {
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.55;
+  letter-spacing: 0;
+  font-variant-ligatures: none;
   overflow-anchor: none;
 }
 
