@@ -59,7 +59,7 @@ var I18N = {
     'startup.title': 'Asa lagi pemanasan',
     'startup.copy': 'Nyambungin panel ke engine dan katalog lokal.',
     'brand.admin': 'Admin AsaDB',
-    'brand.support': 'Traktir Mi',
+    'brand.support': 'Ko-fi',
     'aria.databaseSelector': 'Pemilih database',
     'aria.databaseTools': 'Alat database',
     'aria.databaseQuickActions': 'Aksi cepat database',
@@ -273,7 +273,7 @@ var I18N = {
     'startup.title': 'Asa is warming up',
     'startup.copy': 'Connecting the panel to the local engine and catalog.',
     'brand.admin': 'AsaDB Admin',
-    'brand.support': 'Buy Me Noodles',
+    'brand.support': 'Ko-fi',
     'aria.databaseSelector': 'Database selector',
     'aria.databaseTools': 'Database tools',
     'aria.databaseQuickActions': 'Database quick actions',
@@ -487,7 +487,7 @@ var I18N = {
     'startup.title': 'アサは準備中です',
     'startup.copy': 'パネルをローカルエンジンとカタログに接続しています。',
     'brand.admin': 'AsaDB 管理',
-    'brand.support': '麺をごちそうする',
+    'brand.support': 'Ko-fi',
     'aria.databaseSelector': 'データベース選択',
     'aria.databaseTools': 'データベースツール',
     'aria.databaseQuickActions': 'データベースのクイック操作',
@@ -899,12 +899,7 @@ var tableDataPageState = null;
 var tableDetailRequestId = 0;
 var asaRunPrimePromise = null;
 var sqlLineRenderFrame = 0;
-var sqlScrollRestoreFrame = 0;
-var sqlPasteInProgress = false;
-var sqlPasteAnchor = {
-  top: 0,
-  left: 0
-};
+var sqlPasteAnchor = null;
 var sqlEditorMetrics = {
   lineCount: 1,
   large: false,
@@ -2325,32 +2320,30 @@ function syncSqlScroll() {
   sqlLineNumbers.scrollTop = sqlInput.scrollTop;
   positionSqlCompletions();
 }
-function sqlCaretScrollTarget() {
-  var _sqlInput$selectionSt2;
-  var caret = (_sqlInput$selectionSt2 = sqlInput.selectionStart) !== null && _sqlInput$selectionSt2 !== void 0 ? _sqlInput$selectionSt2 : sqlInput.value.length;
-  var line = lineNumberAtIndex(sqlInput.value, caret);
-  var viewport = sqlInput.clientHeight || 420;
-  var target = (line - 1) * SQL_EDITOR_LINE_HEIGHT - viewport * 0.45;
-  var max = Math.max(0, sqlInput.scrollHeight - viewport);
-  return Math.max(0, Math.min(max, target));
-}
-function restoreSqlViewport(top, left) {
-  var frames = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : 2;
-  cancelAnimationFrame(sqlScrollRestoreFrame);
-  var _apply = function apply(remaining) {
-    sqlInput.scrollTop = Math.max(0, Number(top) || 0);
-    sqlInput.scrollLeft = Math.max(0, Number(left) || 0);
-    syncSqlScroll();
-    if (remaining > 0) sqlScrollRestoreFrame = requestAnimationFrame(function () {
-      return _apply(remaining - 1);
-    });
+function captureSqlSelection() {
+  var length = sqlInput.value.length;
+  var start = Math.max(0, Math.min(length, Number(sqlInput.selectionStart) || 0));
+  var end = Math.max(start, Math.min(length, Number(sqlInput.selectionEnd) || start));
+  var direction = ['forward', 'backward', 'none'].indexOf(sqlInput.selectionDirection) >= 0 ? sqlInput.selectionDirection : 'none';
+  return {
+    start: start,
+    end: end,
+    direction: direction
   };
-  _apply(frames);
+}
+function restoreSqlSelection(selection) {
+  if (!selection || document.activeElement !== sqlInput) return;
+  var length = sqlInput.value.length;
+  var start = Math.max(0, Math.min(length, Number(selection.start) || 0));
+  var end = Math.max(start, Math.min(length, Number(selection.end) || start));
+  sqlInput.setSelectionRange(start, end, selection.direction);
 }
 function updateSqlEditor() {
   var options = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : {};
   var requestedTop = Number.isFinite(options.scrollTop) ? options.scrollTop : sqlInput.scrollTop;
   var requestedLeft = Number.isFinite(options.scrollLeft) ? options.scrollLeft : sqlInput.scrollLeft;
+  // Keep the textarea selection as the source of truth while its syntax layer is rebuilt.
+  var selection = options.selection || captureSqlSelection();
   var sql = sqlInput.value;
   sqlEditorMetrics = measureSqlEditor(sql);
   sqlEditor.classList.toggle('large-script', sqlEditorMetrics.large);
@@ -2359,7 +2352,7 @@ function updateSqlEditor() {
   sqlInput.scrollTop = requestedTop;
   sqlInput.scrollLeft = requestedLeft;
   syncSqlScroll();
-  if (options.persistScroll) restoreSqlViewport(requestedTop, requestedLeft);
+  restoreSqlSelection(selection);
   return sqlEditorMetrics;
 }
 function setSqlText(text) {
@@ -8889,25 +8882,27 @@ function handleSqlIndentKey(event) {
   return true;
 }
 sqlInput.addEventListener('paste', function () {
-  sqlPasteInProgress = true;
   sqlPasteAnchor = {
     top: sqlInput.scrollTop,
     left: sqlInput.scrollLeft
   };
   requestAnimationFrame(function () {
-    sqlPasteInProgress = false;
+    sqlPasteAnchor = null;
   });
 });
 sqlInput.addEventListener('input', function (event) {
-  var pasted = sqlPasteInProgress || event.inputType === 'insertFromPaste';
+  var pasteAnchor = sqlPasteAnchor;
+  var pasted = Boolean(pasteAnchor) || event.inputType === 'insertFromPaste';
   if (!pasted) applySqlAutoCorrection(false);
-  var scrollTop = pasted ? Math.max(sqlPasteAnchor.top, sqlInput.scrollTop, sqlCaretScrollTarget()) : sqlInput.scrollTop;
-  var scrollLeft = pasted ? Math.max(sqlPasteAnchor.left, sqlInput.scrollLeft) : sqlInput.scrollLeft;
+  // Preserve the viewport only for this render; never replay stale scroll state.
+  var scrollTop = pasted ? Math.max(pasteAnchor && pasteAnchor.top || 0, sqlInput.scrollTop) : sqlInput.scrollTop;
+  var scrollLeft = pasted ? Math.max(pasteAnchor && pasteAnchor.left || 0, sqlInput.scrollLeft) : sqlInput.scrollLeft;
   updateSqlEditor({
-    scrollTop,
-    scrollLeft,
-    persistScroll: pasted
+    scrollTop: scrollTop,
+    scrollLeft: scrollLeft,
+    selection: captureSqlSelection()
   });
+  sqlPasteAnchor = null;
   scheduleSqlAnalysis();
   updateSqlCompletions();
 });

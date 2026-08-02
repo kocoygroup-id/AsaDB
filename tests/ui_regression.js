@@ -21,6 +21,8 @@ const japaneseFontWoff = path.join(root, 'web', 'assets', 'fonts', 'noto-sans-jp
 
 const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
 assert.equal(ids.length, new Set(ids).size, 'web/index.html contains duplicate element IDs');
+assert.match(html, /href="https:\/\/ko-fi\.com\/asadb"/, 'panel support link must point to AsaDB on Ko-fi');
+assert.doesNotMatch(html, /saweria\.co/i, 'obsolete Saweria support link must not remain in the panel');
 
 const languageButtons = [...html.matchAll(/data-language="([^"]+)"/g)].map(match => match[1]);
 assert.deepEqual(languageButtons, ['id', 'ja', 'en'], 'language switcher must expose ID, JP, and EN in that order');
@@ -61,7 +63,12 @@ for (const requiredKey of [
 
 assert.match(app, /addEventListener\('paste'/, 'SQL editor must handle paste explicitly');
 assert.match(app, /insertFromPaste/, 'SQL editor must recognize paste input events');
-assert.match(app, /restoreSqlViewport/, 'SQL editor must restore its viewport after rerender');
+for (const bundle of [app, legacyApp]) {
+  assert.match(bundle, /function captureSqlSelection\(/, 'SQL editor must capture native caret selection before rerendering');
+  assert.match(bundle, /function restoreSqlSelection\(/, 'SQL editor must restore native caret selection after rerendering');
+  assert.doesNotMatch(bundle, /restoreSqlViewport|sqlCaretScrollTarget|persistScroll/,
+    'SQL editor must not replay stale scroll positions or force the viewport to the caret after paste');
+}
 assert.match(html, /id="sqlCompletions"[^>]+role="listbox"/, 'SQL editor must expose an accessible autocomplete list');
 assert.match(css, /\.sql-completions\s*\{/, 'SQL autocomplete popup styling is missing');
 for (const bundle of [app, legacyApp]) {
@@ -133,6 +140,8 @@ assert.match(legacyApp, /form\.action = format === 'asadb' \? '\/api\/backup' : 
 assert.match(css, /overflow-anchor:\s*none/, 'SQL editor must disable browser scroll anchoring');
 assert.match(css, /overscroll-behavior:\s*contain/, 'SQL editor must contain overscroll');
 assert.match(css, /scrollbar-gutter:\s*stable/, 'SQL editor must reserve stable scrollbar space');
+assert.match(css, /\.sql-highlight,\s*#sqlInput\s*\{[\s\S]*box-sizing:\s*border-box[\s\S]*font-variant-ligatures:\s*none/,
+  'syntax layer and textarea must share exact box and glyph metrics');
 assert.match(css, /\.language-button\.active/, 'active language styling is missing');
 assert.match(css, /@font-face[\s\S]*font-family:\s*"AsaDB Noto Sans JP"/, 'bundled Japanese web font is missing');
 assert.match(css, /html:lang\(ja\)[\s\S]*--font-main:\s*"AsaDB Noto Sans JP"/, 'Japanese UI must select its bundled font');
