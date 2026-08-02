@@ -18,6 +18,7 @@ main :-
     run_metadata_version_upgrade_assertions,
     run_alter_order_assertions,
     run_auto_increment_assertions,
+    run_schema_integrity_assertions,
     run_order_by_duplicate_assertions,
     run_order_by_wildcard_assertions,
     run_order_by_filtered_projection_assertions,
@@ -207,6 +208,64 @@ run_auto_increment_assertions :-
     asadb_shutdown,
     cleanup.
 
+run_schema_integrity_assertions :-
+    cleanup,
+    asadb_boot('tests/testdata.asa'),
+    Setup = 'CREATE DATABASE integrity_assert; USE integrity_assert; CREATE TABLE ledger (tenant_id INT, entry_id INT, code VARCHAR(3), amount DECIMAL(4,2), due_date DATE, CONSTRAINT ledger_pk PRIMARY KEY (tenant_id, entry_id), CONSTRAINT ledger_code UNIQUE (tenant_id, code), CONSTRAINT amount_positive CHECK (amount > 0)); CREATE TABLE parent (id INT PRIMARY KEY); CREATE TABLE child (id INT PRIMARY KEY, parent_id INT, CONSTRAINT child_parent FOREIGN KEY (parent_id) REFERENCES parent (id) ON DELETE RESTRICT ON UPDATE RESTRICT);',
+    asadb_exec_sql(Setup, SetupResult),
+    ( result_has_error(SetupResult) ->
+        asadb_format_result(SetupResult),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ; true
+    ),
+    expect_sql('INSERT INTO ledger VALUES (1, 1, ''ok'', 12.34, ''2024-02-29'');',
+               ok(inserted(ledger, 1))),
+    expect_integrity_rejected('INSERT INTO ledger VALUES (1, 1, ''du'', 2.00, ''2024-02-29'');'),
+    expect_integrity_rejected('INSERT INTO ledger VALUES (1, 2, ''toolong'', 2.00, ''2024-02-29'');'),
+    expect_integrity_rejected('INSERT INTO ledger VALUES (1, 2, ''due'', 2.00, ''2024-02-30'');'),
+    expect_integrity_rejected('INSERT INTO ledger VALUES (1, 2, ''neg'', -1.00, ''2024-02-29'');'),
+    expect_integrity_rejected('UPDATE ledger SET due_date = ''not-a-date'' WHERE entry_id = 1;'),
+    expect_sql('SELECT tenant_id, entry_id, code, amount, due_date FROM ledger;',
+               table([tenant_id,entry_id,code,amount,due_date], [[1,1,ok,12.34,'2024-02-29']])),
+    expect_sql('CREATE TABLE unsigned_values (id INT UNSIGNED);',
+               ok(created_table(unsigned_values))),
+    expect_sql('INSERT INTO unsigned_values VALUES (4294967295);',
+               ok(inserted(unsigned_values, 1))),
+    expect_integrity_rejected('INSERT INTO unsigned_values VALUES (-1);'),
+    expect_integrity_rejected('INSERT INTO unsigned_values VALUES (4294967296);'),
+    expect_integrity_rejected('INSERT INTO child VALUES (1, 99);'),
+    asadb_exec_sql('INSERT INTO parent VALUES (99); INSERT INTO child VALUES (1, 99);', ParentChildResult),
+    ( ParentChildResult == multi([ok(inserted(parent, 1)),ok(inserted(child, 1))]) -> true
+    ; format('ASSERTION FAILED: valid foreign-key insert failed: ~w~n', [ParentChildResult]),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    asadb_exec_sql('SHOW CREATE TABLE child;', ShowResult),
+    ( result_has_error(ShowResult) ->
+        format('ASSERTION FAILED: SHOW CREATE TABLE lost foreign-key metadata: ~w~n', [ShowResult]),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ; true
+    ),
+    asadb_shutdown,
+    asadb_boot('tests/testdata.asa'),
+    expect_integrity_rejected('INSERT INTO child VALUES (2, 100);'),
+    asadb_shutdown,
+    cleanup.
+
+expect_integrity_rejected(SQL) :-
+    asadb_exec_sql(SQL, Result),
+    ( result_has_error(Result) -> true
+    ; format('ASSERTION FAILED: integrity violation was accepted: ~w~nResult: ~w~n', [SQL, Result]),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ).
+
 run_order_by_duplicate_assertions :-
     cleanup,
     asadb_boot('tests/testdata.asa'),
@@ -352,7 +411,7 @@ run_delete_where_safety_assertions :-
 run_duplicate_column_assertions :-
     cleanup,
     asadb_boot('tests/testdata.asa'),
-    Setup = 'CREATE DATABASE dup_col_assert; USE dup_col_assert; CREATE TABLE t (id INT, nama TEXT); ALTER TABLE t ADD COLUMN nama TEXT; ALTER TABLE t ADD COLUMN Nama TEXT; INSERT INTO t VALUES (1, ''A'', ''B'', ''C'');',
+    Setup = 'CREATE DATABASE dup_col_assert; USE dup_col_assert; CREATE TABLE t (id INT, nama TEXT); ALTER TABLE t ADD COLUMN nama TEXT; ALTER TABLE t ADD COLUMN Nama TEXT; INSERT INTO t VALUES (1, ''A'');',
     asadb_exec_sql(Setup, SetupResult),
     ( result_has_error(SetupResult) ->
         asadb_format_result(SetupResult),

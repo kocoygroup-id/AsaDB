@@ -28,6 +28,7 @@ test-join:
 
 test-backup:
 	swipl -q -s tests/production_backup_regression.pl
+	swipl -q -s tests/schema_integrity_backup_regression.pl
 	./tests/production_backup_http_regression.sh
 
 test-interchange:

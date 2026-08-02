@@ -191,6 +191,7 @@ tvcc_change_scope(Action, store(StoreId)) :-
     asadb_record_store_id(Database, Table, StoreId).
 
 tvcc_action_table(create_table(DB, Table, _), DB, Table).
+tvcc_action_table(create_table(DB, Table, _, _), DB, Table).
 tvcc_action_table(drop_table(DB, Table), DB, Table).
 tvcc_action_table(truncate_table(DB, Table), DB, Table).
 tvcc_action_table(insert_rows(DB, Table, _, _), DB, Table).
