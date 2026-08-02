@@ -47,7 +47,8 @@
     asadb_database_metadata/1,
     asadb_analysis_json/2,
     asadb_result_json/2,
-    asadb_format_result/1
+    asadb_format_result/1,
+    asadb_constraint_expression_sql/2
 ]).
 
 :- set_prolog_flag(double_quotes, codes).
@@ -67,6 +68,7 @@
 :- use_module('asadb_metadata.pl').
 :- use_module('asadb_mysql55_compat.pl').
 :- use_module('asadb_prolog_jit.pl').
+:- use_module('asadb_schema.pl').
 :- use_module('asadb_sql_frontend.pl', [asadb_parse_statement/2]).
 :- use_module('asadb_tvcc.pl').
 
@@ -164,6 +166,16 @@ normalize_indexes_for_columns(Columns, [index(Name, RawCols, Unique)|Indexes], O
     normalize_index_columns(Columns, RawCols, CleanCols),
     normalize_indexes_for_columns(Columns, Indexes, Rest),
     ( CleanCols = [] -> Out = Rest ; Out = [index(Name, CleanCols, Unique)|Rest] ).
+normalize_indexes_for_columns(Columns, [check(Name, Expr)|Indexes], [check(Name, Expr)|Out]) :- !,
+    normalize_indexes_for_columns(Columns, Indexes, Out).
+normalize_indexes_for_columns(Columns,
+                              [foreign_key(Name, RawLocal, RefTable, RawRef, DeleteAction, UpdateAction)|Indexes],
+                              Out) :- !,
+    normalize_index_columns(Columns, RawLocal, Local),
+    normalize_indexes_for_columns(Columns, Indexes, Rest),
+    ( Local = [] -> Out = Rest
+    ; Out = [foreign_key(Name, Local, RefTable, RawRef, DeleteAction, UpdateAction)|Rest]
+    ).
 normalize_indexes_for_columns(Columns, [_|Indexes], Out) :-
     normalize_indexes_for_columns(Columns, Indexes, Out).
 
@@ -207,14 +219,136 @@ catalog_table(grants, table(grants, Columns, [], [index(grants_user_scope, [user
     catalog_columns(grants, Columns).
 
 default_indexes(_Name, Columns, Indexes) :-
-    findall(index('PRIMARY', [Col], unique),
+    findall(Col,
             ( member(col(Col, _, Options), Columns), member(primary_key, Options) ),
-            Primary),
+            PrimaryColumns),
+    ( PrimaryColumns = [] -> Primary = []
+    ; Primary = [index('PRIMARY', PrimaryColumns, unique)]
+    ),
     findall(index(Col, [Col], unique),
             ( member(col(Col, _, Options), Columns), member(unique, Options) ),
             Unique),
     append(Primary, Unique, Indexes0),
     ( Indexes0 = [] -> Indexes = [] ; Indexes = Indexes0 ).
+
+table_option_constraints(table_options(Constraints, _), Constraints) :- !.
+table_option_constraints(_, []).
+
+validate_table_constraints(DB, Columns, Constraints) :-
+    validate_constraint_columns(Columns, Constraints),
+    validate_primary_key_declarations(Columns, Constraints),
+    validate_foreign_key_declarations(DB, Constraints).
+
+validate_constraint_columns(_, []).
+validate_constraint_columns(Columns, [Constraint|Constraints]) :-
+    validate_constraint_columns_(Columns, Constraint),
+    validate_constraint_columns(Columns, Constraints).
+
+validate_constraint_columns_(Columns, primary_key(_, Names)) :- !,
+    validate_constraint_column_list(Columns, Names).
+validate_constraint_columns_(Columns, unique_key(_, Names)) :- !,
+    validate_constraint_column_list(Columns, Names).
+validate_constraint_columns_(Columns, index_key(_, Names)) :- !,
+    validate_constraint_column_list(Columns, Names).
+validate_constraint_columns_(Columns, foreign_key(_, LocalNames, _, RefNames, _, _)) :- !,
+    validate_constraint_column_list(Columns, LocalNames),
+    ( same_length(LocalNames, RefNames) -> true
+    ; throw(error(domain_error(foreign_key_column_count(LocalNames), RefNames), _))
+    ).
+validate_constraint_columns_(_, check_constraint(_, _)).
+
+validate_constraint_column_list(_, []) :-
+    throw(error(domain_error(constraint_columns, []), _)).
+validate_constraint_column_list(Columns, [Name|Names]) :-
+    ( column_actual_name(Name, Columns, _) -> true
+    ; throw(error(existence_error(column, Name), _))
+    ),
+    ( identifier_member(Name, Names) ->
+        throw(error(permission_error(use, duplicate_constraint_column, Name), _))
+    ; true
+    ),
+    validate_constraint_column_list_tail(Columns, Names).
+
+validate_constraint_column_list_tail(_, []).
+validate_constraint_column_list_tail(Columns, [Name|Names]) :-
+    ( column_actual_name(Name, Columns, _) -> true
+    ; throw(error(existence_error(column, Name), _))
+    ),
+    validate_constraint_column_list_tail(Columns, Names).
+
+validate_primary_key_declarations(Columns, Constraints) :-
+    findall(Names, member(primary_key(_, Names), Constraints), TablePrimaryKeys),
+    findall(Name,
+            ( member(col(Name, _, Options), Columns), member(primary_key, Options) ),
+            ColumnPrimaryKeys),
+    append(TablePrimaryKeys, [ColumnPrimaryKeys], AllDeclarations),
+    nonempty_primary_declarations(AllDeclarations, Nonempty),
+    ( Nonempty = [] -> true
+    ; Nonempty = [_] -> true
+    ; throw(error(permission_error(create, multiple_primary_keys, Nonempty), _))
+    ).
+
+nonempty_primary_declarations([], []).
+nonempty_primary_declarations([[]|Declarations], Nonempty) :- !,
+    nonempty_primary_declarations(Declarations, Nonempty).
+nonempty_primary_declarations([Declaration|Declarations], [Declaration|Nonempty]) :-
+    nonempty_primary_declarations(Declarations, Nonempty).
+
+validate_foreign_key_declarations(_, []).
+validate_foreign_key_declarations(DB,
+                                  [foreign_key(_, _, RefTable, RefColumns, DeleteAction, UpdateAction)|Constraints]) :- !,
+    validate_fk_action(DeleteAction),
+    validate_fk_action(UpdateAction),
+    ( get_table_existing(DB, RefTable, table(_, _, _, RefIndexes)) ->
+        ( foreign_key_reference_index(RefColumns, RefIndexes) -> true
+        ; throw(error(domain_error(foreign_key_reference_key(RefTable), RefColumns), _))
+        )
+    ; throw(error(existence_error(table, RefTable), _))
+    ),
+    validate_foreign_key_declarations(DB, Constraints).
+validate_foreign_key_declarations(DB, [_|Constraints]) :-
+    validate_foreign_key_declarations(DB, Constraints).
+
+validate_fk_action(restrict).
+validate_fk_action(Action) :-
+    throw(error(domain_error(foreign_key_action, Action), _)).
+
+foreign_key_reference_index(Columns, Indexes) :-
+    member(index(_, IndexedColumns, unique), Indexes),
+    same_identifier_lists(Columns, IndexedColumns), !.
+
+same_identifier_lists([], []).
+same_identifier_lists([A|As], [B|Bs]) :-
+    same_identifier(A, B),
+    same_identifier_lists(As, Bs).
+
+table_constraint_items(_, [], [], _).
+table_constraint_items(Table, [Constraint|Constraints], Items, Sequence0) :-
+    table_constraint_item(Table, Constraint, Sequence0, Item),
+    Sequence is Sequence0 + 1,
+    table_constraint_items(Table, Constraints, Rest, Sequence),
+    ( Item = none -> Items = Rest ; Items = [Item|Rest] ).
+
+table_constraint_item(_, primary_key(_, Columns), _, index('PRIMARY', Columns, unique)) :- !.
+table_constraint_item(Table, unique_key(Name0, Columns), Sequence, index(Name, Columns, unique)) :- !,
+    constraint_item_name(Table, unique, Name0, Sequence, Name).
+table_constraint_item(Table, index_key(Name0, Columns), Sequence, index(Name, Columns, non_unique)) :- !,
+    constraint_item_name(Table, index, Name0, Sequence, Name).
+table_constraint_item(Table, check_constraint(Name0, Expr), Sequence, check(Name, Expr)) :- !,
+    constraint_item_name(Table, check, Name0, Sequence, Name).
+table_constraint_item(_, foreign_key(Name, Local, RefTable, RefColumns, restrict, restrict), _,
+                      foreign_key(Name, Local, RefTable, RefColumns, restrict, restrict)) :- !.
+table_constraint_item(_, Constraint, _, _) :-
+    throw(error(domain_error(table_constraint, Constraint), _)).
+
+constraint_item_name(_, _, Name, _, Name) :- Name \== unnamed, !.
+constraint_item_name(Table, Kind, _, Sequence, Name) :-
+    format(atom(Name), '__asadb_~w_~w_~d', [Kind, Table, Sequence]).
+
+table_indexes(Name, Columns, Constraints, Indexes) :-
+    default_indexes(Name, Columns, DefaultIndexes),
+    table_constraint_items(Name, Constraints, ConstraintItems, 1),
+    append(DefaultIndexes, ConstraintItems, Indexes).
 
 same_identifier(A, B) :- A == B, !.
 same_identifier(A, B) :-
@@ -1073,9 +1207,11 @@ execute_statement(drop_database(Name), ok(dropped_database(Name))) :-
         clear_persisted_current_db
     ; true ).
 
-execute_statement(create_table(Name, Columns, _Options), ok(created_table(Name))) :-
+execute_statement(create_table(Name, Columns, Options), ok(created_table(Name))) :-
     current_db_or_default(DB),
-    update_state(create_table(DB, Name, Columns)).
+    table_option_constraints(Options, Constraints),
+    validate_table_constraints(DB, Columns, Constraints),
+    update_state(create_table(DB, Name, Columns, Constraints)).
 
 execute_statement(drop_table(Name), ok(dropped_table(Name))) :-
     current_db_or_default(DB), update_state(drop_table(DB, Name)).
@@ -1293,9 +1429,66 @@ execute_statement(describe_table(Name), table([field,type,null,key,default,extra
     current_db_or_default(DB),
     get_table(DB, Name, table(_, Columns, _, Indexes)), describe_columns(Columns, Indexes, Rows).
 
-execute_statement(explain(raw(Rest)), table([explain], [[Rest]])).
+execute_statement(explain(Statement), table([id,select_type,table,access,index,estimated_rows,extra], Rows)) :- !,
+    explain_statement_plan(Statement, Rows).
+execute_statement(explain(raw(Rest)), error(explain_unsupported_statement, Rest)).
 
 execute_statement(Stmt, error(unknown_statement, Stmt)).
+
+% EXPLAIN is derived from the same catalog/index predicates used by execution.
+% The estimates are intentionally transparent heuristics until persistent
+% ANALYZE statistics exist: no fake cost number is presented as measurement.
+explain_statement_plan(select(_, table_ref(Table, _), Where, _Group, Order, _Limit), Rows) :- !,
+    current_db_or_default(DB),
+    get_table_storage(DB, Table, table(Table, _Columns, Storage, Indexes)),
+    row_storage_count(Storage, TotalRows),
+    explain_table_access(Where, Order, Indexes, TotalRows, Access, IndexName,
+                         EstimatedRows, Extra),
+    Rows = [[1,'SIMPLE',Table,Access,IndexName,EstimatedRows,Extra]].
+explain_statement_plan(select(_, Table, Where, Order, _Limit), Rows) :-
+    atom(Table), !,
+    current_db_or_default(DB),
+    get_table_storage(DB, Table, table(Table, _Columns, Storage, Indexes)),
+    row_storage_count(Storage, TotalRows),
+    explain_table_access(Where, Order, Indexes, TotalRows, Access, IndexName,
+                         EstimatedRows, Extra),
+    Rows = [[1,'SIMPLE',Table,Access,IndexName,EstimatedRows,Extra]].
+explain_statement_plan(select(_, Source, _Where, _Group, _Order, _Limit),
+                       [[1,'COMPLEX',Source,'EXECUTOR',null,null,
+                         'join/group plan uses executor fallback']]) :- !.
+explain_statement_plan(Statement, _) :-
+    throw(error(domain_error(explainable_statement, Statement), _)).
+
+explain_table_access(Where, Order, Indexes, TotalRows, Access, IndexName,
+                     EstimatedRows, Extra) :-
+    indexed_column_predicate(Where, Indexes, Column, Operator, _Value),
+    member(index(IndexName, IndexColumns, Unique), Indexes),
+    IndexColumns = [IndexedColumn|_],
+    same_identifier(Column, IndexedColumn), !,
+    explain_index_access(Operator, Unique, IndexColumns, TotalRows, Access, EstimatedRows),
+    explain_extra(Order, Indexes, Column, Extra).
+explain_table_access(_Where, Order, Indexes, TotalRows, 'TABLE SCAN', null,
+                     TotalRows, Extra) :-
+    explain_scan_extra(Order, Indexes, Extra).
+
+explain_index_access('=', unique, [_], _TotalRows, 'UNIQUE INDEX LOOKUP', 1) :- !.
+explain_index_access('=', _, _, TotalRows, 'INDEX LOOKUP', EstimatedRows) :- !,
+    EstimatedRows is max(1, ceiling(TotalRows / 10)).
+explain_index_access(_, _, _, TotalRows, 'INDEX RANGE SCAN', EstimatedRows) :-
+    EstimatedRows is max(1, ceiling(TotalRows / 3)).
+
+explain_extra(Order, Indexes, Column, 'index filter; order satisfied by index') :-
+    indexed_storage_order(Order, Indexes, OrderColumn, _),
+    same_identifier(Column, OrderColumn), !.
+explain_extra(Order, Indexes, _, 'index filter; explicit sort') :-
+    Order \== none,
+    \+ indexed_storage_order(Order, Indexes, _, _), !.
+explain_extra(_, _, _, 'index filter').
+
+explain_scan_extra(Order, Indexes, 'table scan; explicit sort') :-
+    Order \== none,
+    \+ indexed_storage_order(Order, Indexes, _, _), !.
+explain_scan_extra(_, _, 'table scan').
 
 union_rows(all, Rows, Rows) :- !.
 union_rows(distinct, Rows, UniqueRows) :- sort(Rows, UniqueRows).
@@ -1854,6 +2047,7 @@ assert_checkpoint_dirty :-
     ( asadb_checkpoint_dirty -> true ; assertz(asadb_checkpoint_dirty) ).
 
 paged_storage_action(create_table(_, _, _)).
+paged_storage_action(create_table(_, _, _, _)).
 paged_storage_action(drop_table(_, _)).
 paged_storage_action(truncate_table(_, _)).
 paged_storage_action(insert_rows(_, _, _, _)).
@@ -1868,6 +2062,7 @@ ensure_write_allowed(Action) :-
 ensure_write_allowed(_).
 
 action_table(create_table(DB, Table, _), DB, Table).
+action_table(create_table(DB, Table, _, _), DB, Table).
 action_table(drop_table(DB, Table), DB, Table).
 action_table(truncate_table(DB, Table), DB, Table).
 action_table(insert_rows(DB, Table, _, _), DB, Table).
@@ -1943,6 +2138,10 @@ apply_action(drop_db(Name), state(V, DBs), state(V, NewDBs)) :-
 apply_action(create_table(DB, Name, Columns), State, NewState) :-
     ensure_db(State, DB, S1),
     default_indexes(Name, Columns, Indexes),
+    transform_db(DB, S1, create_table_in_db(Name, Columns, Indexes), NewState).
+apply_action(create_table(DB, Name, Columns, Constraints), State, NewState) :-
+    ensure_db(State, DB, S1),
+    table_indexes(Name, Columns, Constraints, Indexes),
     transform_db(DB, S1, create_table_in_db(Name, Columns, Indexes), NewState).
 apply_action(drop_table(DB, Name), State, NewState) :- transform_db(DB, State, drop_table_in_db(Name), NewState).
 apply_action(truncate_table(DB, Name), State, NewState) :- transform_db(DB, State, truncate_table_in_db(Name), NewState).
@@ -2134,6 +2333,10 @@ apply_db_action(truncate_table_in_db(Name), db(DB, Tables, V, F, P, T), db(DB, N
 apply_db_action(insert_rows_in_db(Name, Columns, ValueRows), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Name, Tables, table(Name, TableColumns, paged_rows(StoreId, Count0, Counters0), Indexes), OtherTables), !,
     build_rows_(TableColumns, Columns, ValueRows, Counters0, Counters, NewRows),
+    findall(ExistingRow, asadb_record_scan(StoreId, _, ExistingRow), ExistingRows),
+    asadb_schema_validate_insert_rows(TableColumns, Indexes, ExistingRows, NewRows),
+    append(ExistingRows, NewRows, CandidateRows),
+    validate_table_integrity(Name, TableColumns, Indexes, CandidateRows, OtherTables),
     asadb_record_insert_batch(StoreId, NewRows),
     asadb_record_invalidate_indexes(StoreId),
     length(NewRows, Added),
@@ -2142,10 +2345,14 @@ apply_db_action(insert_rows_in_db(Name, Columns, ValueRows), db(DB, Tables, V, F
 apply_db_action(insert_rows_in_db(Name, Columns, ValueRows), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Name, Tables, table(Name, TableColumns, Rows, Indexes), OtherTables),
     build_rows(TableColumns, Columns, ValueRows, Rows, NewRows),
+    asadb_schema_validate_insert_rows(TableColumns, Indexes, Rows, NewRows),
     append(Rows, NewRows, AllRows),
+    validate_table_integrity(Name, TableColumns, Indexes, AllRows, OtherTables),
     NewTables = [table(Name, TableColumns, AllRows, Indexes)|OtherTables].
 apply_db_action(update_rows_in_db(Name, Assignments, Where, Count), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Name, Tables, table(Name, Columns, paged_rows(StoreId, Count0, Counters), Indexes), OtherTables), !,
+    asadb_schema_validate_assignment_columns(Columns, Assignments),
+    validate_paged_update_integrity(Name, StoreId, Columns, Indexes, Assignments, Where, OtherTables),
     ( paged_indexed_updates(DB, Name, StoreId, Columns, Indexes,
                             Assignments, Where, Updates) ->
         asadb_record_update_batch(StoreId, Updates, Count),
@@ -2156,10 +2363,15 @@ apply_db_action(update_rows_in_db(Name, Assignments, Where, Count), db(DB, Table
     NewTables = [table(Name, Columns, paged_rows(StoreId, NewCount, Counters), Indexes)|OtherTables].
 apply_db_action(update_rows_in_db(Name, Assignments, Where, Count), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Name, Tables, table(Name, Columns, Rows, Indexes), OtherTables),
+    asadb_schema_validate_assignment_columns(Columns, Assignments),
+    validate_parent_update_restrict(Name, Assignments, Where, Rows, OtherTables),
     update_matching_rows(Rows, Assignments, Where, NewRows, Count),
+    asadb_schema_validate_replacement_rows(Columns, Indexes, NewRows),
+    validate_table_integrity(Name, Columns, Indexes, NewRows, OtherTables),
     NewTables = [table(Name, Columns, NewRows, Indexes)|OtherTables].
 apply_db_action(delete_rows_in_db(Name, Where, Count), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Name, Tables, table(Name, Columns, paged_rows(StoreId, Count0, Counters), Indexes), OtherTables), !,
+    validate_paged_parent_delete_restrict(Name, StoreId, Where, OtherTables),
     ( paged_indexed_deletes(DB, Name, StoreId, Columns, Indexes, Where, Rids) ->
         asadb_record_delete_batch(StoreId, Rids, Count),
         NewCount is Count0 - Count,
@@ -2171,6 +2383,7 @@ apply_db_action(delete_rows_in_db(Name, Where, Count), db(DB, Tables, V, F, P, T
     NewTables = [table(Name, Columns, paged_rows(StoreId, NewCount, Counters), Indexes)|OtherTables].
 apply_db_action(delete_rows_in_db(Name, Where, Count), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Name, Tables, table(Name, Columns, Rows, Indexes), OtherTables),
+    validate_parent_delete_restrict(Name, Where, Rows, OtherTables),
     delete_matching_rows(Rows, Where, Kept, Count),
     NewTables = [table(Name, Columns, Kept, Indexes)|OtherTables].
 apply_db_action(create_index_in_db(Table, Name, Columns, Unique), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
@@ -2206,6 +2419,153 @@ paged_update_transform(_, _, _, keep).
 
 paged_delete_transform(Where, Row, delete) :- row_matches(Row, Where), !.
 paged_delete_transform(_, _, keep).
+
+validate_paged_update_integrity(Name, StoreId, Columns, Indexes, Assignments, Where, OtherTables) :-
+    findall(Row, asadb_record_scan(StoreId, _, Row), Rows),
+    validate_parent_update_restrict(Name, Assignments, Where, Rows, OtherTables),
+    update_matching_rows(Rows, Assignments, Where, CandidateRows, _),
+    asadb_schema_validate_replacement_rows(Columns, Indexes, CandidateRows),
+    validate_table_integrity(Name, Columns, Indexes, CandidateRows, OtherTables).
+
+validate_paged_parent_delete_restrict(Name, StoreId, Where, OtherTables) :-
+    findall(Row, asadb_record_scan(StoreId, _, Row), Rows),
+    validate_parent_delete_restrict(Name, Where, Rows, OtherTables).
+
+% Constraint evaluation is deliberately performed before a record-store
+% mutation.  This makes a rejected INSERT or UPDATE leave both catalog and
+% data pages untouched, including the paged storage path used for large data.
+validate_table_integrity(Table, Columns, Indexes, Rows, OtherTables) :-
+    validate_column_check_constraints(Table, Columns, Rows),
+    validate_check_constraints(Indexes, Rows),
+    validate_foreign_key_rows(Table, Indexes, Rows, OtherTables).
+
+validate_column_check_constraints(_, [], _).
+validate_column_check_constraints(Table, [col(Column, _, Options)|Columns], Rows) :-
+    validate_column_checks(Table, Column, Options, Rows),
+    validate_column_check_constraints(Table, Columns, Rows).
+
+validate_column_checks(_, _, [], _).
+validate_column_checks(Table, Column, [check(Expr)|Options], Rows) :- !,
+    format(atom(Name), '__asadb_check_~w_~w', [Table, Column]),
+    validate_check_rows(Name, Expr, Rows),
+    validate_column_checks(Table, Column, Options, Rows).
+validate_column_checks(Table, Column, [_|Options], Rows) :-
+    validate_column_checks(Table, Column, Options, Rows).
+
+validate_check_constraints([], _).
+validate_check_constraints([check(Name, Expr)|Indexes], Rows) :- !,
+    validate_check_rows(Name, Expr, Rows),
+    validate_check_constraints(Indexes, Rows).
+validate_check_constraints([_|Indexes], Rows) :-
+    validate_check_constraints(Indexes, Rows).
+
+validate_check_rows(_, _, []).
+validate_check_rows(Name, Expr, [Row|Rows]) :-
+    ( check_constraint_holds(Row, Expr) -> true
+    ; throw(error(domain_error(check_constraint(Name), Row), _))
+    ),
+    validate_check_rows(Name, Expr, Rows).
+
+check_constraint_holds(Row, Expr) :-
+    eval_bool(Row, Expr), !.
+% SQL CHECK evaluates UNKNOWN (typically because a nullable input is NULL) as
+% satisfied. NOT NULL remains the explicit way to reject the NULL itself.
+check_constraint_holds(Row, Expr) :-
+    expression_has_null_input(Row, Expr), !.
+
+expression_has_null_input(row(Pairs), col(Name)) :- !,
+    pair_value_same_identifier(Name, Pairs, null).
+expression_has_null_input(row(Pairs), qcol(_, Name)) :- !,
+    pair_value_same_identifier(Name, Pairs, null).
+expression_has_null_input(Row, Expr) :-
+    compound(Expr),
+    Expr =.. [_|Arguments],
+    member(Argument, Arguments),
+    expression_has_null_input(Row, Argument), !.
+
+validate_foreign_key_rows(_, [], _, _).
+validate_foreign_key_rows(Table,
+                          [foreign_key(Name, LocalColumns, RefTable, RefColumns, restrict, restrict)|Indexes],
+                          Rows, OtherTables) :- !,
+    foreign_key_parent_rows(Table, RefTable, Rows, OtherTables, ParentRows),
+    validate_foreign_key_row_set(Name, LocalColumns, RefTable, RefColumns, Rows, ParentRows),
+    validate_foreign_key_rows(Table, Indexes, Rows, OtherTables).
+validate_foreign_key_rows(Table, [_|Indexes], Rows, OtherTables) :-
+    validate_foreign_key_rows(Table, Indexes, Rows, OtherTables).
+
+foreign_key_parent_rows(Table, RefTable, CandidateRows, _OtherTables, CandidateRows) :-
+    same_identifier(Table, RefTable), !.
+foreign_key_parent_rows(_, RefTable, _, OtherTables, ParentRows) :-
+    table_member(RefTable, OtherTables, ParentTable),
+    table_parts(ParentTable, _, _, ParentStorage, _),
+    materialize_rows(ParentStorage, ParentRows).
+
+validate_foreign_key_row_set(_, _, _, _, [], _).
+validate_foreign_key_row_set(Name, LocalColumns, RefTable, RefColumns, [Row|Rows], ParentRows) :-
+    row_key_values(LocalColumns, Row, LocalValues),
+    ( memberchk(null, LocalValues) -> true
+    ; member(ParentRow, ParentRows),
+      row_key_values(RefColumns, ParentRow, ParentValues),
+      same_sql_value_lists(LocalValues, ParentValues) -> true
+    ; throw(error(existence_error(foreign_key(Name, RefTable), LocalValues), _))
+    ),
+    validate_foreign_key_row_set(Name, LocalColumns, RefTable, RefColumns, Rows, ParentRows).
+
+row_key_values([], _, []).
+row_key_values([Column|Columns], row(Pairs), [Value|Values]) :-
+    lookup_value(Column, Pairs, Value),
+    row_key_values(Columns, row(Pairs), Values).
+
+same_sql_value_lists([], []).
+same_sql_value_lists([A|As], [B|Bs]) :-
+    sql_equal(A, B),
+    same_sql_value_lists(As, Bs).
+
+% RESTRICT is checked on the parent side too.  Without this companion check a
+% child insert would be protected but a later parent DELETE/UPDATE could still
+% create an orphan.  We only materialize the relevant table when a declared
+% referencing constraint exists; normal deletes retain their indexed path.
+validate_parent_delete_restrict(ParentTable, Where, ParentRows, OtherTables) :-
+    include_where(ParentRows, Where, DeletedRows),
+    validate_referencing_rows(ParentTable, DeletedRows, OtherTables).
+
+validate_parent_update_restrict(ParentTable, Assignments, Where, ParentRows, OtherTables) :-
+    include_where(ParentRows, Where, UpdatedRows),
+    forall(
+        ( dependent_foreign_key(ParentTable, OtherTables, _ChildTable, _ChildRows,
+                                _ConstraintName, _LocalColumns, RefColumns),
+          assignment_touches_columns(Assignments, RefColumns)
+        ),
+        validate_referencing_rows(ParentTable, UpdatedRows, OtherTables)
+    ).
+
+assignment_touches_columns([assign(Name, _)|_], Columns) :-
+    identifier_member(Name, Columns), !.
+assignment_touches_columns([_|Assignments], Columns) :-
+    assignment_touches_columns(Assignments, Columns).
+
+validate_referencing_rows(_, [], _) :- !.
+validate_referencing_rows(ParentTable, ParentRows, OtherTables) :-
+    ( dependent_foreign_key(ParentTable, OtherTables, ChildTable, ChildRows,
+                            ConstraintName, LocalColumns, RefColumns),
+      member(ChildRow, ChildRows),
+      row_key_values(LocalColumns, ChildRow, LocalValues),
+      \+ memberchk(null, LocalValues),
+      member(ParentRow, ParentRows),
+      row_key_values(RefColumns, ParentRow, ParentValues),
+      same_sql_value_lists(LocalValues, ParentValues) ->
+        throw(error(permission_error(delete, referenced_row(ConstraintName), ChildTable), _))
+    ; true
+    ).
+
+dependent_foreign_key(ParentTable, OtherTables, ChildTable, ChildRows,
+                      ConstraintName, LocalColumns, RefColumns) :-
+    member(Child, OtherTables),
+    table_parts(Child, ChildTable, _, ChildStorage, ChildIndexes),
+    member(foreign_key(ConstraintName, LocalColumns, RefTable, RefColumns, restrict, restrict),
+           ChildIndexes),
+    same_identifier(ParentTable, RefTable),
+    materialize_rows(ChildStorage, ChildRows).
 
 paged_indexed_updates(_, _, StoreId, Columns, Indexes,
                       Assignments, Where, Updates) :-
@@ -3111,6 +3471,8 @@ indexes_rows_(Table, [index(Name, Columns, Unique)|Indexes], Rows) :-
     index_columns_rows(Table, Name, Columns, Unique, 1, Head),
     indexes_rows_(Table, Indexes, Tail),
     append(Head, Tail, Rows).
+indexes_rows_(Table, [_|Indexes], Rows) :-
+    indexes_rows_(Table, Indexes, Rows).
 
 index_columns_rows(_, _, [], _, _, []).
 index_columns_rows(Table, Name, [Col|Cols], Unique, Seq, [[Table,NonUnique,Name,Seq,Col]|Rows]) :-
@@ -3136,8 +3498,6 @@ column_options_sql(Options, SQL) :-
     ( Parts = [] -> SQL = '' ; atomic_list_concat([''|Parts], ' ', SQL) ).
 
 column_option_sql(Options, 'NOT NULL') :- member(not_null, Options).
-column_option_sql(Options, 'PRIMARY KEY') :- member(primary_key, Options).
-column_option_sql(Options, 'UNIQUE') :- member(unique, Options).
 column_option_sql(Options, 'AUTO_INCREMENT') :- member(auto_increment, Options).
 column_option_sql(Options, DefaultSQL) :-
     option_default(Options, Default),
@@ -3157,6 +3517,56 @@ index_defs_sql([index(Name, Columns, _)|Indexes], [Line|Lines]) :-
     join_atoms(Columns, ', ', ColSQL),
     atomic_list_concat(['KEY ', Name, ' (', ColSQL, ')'], Line),
     index_defs_sql(Indexes, Lines).
+index_defs_sql([check(Name, Expr)|Indexes], [Line|Lines]) :- !,
+    constraint_expr_sql(Expr, ExprSQL),
+    atomic_list_concat(['CONSTRAINT ', Name, ' CHECK (', ExprSQL, ')'], Line),
+    index_defs_sql(Indexes, Lines).
+index_defs_sql([foreign_key(Name, LocalColumns, RefTable, RefColumns, restrict, restrict)|Indexes], [Line|Lines]) :- !,
+    join_atoms(LocalColumns, ', ', LocalSQL),
+    join_atoms(RefColumns, ', ', RefSQL),
+    atomic_list_concat(['CONSTRAINT ', Name, ' FOREIGN KEY (', LocalSQL,
+                        ') REFERENCES ', RefTable, ' (', RefSQL,
+                        ') ON DELETE RESTRICT ON UPDATE RESTRICT'], Line),
+    index_defs_sql(Indexes, Lines).
+index_defs_sql([_|Indexes], Lines) :-
+    index_defs_sql(Indexes, Lines).
+
+constraint_expr_sql(value(null), 'NULL') :- !.
+constraint_expr_sql(value(Value), SQL) :- !,
+    constraint_value_sql(Value, SQL).
+constraint_expr_sql(col(Name), Name) :- !.
+constraint_expr_sql(qcol(Qualifier, Name), SQL) :- !,
+    atomic_list_concat([Qualifier, '.', Name], SQL).
+constraint_expr_sql(cmp(Op, Left, Right), SQL) :- !,
+    constraint_expr_sql(Left, LeftSQL),
+    constraint_expr_sql(Right, RightSQL),
+    atomic_list_concat([LeftSQL, ' ', Op, ' ', RightSQL], SQL).
+constraint_expr_sql(and(Left, Right), SQL) :- !,
+    constraint_binary_sql('AND', Left, Right, SQL).
+constraint_expr_sql(or(Left, Right), SQL) :- !,
+    constraint_binary_sql('OR', Left, Right, SQL).
+constraint_expr_sql(not(Expr), SQL) :- !,
+    constraint_expr_sql(Expr, ExprSQL),
+    atomic_list_concat(['NOT (', ExprSQL, ')'], SQL).
+constraint_expr_sql(Expr, SQL) :-
+    term_atom_safe(Expr, SQL).
+
+asadb_constraint_expression_sql(Expr, SQL) :-
+    constraint_expr_sql(Expr, SQL).
+
+constraint_binary_sql(Operator, Left, Right, SQL) :-
+    constraint_expr_sql(Left, LeftSQL),
+    constraint_expr_sql(Right, RightSQL),
+    atomic_list_concat(['(', LeftSQL, ' ', Operator, ' ', RightSQL, ')'], SQL).
+
+constraint_value_sql(Value, SQL) :-
+    number(Value), !,
+    term_to_atom(Value, SQL).
+constraint_value_sql(true, 'TRUE') :- !.
+constraint_value_sql(false, 'FALSE') :- !.
+constraint_value_sql(Value, SQL) :-
+    term_atom_safe(Value, Escaped),
+    atomic_list_concat(['''', Escaped, ''''], SQL).
 
 join_atoms([], _, '').
 join_atoms([A], _, A) :- !.
@@ -3224,6 +3634,7 @@ build_rows(TableColumns, Columns, ValueRows, NewRows) :-
 
 build_rows_(TableColumns, Columns, ValueRows, Counters0, Counters, Built) :-
     ( Columns = [] -> column_names(TableColumns, InputColumns) ; InputColumns = Columns ),
+    asadb_schema_validate_insert_shape(TableColumns, InputColumns, ValueRows),
     row_build_plan(TableColumns, InputColumns, 0, Plan),
     build_rows_with_plan(ValueRows, Plan, Counters0, Counters, Built).
 

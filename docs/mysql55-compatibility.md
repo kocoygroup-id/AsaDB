@@ -15,12 +15,12 @@ AsaDB menargetkan sintaks MySQL 5.5 sebagai dialek SQL utama. Implementasi saat 
 |---|---:|
 | CREATE DATABASE | Implemented |
 | DROP DATABASE | Implemented |
-| CREATE TABLE | Implemented |
+| CREATE TABLE | Implemented, including enforced PRIMARY KEY/UNIQUE, CHECK, and table-level FOREIGN KEY ... RESTRICT |
 | DROP TABLE | Implemented |
 | TRUNCATE TABLE | Implemented |
 | ALTER TABLE | Implemented subset |
-| CREATE INDEX | Implemented metadata index |
-| DROP INDEX | Implemented metadata index |
+| CREATE INDEX | Implemented persistent index metadata and B+Tree candidate path |
+| DROP INDEX | Implemented |
 | CREATE VIEW | Implemented basic SELECT view |
 | CREATE TRIGGER | Metadata stub |
 | CREATE PROCEDURE | Metadata stub |
@@ -40,7 +40,7 @@ AsaDB menargetkan sintaks MySQL 5.5 sebagai dialek SQL utama. Implementasi saat 
 | SHOW COLUMNS | Implemented |
 | SHOW INDEX | Implemented |
 | SHOW CREATE TABLE | Implemented |
-| EXPLAIN | Implemented placeholder |
+| EXPLAIN | Implemented catalog-derived access plan (scan/index access, index, estimate, sort note) |
 | REPLACE | Planned |
 | LOAD DATA INFILE | Planned |
 | UNION | Implemented basic UNION / UNION ALL |
@@ -64,26 +64,46 @@ AsaDB menargetkan sintaks MySQL 5.5 sebagai dialek SQL utama. Implementasi saat 
 | GRANT | Implemented catalog basic |
 | REVOKE | Implemented catalog basic |
 
-## Type mapping awal
+## Type and integrity contract
 
-AsaDB v1 menyimpan value sebagai term Prolog. Type SQL disimpan sebagai metadata kolom, belum melakukan strict coercion penuh.
+Before a row is written, AsaDB validates the completed row after `DEFAULT` and
+`AUTO_INCREMENT` expansion. It does not silently coerce a text literal into a
+number or date: an incompatible value is rejected and the statement leaves the
+record store unchanged. Existing databases are read as-is; validation applies
+to new `INSERT` and `UPDATE` writes.
 
-| MySQL type | AsaDB v1 behavior |
+| SQL type | Current write contract |
 |---|---|
-| INT / INTEGER / BIGINT | numeric value if literal numeric |
-| DECIMAL / FLOAT / DOUBLE / REAL | numeric value if literal numeric |
-| VARCHAR / CHAR | atom/string literal |
-| TEXT / MEDIUMTEXT / LONGTEXT | atom/string literal |
-| DATE / TIME / DATETIME / TIMESTAMP / YEAR | metadata type, value stored as literal |
-| NULL | `null` |
-| DEFAULT | metadata, dipakai saat insert kolom kosong |
+| TINYINT / SMALLINT / MEDIUMINT / INT / INTEGER / BIGINT | integer only, with signed range checks; `UNSIGNED` uses the corresponding non-negative range |
+| DECIMAL(p,s) | numeric only; precision and scale are bounded by `(p,s)` |
+| FLOAT / DOUBLE / REAL | numeric only |
+| VARCHAR(n) / CHAR(n) | atom/string only; maximum character length `n` |
+| TEXT / TINYTEXT / MEDIUMTEXT / LONGTEXT | atom/string only |
+| DATE / TIME / DATETIME / TIMESTAMP / YEAR | ISO calendar/time validation, including leap-year dates |
+| BOOL / BOOLEAN | `TRUE`, `FALSE`, `0`, or `1` |
+| NULL / DEFAULT | `NULL` is rejected by `NOT NULL`/primary key; defaults are expanded before validation |
+
+### Enforced constraints
+
+- Column and composite `PRIMARY KEY` / `UNIQUE` are checked on inserts and
+  updates. Composite unique keys allow multiple rows containing `NULL`, while
+  a primary-key component may not be `NULL`.
+- Column and table-level `CHECK` expressions are evaluated before mutation.
+  SQL `UNKNOWN` caused by `NULL` passes a `CHECK`; use `NOT NULL` when NULL is
+  not allowed.
+- Table-level `FOREIGN KEY (...) REFERENCES ... (...) ON DELETE RESTRICT ON
+  UPDATE RESTRICT` requires a unique/primary referenced key and is enforced on
+  child writes as well as parent deletes/key updates.
+- `CASCADE` and `SET NULL` are intentionally rejected at DDL time for now;
+  they are not accepted as no-op metadata.
 
 ## Production foundation yang sudah aktif
 
 - Expression evaluator untuk `AND`, `OR`, `XOR`, `NOT`, literal `TRUE`/`FALSE`/`UNKNOWN`, predicate `IS [NOT] TRUE/FALSE/UNKNOWN`, `IN`, `LIKE`, `BETWEEN`, comparison, arithmetic sederhana, `CASE`, subquery basic, dan fungsi `LOWER`, `UPPER`, `LENGTH`, `CONCAT`, `SUBSTRING`, `TRIM`, `REPLACE`, `COALESCE`.
 - SELECT multi-table basic via `INNER JOIN`, `LEFT JOIN`, `RIGHT JOIN`, `CROSS JOIN`, comma join, dan `JOIN ... USING (...)`, plus `GROUP BY` dan aggregate `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`.
 - Basic `UNION` / `UNION ALL` dan view sederhana berbasis SELECT.
-- Metadata index via `CREATE INDEX`, `DROP INDEX`, `SHOW INDEX`; executor memakai equality predicate yang cocok sebagai candidate filter awal.
+- Persistent index metadata via `CREATE INDEX`, `DROP INDEX`, `SHOW INDEX`;
+  executor uses suitable equality/range predicates as candidate paths.
 - Snapshot transaction untuk `START TRANSACTION`, `COMMIT`, `ROLLBACK`, plus journal `.asa.journal`.
 - In-process write mutex dan `LOCK TABLES`/`UNLOCK TABLES` guard.
 - Basic user catalog: `CREATE USER`, `DROP USER`, `GRANT`, `REVOKE`, `SHOW GRANTS`, dan `LOGIN ... IDENTIFIED BY ...`.

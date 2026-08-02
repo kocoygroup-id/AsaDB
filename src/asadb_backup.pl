@@ -181,7 +181,9 @@ backup_write_payload(Out, Database, Tables, TableCount, RowCount) :-
     format(Out, 'DROP DATABASE IF EXISTS ~w;~n', [QuotedDatabase]),
     format(Out, 'CREATE DATABASE ~w;~n', [QuotedDatabase]),
     format(Out, 'USE ~w;~n~n', [QuotedDatabase]),
-    backup_write_tables(Out, Tables, 0, TableCount, 0, RowCount).
+    backup_order_tables(Tables, OrderedTables),
+    backup_write_table_definitions(Out, OrderedTables),
+    backup_write_table_rows(Out, OrderedTables, 0, TableCount, 0, RowCount).
 
 backup_count_tables([], Count, Count).
 backup_count_tables([Table|Tables], Count0, Count) :-
@@ -199,27 +201,98 @@ backup_count_storage_rows(_, Rows, Count) :- is_list(Rows), !, length(Rows, Coun
 backup_count_storage_rows(Table, Storage, _) :-
     throw(error(domain_error(backup_row_storage(Table), Storage), _)).
 
-backup_write_tables(_, [], TableCount, TableCount, RowCount, RowCount).
-backup_write_tables(Out, [Table|Tables], TableCount0, TableCount,
-                    RowCount0, RowCount) :-
-    backup_write_table(Out, Table, Rows),
+backup_write_table_definitions(_, []).
+backup_write_table_definitions(Out, [Table|Tables]) :-
+    backup_table_parts(Table, Name, Columns, _Storage, Indexes),
+    backup_write_create_table(Out, Name, Columns, Indexes),
+    nl(Out),
+    backup_write_table_definitions(Out, Tables).
+
+backup_write_table_rows(_, [], TableCount, TableCount, RowCount, RowCount).
+backup_write_table_rows(Out, [Table|Tables], TableCount0, TableCount,
+                        RowCount0, RowCount) :-
+    backup_write_table_rows(Out, Table, Rows),
     TableCount1 is TableCount0 + 1,
     RowCount1 is RowCount0 + Rows,
-    backup_write_tables(Out, Tables, TableCount1, TableCount, RowCount1, RowCount).
+    backup_write_table_rows(Out, Tables, TableCount1, TableCount, RowCount1, RowCount).
 
-backup_write_table(Out, Table, RowCount) :-
-    backup_table_parts(Table, Name, Columns, Storage, Indexes),
-    backup_write_create_table(Out, Name, Columns),
+backup_write_table_rows(Out, Table, RowCount) :-
+    backup_table_parts(Table, Name, Columns, Storage, _Indexes),
     backup_write_storage_rows(Out, Name, Columns, Storage, RowCount),
-    backup_write_indexes(Out, Name, Indexes),
     nl(Out).
 
-backup_write_create_table(Out, Name, Columns) :-
-    maplist(backup_column_sql, Columns, Definitions),
+backup_write_create_table(Out, Name, Columns, Indexes) :-
+    maplist(backup_column_sql, Columns, ColumnDefinitions),
+    backup_table_constraint_definitions(Indexes, ConstraintDefinitions),
+    append(ColumnDefinitions, ConstraintDefinitions, Definitions),
     atomic_list_concat(Definitions, ',\n  ', DefinitionsText),
     backup_sql_identifier(Name, QuotedName),
     format(Out, 'CREATE TABLE ~w (\n  ~w\n);~n',
            [QuotedName, DefinitionsText]).
+
+% Tables are held newest-first in the catalog.  A complete backup must emit a
+% referenced parent before the child that declares its foreign key; otherwise
+% restore would either fail or have to silently omit the constraint.
+backup_order_tables(Tables, Ordered) :-
+    backup_order_tables_(Tables, [], Ordered).
+
+backup_order_tables_([], Ordered, Ordered).
+backup_order_tables_(Remaining, Ordered0, Ordered) :-
+    select(Ready, Remaining, Rest),
+    backup_table_ready(Ready, Ordered0), !,
+    append(Ordered0, [Ready], Ordered1),
+    backup_order_tables_(Rest, Ordered1, Ordered).
+backup_order_tables_(Remaining, _, _) :-
+    throw(error(domain_error(backup_foreign_key_dependency_cycle, Remaining), _)).
+
+backup_table_ready(Table, Ordered) :-
+    backup_table_parts(Table, Name, _Columns, _Storage, Indexes),
+    forall(member(foreign_key(_, _, RefTable, _, restrict, restrict), Indexes),
+           ( backup_same_identifier(Name, RefTable)
+           ; backup_ordered_table(RefTable, Ordered)
+           )).
+
+backup_ordered_table(Name, [Table|_]) :-
+    backup_table_parts(Table, Existing, _Columns, _Storage, _Indexes),
+    backup_same_identifier(Name, Existing), !.
+backup_ordered_table(Name, [_|Tables]) :-
+    backup_ordered_table(Name, Tables).
+
+backup_table_constraint_definitions([], []).
+backup_table_constraint_definitions([Index|Indexes], Definitions) :-
+    backup_table_constraint_definition(Index, Definition), !,
+    backup_table_constraint_definitions(Indexes, Rest),
+    Definitions = [Definition|Rest].
+backup_table_constraint_definitions([_|Indexes], Definitions) :-
+    backup_table_constraint_definitions(Indexes, Definitions).
+
+backup_table_constraint_definition(index('PRIMARY', Columns, _), SQL) :- !,
+    backup_constraint_columns(Columns, ColumnSQL),
+    atomic_list_concat(['PRIMARY KEY (', ColumnSQL, ')'], SQL).
+backup_table_constraint_definition(index(Name, Columns, unique), SQL) :- !,
+    backup_sql_identifier(Name, NameSQL),
+    backup_constraint_columns(Columns, ColumnSQL),
+    atomic_list_concat(['UNIQUE KEY ', NameSQL, ' (', ColumnSQL, ')'], SQL).
+backup_table_constraint_definition(index(Name, Columns, _), SQL) :- !,
+    backup_sql_identifier(Name, NameSQL),
+    backup_constraint_columns(Columns, ColumnSQL),
+    atomic_list_concat(['KEY ', NameSQL, ' (', ColumnSQL, ')'], SQL).
+backup_table_constraint_definition(check(Name, Expr), SQL) :- !,
+    backup_sql_identifier(Name, NameSQL),
+    asadb_constraint_expression_sql(Expr, ExprSQL),
+    atomic_list_concat(['CONSTRAINT ', NameSQL, ' CHECK (', ExprSQL, ')'], SQL).
+backup_table_constraint_definition(foreign_key(Name, Local, RefTable, Ref, restrict, restrict), SQL) :- !,
+    backup_sql_identifier(Name, NameSQL),
+    backup_constraint_columns(Local, LocalSQL),
+    backup_sql_identifier(RefTable, RefTableSQL),
+    backup_constraint_columns(Ref, RefSQL),
+    atomic_list_concat(['CONSTRAINT ', NameSQL, ' FOREIGN KEY (', LocalSQL,
+                        ') REFERENCES ', RefTableSQL, ' (', RefSQL,
+                        ') ON DELETE RESTRICT ON UPDATE RESTRICT'], SQL).
+
+backup_constraint_columns(Columns, SQL) :-
+    maplist(backup_sql_identifier, Columns, SQLColumns),
+    atomic_list_concat(SQLColumns, ', ', SQL).
 
 backup_column_sql(col(Name, Type, Options), SQL) :- !,
     backup_sql_identifier(Name, Identifier),
@@ -265,12 +338,17 @@ backup_column_options_sql([Option|Options], SQL) :-
 
 backup_column_option_sql(not_null, ' NOT NULL') :- !.
 backup_column_option_sql(nullable, ' NULL') :- !.
-backup_column_option_sql(primary_key, ' PRIMARY KEY') :- !.
+% Keys are emitted once as table constraints so composite and single-column
+% keys round-trip through the same canonical path.
+backup_column_option_sql(primary_key, '') :- !.
 backup_column_option_sql(auto_increment, ' AUTO_INCREMENT') :- !.
-backup_column_option_sql(unique, ' UNIQUE') :- !.
+backup_column_option_sql(unique, '') :- !.
 backup_column_option_sql(default(Value), SQL) :- !,
     backup_sql_value(Value, Literal),
     atomic_list_concat([' DEFAULT ', Literal], SQL).
+backup_column_option_sql(check(Expr), SQL) :- !,
+    asadb_constraint_expression_sql(Expr, ExprSQL),
+    atomic_list_concat([' CHECK (', ExprSQL, ')'], SQL).
 backup_column_option_sql(raw_option(Token), SQL) :- !,
     backup_raw_option_token_sql(Token, TokenSQL),
     atom_concat(' ', TokenSQL, SQL).
@@ -401,27 +479,6 @@ backup_column_name(col(Name, _, _), Name).
 backup_row_value([Name=Value|_], Wanted, Value) :- backup_same_identifier(Name, Wanted), !.
 backup_row_value([_|Pairs], Wanted, Value) :- backup_row_value(Pairs, Wanted, Value).
 backup_row_value([], _Wanted, null).
-
-backup_write_indexes(_, _, []).
-backup_write_indexes(Out, Table, [index(Name, Columns, Unique)|Indexes]) :- !,
-    ( backup_primary_index(Name) -> true
-    ; maplist(backup_sql_identifier, Columns, Identifiers),
-      atomic_list_concat(Identifiers, ', ', ColumnText),
-      backup_index_keyword(Unique, UniqueKeyword),
-      backup_sql_identifier(Name, QuotedName),
-      backup_sql_identifier(Table, QuotedTable),
-      format(Out, 'CREATE ~wINDEX ~w ON ~w (~w);~n',
-             [UniqueKeyword, QuotedName, QuotedTable, ColumnText])
-    ),
-    backup_write_indexes(Out, Table, Indexes).
-backup_write_indexes(_, Table, [Index|_]) :-
-    throw(error(domain_error(backup_index(Table), Index), _)).
-
-backup_primary_index(Name) :- backup_same_identifier(Name, 'PRIMARY').
-
-backup_index_keyword(unique, 'UNIQUE ') :- !.
-backup_index_keyword(true, 'UNIQUE ') :- !.
-backup_index_keyword(_, '').
 
 backup_sql_identifier(Name, SQL) :-
     backup_identifier_atom(Name, Atom),

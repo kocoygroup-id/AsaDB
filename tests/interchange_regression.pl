@@ -42,7 +42,24 @@ run_interchange_regression :-
     test_step(view_sql_export, test_view_sql_export),
     test_step(view_csv_export, test_view_csv_export),
     test_step(dialect_literal_safety, test_dialect_literal_safety),
+    test_step(constraint_sql_export, test_constraint_sql_export),
     test_step(xlsx_dtd_rejected, test_xlsx_dtd_rejected).
+
+test_constraint_sql_export :-
+    exec_ok(constraint_fixture,
+            'CREATE TABLE constraint_parent (tenant_id INT, id INT, CONSTRAINT parent_pk PRIMARY KEY (tenant_id, id)); CREATE TABLE constraint_child (tenant_id INT, id INT, parent_id INT, amount DECIMAL(5,2), CONSTRAINT child_pk PRIMARY KEY (tenant_id, id), CONSTRAINT child_amount CHECK (amount > 0), CONSTRAINT child_parent FOREIGN KEY (tenant_id, parent_id) REFERENCES constraint_parent (tenant_id, id) ON DELETE RESTRICT ON UPDATE RESTRICT); INSERT INTO constraint_parent VALUES (1, 2); INSERT INTO constraint_child VALUES (1, 3, 2, 4.50);'),
+    Options = _{tables:[constraint_parent,constraint_child],include_schema:true,
+                include_data:true,create_database:false},
+    forall(member(Format, [mysql,postgresql]),
+           setup_call_cleanup(
+               asadb_interchange_export(interchange, Format, Options, File, _),
+               ( read_file_to_string(File, SQL, [encoding(utf8)]),
+                 sub_string(SQL, _, _, _, 'PRIMARY KEY'),
+                 sub_string(SQL, _, _, _, 'CHECK (amount > 0)'),
+                 sub_string(SQL, _, _, _, 'FOREIGN KEY')
+               ),
+               asadb_interchange_cleanup(File)
+           )).
 
 test_step(Label, Goal) :-
     format('TEST: ~w ... ', [Label]),

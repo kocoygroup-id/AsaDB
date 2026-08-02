@@ -435,7 +435,7 @@ keyword(in). keyword(index). keyword(indexes). keyword(inner). keyword(insert). 
 keyword(is). keyword(join). keyword(key). keyword(keys). keyword(left). keyword(like). keyword(limit). keyword(login).
 keyword(longblob). keyword(longtext). keyword(mediumint). keyword(mediumtext). keyword(modify).
 keyword(not). keyword(null). keyword(offset). keyword(on). keyword(or). keyword(order). keyword(out). keyword(outer). keyword(password). keyword(primary).
-keyword(real). keyword(references). keyword(rename). keyword(return). keyword(returns). keyword(right). keyword(row). keyword(select). keyword(set).
+keyword(real). keyword(references). keyword(rename). keyword(restrict). keyword(return). keyword(returns). keyword(right). keyword(row). keyword(select). keyword(set).
 keyword(show). keyword(smallint). keyword(table). keyword(tables). keyword(text). keyword(then). keyword(true).
 keyword(time). keyword(timestamp). keyword(tinyint). keyword(tinytext). keyword(to).
 keyword(union). keyword(unique). keyword(unknown). keyword(unsigned). keyword(update). keyword(user). keyword(use). keyword(using). keyword(values).
@@ -468,9 +468,9 @@ parse_statement([kw(create),kw(table)|Rest], create_table(Name, Columns, Options
     parse_ident(Rest2, Name, [sym('(')|AfterName]),
     take_paren_payload(AfterName, ColumnTokens, Tail),
     split_top_commas(ColumnTokens, ColumnDefs),
-    parse_column_defs(ColumnDefs, Columns0),
+    parse_table_definitions(ColumnDefs, Columns0, Constraints),
     dedupe_columns(Columns0, Columns),
-    Options = Tail.
+    Options = table_options(Constraints, Tail).
 
 parse_statement([kw(drop),kw(table)|Rest], drop_table(Name)) :-
     optional_if_exists(Rest, Rest2), parse_ident(Rest2, Name, Tail), Tail = [].
@@ -525,6 +525,11 @@ parse_statement([kw(show),kw(grants),kw(for)|Rest], show_grants(User)) :- parse_
 parse_statement([kw(describe)|Rest], describe_table(Name)) :- parse_ident(Rest, Name, Tail), Tail = [].
 parse_statement([kw(desc)|Rest], describe_table(Name)) :- parse_ident(Rest, Name, Tail), Tail = [].
 
+parse_statement([kw(explain)|Rest], explain(Statement)) :-
+    parse_statement(Rest, Statement), !.
+% Keep an explicit raw form for diagnostics when the nested statement is not
+% in the supported grammar; the executor will report it as unsupported rather
+% than pretending a token dump is an execution plan.
 parse_statement([kw(explain)|Rest], explain(raw(Rest))).
 
 parse_statement([kw(create),kw(unique),kw(index)|Rest], create_index(Name, Table, Columns, unique)) :-
@@ -835,23 +840,92 @@ parse_ident_parts([[id(N)]|Ps], [N|Ns]) :- !, parse_ident_parts(Ps, Ns).
 parse_ident_parts([[kw(N)]|Ps], [N|Ns]) :- !, parse_ident_parts(Ps, Ns).
 parse_ident_parts([[str(N)]|Ps], [N|Ns]) :- !, parse_ident_parts(Ps, Ns).
 
-parse_column_defs([], []).
-parse_column_defs([Def|Defs], Columns) :-
-    ( parse_column_def(Def, Col) -> Columns = [Col|Rest]
-    ; Columns = Rest
-    ),
-    parse_column_defs(Defs, Rest).
+% A table definition can be either a column or a table-level constraint.  The
+% previous parser silently discarded PRIMARY KEY, UNIQUE, CHECK, and FOREIGN
+% KEY definitions here, which is unsafe: accepted DDL must never lose its
+% integrity contract.
+parse_table_definitions([], [], []).
+parse_table_definitions([Def|Defs], Columns, Constraints) :-
+    parse_table_definition(Def, Item),
+    parse_table_definitions(Defs, RestColumns, RestConstraints),
+    table_definition_parts(Item, Columns, Constraints, RestColumns, RestConstraints).
 
-parse_column_def([kw(primary),kw(key)|_], _) :- !, fail.
-parse_column_def([kw(key)|_], _) :- !, fail.
-parse_column_def([kw(index)|_], _) :- !, fail.
-parse_column_def([kw(unique)|_], _) :- !, fail.
-parse_column_def([kw(constraint)|_], _) :- !, fail.
+table_definition_parts(column(Col), [Col|Columns], Constraints, Columns, Constraints).
+table_definition_parts(constraint(Constraint), Columns, [Constraint|Constraints], Columns, Constraints).
+
+parse_table_definition(Def, constraint(Constraint)) :-
+    parse_table_constraint(Def, Constraint), !.
+parse_table_definition(Def, column(Col)) :-
+    parse_column_def(Def, Col).
+
 parse_column_def([NameTok|Rest], col(Name, Type, Options)) :-
     token_ident(NameTok, Name),
     split_type_options(Rest, TypeTokens, OptionTokens),
+    TypeTokens \= [],
     tokens_text(TypeTokens, Type),
     parse_column_options(OptionTokens, Options).
+
+parse_table_constraint([kw(constraint), NameTok|Rest], Constraint) :- !,
+    token_ident(NameTok, Name),
+    parse_table_constraint_body(Rest, Name, Constraint).
+parse_table_constraint(Tokens, Constraint) :-
+    parse_table_constraint_body(Tokens, unnamed, Constraint).
+
+parse_table_constraint_body([kw(primary),kw(key)|Rest], Name, primary_key(Name, Columns)) :- !,
+    parse_constraint_columns(Rest, Columns).
+parse_table_constraint_body([kw(unique)|Rest], Name0, unique_key(Name, Columns)) :- !,
+    skip_optional_key_keyword(Rest, AfterKey),
+    parse_named_constraint_columns(AfterKey, Name0, Name, Columns).
+parse_table_constraint_body([kw(key)|Rest], Name0, index_key(Name, Columns)) :- !,
+    parse_named_constraint_columns(Rest, Name0, Name, Columns).
+parse_table_constraint_body([kw(index)|Rest], Name0, index_key(Name, Columns)) :- !,
+    parse_named_constraint_columns(Rest, Name0, Name, Columns).
+parse_table_constraint_body([kw(check),sym('(')|Rest], Name, check_constraint(Name, Expr)) :- !,
+    take_paren_payload(Rest, ExprTokens, []),
+    parse_expr(ExprTokens, Expr).
+parse_table_constraint_body([kw(foreign),kw(key)|Rest], Name,
+                            foreign_key(Name, LocalColumns, RefTable, RefColumns,
+                                        DeleteAction, UpdateAction)) :- !,
+    parse_constraint_columns(Rest, LocalColumns, [kw(references)|AfterReferences]),
+    parse_ident(AfterReferences, RefTable, [sym('(')|AfterRefOpen]),
+    take_paren_payload(AfterRefOpen, RefTokens, ActionTokens),
+    parse_ident_list(RefTokens, RefColumns),
+    parse_fk_actions(ActionTokens, DeleteAction, UpdateAction).
+
+skip_optional_key_keyword([kw(key)|Rest], Rest) :- !.
+skip_optional_key_keyword([kw(index)|Rest], Rest) :- !.
+skip_optional_key_keyword(Rest, Rest).
+
+parse_named_constraint_columns([sym('(')|Rest], Name, Name, Columns) :- !,
+    take_paren_payload(Rest, ColumnTokens, []),
+    parse_ident_list(ColumnTokens, Columns).
+parse_named_constraint_columns([_IndexName,sym('(')|Rest], Name, Name, Columns) :-
+    Name \== unnamed, !,
+    take_paren_payload(Rest, ColumnTokens, []),
+    parse_ident_list(ColumnTokens, Columns).
+parse_named_constraint_columns([NameTok,sym('(')|Rest], unnamed, Name, Columns) :- !,
+    token_ident(NameTok, Name),
+    take_paren_payload(Rest, ColumnTokens, []),
+    parse_ident_list(ColumnTokens, Columns).
+
+parse_constraint_columns([sym('(')|Rest], Columns) :- !,
+    take_paren_payload(Rest, ColumnTokens, []),
+    parse_ident_list(ColumnTokens, Columns).
+parse_constraint_columns([sym('(')|Rest], Columns, Tail) :- !,
+    take_paren_payload(Rest, ColumnTokens, Tail),
+    parse_ident_list(ColumnTokens, Columns).
+
+parse_fk_actions([], restrict, restrict).
+parse_fk_actions([kw(on),kw(delete)|Rest], DeleteAction, UpdateAction) :- !,
+    parse_fk_action(Rest, DeleteAction, AfterDelete),
+    parse_fk_actions(AfterDelete, _IgnoredDelete, UpdateAction).
+parse_fk_actions([kw(on),kw(update)|Rest], DeleteAction, UpdateAction) :- !,
+    parse_fk_action(Rest, UpdateAction, AfterUpdate),
+    parse_fk_actions(AfterUpdate, DeleteAction, _IgnoredUpdate).
+
+parse_fk_action([kw(cascade)|Rest], cascade, Rest) :- !.
+parse_fk_action([kw(restrict)|Rest], restrict, Rest) :- !.
+parse_fk_action([kw(set),kw(null)|Rest], set_null, Rest) :- !.
 
 token_ident(id(N), N).
 token_ident(kw(N), N).
@@ -895,7 +969,7 @@ take_options([T|Ts], [T|Os], Rest) :- take_options(Ts, Os, Rest).
 
 option_start(kw(not)). option_start(kw(null)). option_start(kw(default)).
 option_start(kw(primary)). option_start(kw(key)). option_start(kw(auto_increment)).
-option_start(kw(unique)). option_start(kw(comment)).
+option_start(kw(unique)). option_start(kw(check)). option_start(kw(comment)).
 
 parse_column_options([], []).
 parse_column_options([kw(not),kw(null)|Ts], [not_null|Os]) :- !, parse_column_options(Ts, Os).
@@ -904,6 +978,10 @@ parse_column_options([kw(default),V|Ts], [default(Value)|Os]) :- !, token_value(
 parse_column_options([kw(primary),kw(key)|Ts], [primary_key|Os]) :- !, parse_column_options(Ts, Os).
 parse_column_options([kw(auto_increment)|Ts], [auto_increment|Os]) :- !, parse_column_options(Ts, Os).
 parse_column_options([kw(unique)|Ts], [unique|Os]) :- !, parse_column_options(Ts, Os).
+parse_column_options([kw(check),sym('(')|Ts], [check(Expr)|Os]) :- !,
+    take_paren_payload(Ts, ExprTokens, Rest),
+    parse_expr(ExprTokens, Expr),
+    parse_column_options(Rest, Os).
 parse_column_options([T|Ts], [raw_option(T)|Os]) :- parse_column_options(Ts, Os).
 
 parse_value_groups([], [], []).
