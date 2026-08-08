@@ -307,9 +307,8 @@ def replication_e2e(repo: Path) -> None:
                 copied = replica_client.post(
                     "/api/v1/databases/main/query",
                     json={
-                        "sql": (
-                            "USE app; SELECT id, name FROM replica_smoke ORDER BY id;"
-                        )
+                        "logicalDatabase": "app",
+                        "sql": "SELECT id, name FROM replica_smoke ORDER BY id;",
                     },
                 )
                 require(copied, 200, "replica read")

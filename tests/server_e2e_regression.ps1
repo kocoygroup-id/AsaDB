@@ -12,7 +12,7 @@ Push-Location $Root
 try {
   $PackRoot = Join-Path $env:LOCALAPPDATA 'swi-prolog\pack'
   New-Item -ItemType Directory -Path $PackRoot -Force | Out-Null
-  swipl pack install .
+  @('Y') | swipl pack install .
   if ($LASTEXITCODE -ne 0) {
     throw "swipl pack install . failed with exit code $LASTEXITCODE"
   }
