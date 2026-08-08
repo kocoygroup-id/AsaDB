@@ -621,6 +621,47 @@ class PanelBackend:
         else:
             process.kill()
 
+    def _force_stop_listener_processes(self) -> None:
+        """Stop the verified private listener when a Windows wrapper escaped.
+
+        `swipl.exe` normally is the server process.  Some Windows launch
+        paths can nevertheless leave the listener in a descendant after the
+        tracked wrapper has exited.  Querying `netstat` limits this fallback to
+        the port that this supervisor reserved for this backend; it never
+        enumerates or terminates unrelated processes.
+        """
+        if os.name != "nt" or self.port is None:
+            return
+        try:
+            listing = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                check=False,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return
+        port = str(self.port)
+        pids: set[str] = set()
+        for line in listing.splitlines():
+            fields = line.split()
+            if len(fields) < 5 or fields[-2].upper() != "LISTENING":
+                continue
+            local_address = fields[1]
+            if local_address.rsplit(":", 1)[-1] == port and fields[-1].isdigit():
+                pids.add(fields[-1])
+        for pid in pids:
+            subprocess.run(
+                ["taskkill", "/PID", pid, "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+
     def _wait_for_catalog_settle(self, timeout: float = 10) -> None:
         catalog = self.database_path
         temporary = Path(str(catalog) + ".tmp")
@@ -683,6 +724,7 @@ class PanelBackend:
             # has gone away before a new backend may touch the same .asa file.
             if base_url and not self._wait_for_listener_exit(base_url):
                 self._force_stop_process_tree(process)
+                self._force_stop_listener_processes()
                 if not self._wait_for_listener_exit(base_url, timeout=5):
                     raise BackendUnavailable(
                         "BACKEND_SHUTDOWN_INCOMPLETE",
