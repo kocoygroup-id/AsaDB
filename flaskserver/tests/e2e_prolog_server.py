@@ -191,6 +191,12 @@ def main() -> None:
                 200,
                 "backend restart",
             )
+            # Capture the freshly booted core before a logical-database query
+            # can issue USE and mask a catalog-load failure by creating that
+            # database again.  The value is only emitted if this regression
+            # fails, where it makes the physical restart boundary diagnosable.
+            restarted_backend = app.extensions["asadb_backends"].get("main")
+            restarted_state = restarted_backend.state()
             after_restart = client.post(
                 "/api/v1/databases/main/query",
                 json={
@@ -222,6 +228,8 @@ def main() -> None:
                     f"star={after_restart_star.get_data(as_text=True)}; "
                     f"tables={after_restart_tables.get_data(as_text=True)}; "
                     f"backend={backend_status}; "
+                    f"backend_path={restarted_backend.database_path}; "
+                    f"state_before_use={restarted_state}; "
                     f"catalog_before={catalog_before_restart}; "
                     f"catalog_after={file_summary(catalog_path)}; "
                     f"database_files={sorted(item.name for item in catalog_path.parent.iterdir())}"
