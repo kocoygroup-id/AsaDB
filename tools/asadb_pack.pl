@@ -123,7 +123,8 @@ installed_summary :-
     asadb_pack_name(Pack),
     ( pack_property(Pack, version(Version)),
       pack_property(Pack, directory(Directory)) ->
-        format('AsaDB ~w installed at ~w~n', [Version, Directory])
+        format('AsaDB ~w installed at ~w~n', [Version, Directory]),
+        format('Start Server Mode: swipl -q -s ~w/tools/asadb_launcher.pl -- init~n', [Directory])
     ; throw(error(existence_error(pack, Pack), _))
     ).
 

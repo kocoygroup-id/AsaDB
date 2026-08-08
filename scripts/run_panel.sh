@@ -12,5 +12,17 @@ if ! command -v swipl >/dev/null 2>&1; then
   exit 127
 fi
 
+case "$DB_FILE" in
+  /*) DB_PATH=$DB_FILE ;;
+  *) DB_PATH=$ROOT/$DB_FILE ;;
+esac
+DB_DIR=$(dirname "$DB_PATH")
+mkdir -p "$DB_DIR"
+DB_DIR=$(CDPATH= cd "$DB_DIR" && pwd)
+DB_NAME=$(basename "$DB_PATH")
+
 cd "$ROOT"
-exec swipl -q -s src/asadb_web.pl -- "$DB_FILE" "$PORT"
+exec swipl -q -s tools/asadb_launcher.pl -- start \
+  --database "$DB_NAME" \
+  --data-dir "$DB_DIR" \
+  --port "$PORT"

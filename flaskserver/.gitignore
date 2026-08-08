@@ -1,0 +1,11 @@
+# Python build and test artefacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Local development environment and server-owned state
+.venv/
+var/

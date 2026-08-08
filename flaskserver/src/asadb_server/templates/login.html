@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Masuk AsAPanel · AsaDB</title>
+  <link rel="icon" type="image/png" href="{{ url_for('panel.public_panel_asset', asset_path='asadb-logo.png') }}">
+  <link rel="stylesheet" href="{{ url_for('panel.public_panel_asset', asset_path='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='server.css') }}">
+</head>
+<body class="auth-page">
+  <main class="auth-card">
+    <div class="auth-brand"><img src="{{ url_for('panel.public_panel_asset', asset_path='asadb-logo.png') }}" alt="AsaDB"><div><strong>AsAPanel</strong><span>AsaDB Admin</span></div></div>
+    <div class="eyebrow">AsaDB · Secure Workspace</div>
+    <h1>Masuk ke AsAPanel</h1>
+    <p>Masuk dulu untuk memilih Local Workspace atau Server Workspace. Kredensial, peran, dan sesi dikelola oleh server AsaDB.</p>
+    {% if error %}<div class="error-box">{{ error }}</div>{% endif %}
+    <form method="post">
+      <label>Username<input name="username" required autofocus autocomplete="username"></label>
+      <label>Password<input name="password" type="password" required autocomplete="current-password"></label>
+      <button class="primary" type="submit">Masuk dan pilih workspace</button>
+    </form>
+    {% if local_workspace_available %}<small>Local Workspace tersedia dari perangkat ini setelah login.</small>{% else %}<small>Local Workspace hanya dapat dipilih pada loopback yang diizinkan administrator.</small>{% endif %}
+  </main>
+</body>
+</html>

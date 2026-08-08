@@ -2,11 +2,12 @@
 
 ## SWI-Prolog pack distribution
 
-After AsaDB is published to the SWI-Prolog pack registry, install, upgrade,
-inspect, or remove it on Linux and Windows with:
+After AsaDB is published to the SWI-Prolog pack registry, install, start,
+upgrade, inspect, or remove it on Linux and Windows with:
 
 ```sh
 swipl pack install asadb
+swipl asadb
 swipl pack install --upgrade asadb
 swipl pack info asadb
 swipl pack remove asadb
@@ -25,31 +26,59 @@ the official `main` branch by default, and works unchanged with `swipl.exe` on
 Windows. See [docs/swi-prolog-pack.md](docs/swi-prolog-pack.md) for branch and
 portable-directory options.
 
+`swipl asadb` requires SWI-Prolog 9.1.18 or newer, which provides the official
+pack-application mechanism. It starts the login-first browser portal on the
+default loopback address. Use `swipl asadb --help` to see explicit commands.
+
+## One Pack, Two Modes
+
+The installed pack includes Local Mode and Flask Server Mode. Server Mode
+requires Python 3.10 or newer, but does **not** require a manual `pip install`:
+the launcher creates a per-user environment and installs the checked-in
+wheelhouse with network access disabled. For normal browser use, run only:
+
+```sh
+swipl asadb
+```
+
+Open `http://127.0.0.1:7879/login`. After login, choose Local Workspace
+(loopback-only when allowed) or Server Workspace in the same AsAPanel. There
+is no unauthenticated browser path. Direct terminal work is still available
+through `swipl asadb local --database "$HOME/AsaDB-data/data.asa"`. Server
+configuration, secrets, virtual environment, users, and database files are
+kept below the platform user-data directory (Linux: `~/.local/share/asadb`;
+Windows: `%LOCALAPPDATA%\AsaDB`), not inside the pack. `swipl pack remove
+asadb` removes program files only.
+
+Use `swipl asadb doctor --json`, `swipl asadb python repair`, or
+`swipl asadb reset python --yes` to inspect or rebuild only that runtime. A
+reset never deletes `.asa` data.
+
 ## Windows
 
 1. Install SWI-Prolog.
 2. Pastikan `swipl` masuk PATH.
 3. Extract `AsaDB-1.5.0-windows-source.zip`.
 4. Buka PowerShell/CMD di folder `AsaDB`.
-5. Jalankan demo:
+5. Pasang source package lokal sekali:
 
 ```powershell
-scripts\run_asadb.bat data.asa examples\demo.sql
+swipl pack install .
 ```
 
-6. Jalankan panel:
+6. Jalankan portal:
 
 ```powershell
-scripts\run_panel.bat data.asa 8088
+swipl asadb
 ```
 
 This ZIP contains AsaDB source and Windows batch launchers; it does not bundle
 SWI-Prolog or a prebuilt executable.
 
-Buka browser:
+Buka browser setelah membuat admin pada first run:
 
 ```text
-http://127.0.0.1:8088
+http://127.0.0.1:7879/login
 ```
 
 ## Linux/macOS
@@ -69,10 +98,9 @@ The `.tar.Z` suffix is retained for release naming compatibility, but the file
 is a gzip stream. This source package does not bundle `swipl`.
 
 ```bash
-chmod +x scripts/*.sh bin/asadb
 ./scripts/check_linux_runtime.sh
-./scripts/run_asadb.sh data.asa examples/demo.sql
-./scripts/run_panel.sh data.asa 8088
+swipl pack install .
+swipl asadb
 ```
 
 Debian/Ubuntu example:
@@ -100,12 +128,12 @@ After extracting AsaDB:
 
 ```sh
 cd AsaDB-1.5.0-linux-x86_64
-chmod +x bin/asadb scripts/*.sh
 ./scripts/check_linux_runtime.sh
-./scripts/run_panel.sh data.asa 8088
+swipl pack install .
+swipl asadb
 ```
 
-Open `http://127.0.0.1:8088` manually. The launchers do not depend on
+Open `http://127.0.0.1:7879/login` manually. The launchers do not depend on
 `systemd`, `xdg-open`, PowerShell, drive letters, backslash paths, or Bash-only
 syntax. Database files and all matching sidecars must be on a writable
 filesystem.
@@ -194,12 +222,12 @@ Buka folder `AsaDB`, lalu jalankan task:
 
 SWI-Prolog belum terinstall atau PATH belum benar.
 
-### AsAPanel terbuka tapi fallback sandbox
+### Portal tidak membuka login atau AsAPanel masuk fallback sandbox
 
-Artinya kamu membuka `web/index.html` langsung atau backend Prolog belum aktif. Jalankan:
+Artinya kamu membuka `web/index.html` langsung atau backend Prolog belum aktif. Jalankan portal resmi:
 
 ```bash
-swipl -q -s src/asadb_web.pl -- data.asa 8088
+./bin/asadb
 ```
 
 ### File `.asa` tidak kebaca

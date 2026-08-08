@@ -10,4 +10,8 @@ if ! command -v swipl >/dev/null 2>&1; then
   exit 127
 fi
 
-exec swipl -q -s "$DIR/src/asadb.pl" -- "$@"
+if [ "$#" -eq 0 ]; then
+  exec swipl -q -s "$DIR/tools/asadb_launcher.pl" -- start
+fi
+
+exec swipl -q -s "$DIR/tools/asadb_launcher.pl" -- "$@"

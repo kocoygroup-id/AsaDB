@@ -1,0 +1,5 @@
+Flask>=3.1,<4
+Werkzeug>=3.1,<4
+click>=8.1,<9
+requests>=2.32,<3
+waitress>=3.0,<4

@@ -22,8 +22,13 @@ test -s "$CHECKSUM"
 unzip -Z1 "$ARCHIVE" > "$LIST"
 
 for required in \
-  LICENSE README.md INSTALL.md SOURCE_CODE.md VERSION \
+  LICENSE README.md INSTALL.md SOURCE_CODE.md VERSION app/asadb.pl \
   scripts/run_asadb.bat scripts/run_panel.bat scripts/asadb_guardian.sh \
+  tools/asadb_launcher.pl \
+  flaskserver/pyproject.toml flaskserver/requirements-bundled.txt flaskserver/scripts/bootstrap_python.py \
+  flaskserver/src/asadb_server/app.py flaskserver/src/asadb_server/backend.py flaskserver/src/asadb_server/panel.py \
+  flaskserver/src/asadb_server/templates/login.html flaskserver/src/asadb_server/templates/mode.html flaskserver/src/asadb_server/templates/logout.html \
+  flaskserver/src/asadb_server/static/server.css flaskserver/src/asadb_server/static/logout.js flaskserver/docs/MERGE_AUDIT.md \
   src/asadb.pl src/asadb_web.pl src/asadb_backup.pl src/asadb_interchange.pl src/asadb_pager.pl src/asadb_sql_frontend.pl src/asadb_prolog_jit.pl src/bridge/reservoir.pl \
   web/index.html web/assets/app.js
 do
@@ -32,6 +37,11 @@ do
     exit 1
   fi
 done
+
+if ! grep -E "/flaskserver/wheels/pip-[^/]+\.whl$" "$LIST" >/dev/null; then
+  echo 'Windows source ZIP is missing the offline Server Mode wheelhouse.' >&2
+  exit 1
+fi
 
 if grep -E '/(build|dist)/|/asadb\.port$|\.asa($|\.)|\.wal$|\.log$|\.exe$' "$LIST" >/dev/null; then
   echo 'Windows source ZIP contains runtime or executable residue.' >&2

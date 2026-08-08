@@ -54,8 +54,9 @@ ASTs become dynamically asserted clauses keyed by an integer plan ID.
 SWI-Prolog compiles those clauses to its VM instruction form and may add
 just-in-time clause indexes (JITI) as call patterns become hot. The compiler
 accepts only the engine's expression AST whitelist; SQL text is never executed
-as Prolog source. Both caches are capped at 128 entries and fall back to the
-ordinary interpreter for unsupported expressions. This is VM/JITI
+as Prolog source. Both caches use collision-safe text/AST matching, refresh
+their least-recently-used position on a hit, are capped at 128 entries, and
+fall back to the ordinary interpreter for unsupported expressions. This is VM/JITI
 specialization, not a claim of native machine-code generation.
 
 ### Import manager

@@ -1,0 +1,34 @@
+services:
+  node1:
+    build:
+      context: ../..
+      dockerfile: flaskserver/deploy/Dockerfile
+    environment:
+      ASADB_NODE_ID: node-1
+      ASADB_PUBLIC_URL: http://node1:7879
+      ASADB_SECRET_KEY: ${ASADB_NODE1_SECRET_KEY}
+      ASADB_CLUSTER_KEY: ${ASADB_CLUSTER_KEY}
+      ASADB_CLUSTER_ENABLED: "true"
+    volumes:
+      - node1-data:/var/lib/asadb
+    ports:
+      - "7879:7879"
+
+  node2:
+    build:
+      context: ../..
+      dockerfile: flaskserver/deploy/Dockerfile
+    environment:
+      ASADB_NODE_ID: node-2
+      ASADB_PUBLIC_URL: http://node2:7879
+      ASADB_SECRET_KEY: ${ASADB_NODE2_SECRET_KEY}
+      ASADB_CLUSTER_KEY: ${ASADB_CLUSTER_KEY}
+      ASADB_CLUSTER_ENABLED: "true"
+    volumes:
+      - node2-data:/var/lib/asadb
+    ports:
+      - "7880:7879"
+
+volumes:
+  node1-data:
+  node2-data:

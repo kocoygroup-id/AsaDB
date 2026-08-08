@@ -9,12 +9,21 @@ permissions:
 
 jobs:
   linux:
-    runs-on: ubuntu-latest
+    # Keep the distribution explicit: the official SWI-Prolog stable PPA
+    # publishes a current runtime for this supported Ubuntu release, while
+    # Ubuntu's archive still carries 9.0.4 (too old for `swipl asadb`).
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Install SWI-Prolog and portable shell
-        run: sudo apt-get update && sudo apt-get install -y swi-prolog-nox busybox
+      - name: Install supported SWI-Prolog and portable shell
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common busybox
+          sudo add-apt-repository -y ppa:swi-prolog/stable
+          sudo apt-get update
+          sudo apt-get install -y swi-prolog
+          swipl --version
       - name: Check POSIX and BusyBox shell syntax
         run: |
           dash -n bin/asadb scripts/*.sh tests/*.sh

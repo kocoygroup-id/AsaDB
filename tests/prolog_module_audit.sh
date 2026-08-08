@@ -13,7 +13,10 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 cd "$ROOT"
-find src -type f -name '*.pl' -print | sort | while IFS= read -r file
+{
+  find src -type f -name '*.pl' -print
+  printf '%s\n' tools/asadb_launcher.pl app/asadb.pl
+} | sort | while IFS= read -r file
 do
   if ! swipl -q -g "load_files('$file',[silent(true)]),list_undefined,halt" \
       >"$LOG" 2>&1; then

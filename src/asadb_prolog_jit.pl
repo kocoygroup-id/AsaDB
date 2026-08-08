@@ -52,8 +52,14 @@ asadb_jit_parse(SQL, Parser, Statements) :-
     call(Parser, SQL, Statements).
 
 jit_cached_plan(Hash, Text, Statements) :-
-    sql_plan_cache(Hash, CachedText, CachedStatements, _),
+    % Keep a true LRU cache, not FIFO eviction.  `Text == CachedText` stays
+    % before the cut so a term_hash/2 collision can continue searching the
+    % other entries with the same hash.
+    sql_plan_cache(Hash, CachedText, CachedStatements, OldTick),
     Text == CachedText, !,
+    retract(sql_plan_cache(Hash, CachedText, CachedStatements, OldTick)),
+    next_sql_plan_tick(NewTick),
+    assertz(sql_plan_cache(Hash, CachedText, CachedStatements, NewTick)),
     increment_flag(asadb_jit_parse_hits),
     Statements = CachedStatements.
 jit_cached_plan(_, _, _) :-

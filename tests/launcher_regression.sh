@@ -32,15 +32,19 @@ assert_output() {
 }
 
 BIN_OUTPUT=$(PATH="$FAKE_BIN:$PATH" "$ROOT/bin/asadb" "database with spaces.asa" "query with spaces.sql")
-BIN_EXPECTED=$(printf '%s\n' -q -s "$ROOT/src/asadb.pl" -- "database with spaces.asa" "query with spaces.sql")
+BIN_EXPECTED=$(printf '%s\n' -q -s "$ROOT/tools/asadb_launcher.pl" -- "database with spaces.asa" "query with spaces.sql")
 assert_output bin/asadb "$BIN_EXPECTED" "$BIN_OUTPUT"
+
+DEFAULT_BIN_OUTPUT=$(PATH="$FAKE_BIN:$PATH" "$ROOT/bin/asadb")
+DEFAULT_BIN_EXPECTED=$(printf '%s\n' -q -s "$ROOT/tools/asadb_launcher.pl" -- start)
+assert_output bin/asadb-default "$DEFAULT_BIN_EXPECTED" "$DEFAULT_BIN_OUTPUT"
 
 CLI_OUTPUT=$(PATH="$FAKE_BIN:$PATH" "$ROOT/scripts/run_asadb.sh" "database with spaces.asa" "query with spaces.sql")
 CLI_EXPECTED=$(printf '%s\n' -q -s src/asadb.pl -- "database with spaces.asa" "query with spaces.sql")
 assert_output run_asadb.sh "$CLI_EXPECTED" "$CLI_OUTPUT"
 
 PANEL_OUTPUT=$(PATH="$FAKE_BIN:$PATH" "$ROOT/scripts/run_panel.sh" "database with spaces.asa" 8099)
-PANEL_EXPECTED=$(printf '%s\n' -q -s src/asadb_web.pl -- "database with spaces.asa" 8099)
+PANEL_EXPECTED=$(printf '%s\n' -q -s tools/asadb_launcher.pl -- start --database "database with spaces.asa" --data-dir "$ROOT" --port 8099)
 assert_output run_panel.sh "$PANEL_EXPECTED" "$PANEL_OUTPUT"
 
-printf 'PASS: Linux launchers preserve arguments and paths containing spaces.\n'
+printf 'PASS: Linux launchers preserve arguments and paths containing spaces, including the login-first panel portal.\n'

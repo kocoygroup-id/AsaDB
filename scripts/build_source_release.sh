@@ -40,7 +40,7 @@ for path in \
   BENCHMARK_RESULTS.md BUGFIX_REPORT.txt CODE_OF_CONDUCT.md CONTRIBUTING.md DCO GOVERNANCE.md \
   COMPATIBILITY.md INSTALL.md LICENSE LICENSE_HISTORY.md GNUmakefile OPEN_SOURCE_RELEASE_CHECKLIST.md \
   README.md RELEASE.md RELEASE_NOTES.md SECURITY.md SOURCE_CODE.md THIRD_PARTY_NOTICES.md \
-  TRADEMARKS.md VERSION asadb.conf pack.pl pack prolog bin examples docs licenses scripts src tests tools web \
+  TRADEMARKS.md VERSION asadb.conf pack.pl app pack prolog bin examples docs flaskserver licenses scripts src tests tools web \
   .github .gitattributes .gitignore
 do
   if [ -e "$ROOT/$path" ]; then
@@ -62,6 +62,14 @@ rm -f "$STAGE/$NAME/tests/"*.asa \
       "$STAGE/$NAME/tests/"*.asa.* \
       "$STAGE/$NAME/tests/"*.log \
       "$STAGE/$NAME/tests/"*_generated.sql
+
+# Flask Server source and wheels belong in the source/pack distribution; local
+# virtual environments, Python bytecode, coverage, and runtime control-plane
+# state do not.
+if [ -d "$STAGE/$NAME/flaskserver" ]; then
+  find "$STAGE/$NAME/flaskserver" -type d \( -name __pycache__ -o -name .pytest_cache -o -name .venv -o -name var -o -name build \) -prune -exec rm -rf {} +
+  find "$STAGE/$NAME/flaskserver" -type d -name '*.egg-info' -prune -exec rm -rf {} +
+fi
 
 tar -cf "$TAR_FILE" -C "$STAGE" "$NAME"
 gzip -n -9 -c "$TAR_FILE" > "$OUTPUT"

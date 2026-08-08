@@ -1,0 +1,32 @@
+limit_req_zone $binary_remote_addr zone=asadb_login:10m rate=10r/m;
+
+server {
+    listen 443 ssl http2;
+    server_name db.example.com;
+
+    # Configure reviewed certificate paths here.
+    ssl_certificate /etc/letsencrypt/live/db.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/db.example.com/privkey.pem;
+
+    client_max_body_size 2g;
+
+    location = /api/v1/auth/login {
+        limit_req zone=asadb_login burst=5 nodelay;
+        proxy_pass http://127.0.0.1:7879;
+        include proxy_params;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:7879;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Request-ID $request_id;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}

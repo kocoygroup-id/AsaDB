@@ -32,6 +32,8 @@ and limitations are not silently reclassified as 1.5.0 guarantees.
 | Large result ordering | `ORDER BY *` was a compatibility no-op, while projected ordered results could repeatedly evaluate sort expressions. | The bounded top-window sorter caches each matching row's order key once and merges sorted buffers deterministically. | Filtered, projected text ordering avoids repeated expression work while preserving stable tie order. |
 | Production backup | Backend `.asb` backup and verified restore were introduced in 1.4.0. | The backup route remains backend-owned and is re-audited together with TVCC, portable interchange, and view export. | Complete logical backup never depends on loaded browser rows or visible result pages. |
 | Release integrity | Linux/Windows-source package checks existed. | Version, engine metadata, pack manifest, runtime sources, docs, archive checksums, and release artifacts are released as one 1.5.0 set. | Operators can match a package, its checksum, and its reported engine version. |
+| Local/server entry point | A source launcher could start the panel, but installed-pack users had to resolve an internal path. | The pack includes SWI-Prolog's native `app/asadb.pl`; `swipl asadb` starts the login-first portal and provisions its offline web gateway. | Linux and Windows users get one documented browser command without `pip install`, while Prolog remains the only SQL/storage engine. |
+| Hot query reuse | Bounded parse/filter caches could evict a repeatedly used plan as if it were a one-off entry. | Parse and safe filter-plan caches refresh their LRU position on a collision-safe cache hit. | Repeated query shapes retain compiled work under mixed workloads while cache memory stays bounded. |
 
 ### SQL surface and performance
 
@@ -52,17 +54,19 @@ keys in scan order.
 
 ### SWI-Prolog distribution
 
-The source package now includes `tools/asadb_pack.pl`, a cross-platform
+The source package includes `tools/asadb_pack.pl`, a cross-platform
 repository-channel helper for `install`, `upgrade`, `info`, `version`, and
 `remove`. It invokes SWI-Prolog's supported `library(prolog_pack)` API and
 forces the canonical `asadb` pack name for Git installs, avoiding the
-repository-basename naming difference on current SWI-Prolog versions. The
-standard public-registry commands remain `swipl pack install asadb` and
-`swipl pack install --upgrade asadb`; `swipl install asadb` is not valid stock
-SWI-Prolog syntax and is intentionally not emulated by replacing `swipl`.
+repository-basename naming difference on current runtimes. The standard
+public-registry commands remain `swipl pack install asadb` and `swipl pack
+install --upgrade asadb`. On SWI-Prolog 9.1.18 or newer, the installed pack's
+native application entry point makes `swipl asadb` the normal one-command
+browser start. It does not replace or shadow the user's `swipl` executable.
 The command and API behavior follows SWI-Prolog's official
-[`library(prolog_pack)` documentation](https://www.swi-prolog.org/pldoc/man?section=prologpack)
-and [`pack_install/2` reference](https://www.swi-prolog.org/pldoc/doc_for?object=pack_install%2F2).
+[`library(prolog_pack)` documentation](https://www.swi-prolog.org/pldoc/man?section=prologpack),
+[`pack_install/2` reference](https://www.swi-prolog.org/pldoc/doc_for?object=pack_install%2F2),
+and [pack-app guide](https://www.swi-prolog.org/pldoc/man?section=swipl-app).
 
 ### Production backup and interchange
 
@@ -105,7 +109,7 @@ requires a compatible SWI-Prolog installation on Windows.
 
 Every source artifact is built from the same release tree and contains the engine,
 storage modules, TVCC, backup/interchange, AsAPanel bundles, launchers, tests,
-documentation, pack manifest, and GPL notices.
+documentation, pack manifest/application entry point, and GPL notices.
 
 ### Stable scope and known limits
 

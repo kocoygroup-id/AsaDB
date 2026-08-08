@@ -39,6 +39,14 @@ It is not a relabelled Windows native executable.
 - **Release cohesion.** Engine metadata, version manifests, pack API,
   documentation, source archives, Windows source ZIP, and SHA-256 files all
   report 1.5.0.
+- **Single-command pack application.** The complete local/server distribution
+  now ships an official SWI-Prolog `app/asadb.pl` entry point. On SWI-Prolog
+  9.1.18 or newer, `swipl asadb` opens the login-first portal, provisions the
+  bundled offline web gateway, and keeps all SQL/storage work in Prolog.
+- **Hot-query cache discipline.** Parsed SQL and safe compiled filter plans
+  refresh their bounded LRU position on reuse and keep collision-safe matching,
+  reducing unnecessary recompilation during repeated local workloads without
+  treating SQL text as executable Prolog.
 
 ## Stable validation profile
 
@@ -61,11 +69,12 @@ sha256sum -c AsaDB-1.5.0-linux-x86_64.tar.Z.sha256
 tar -xzf AsaDB-1.5.0-linux-x86_64.tar.Z
 cd AsaDB-1.5.0-linux-x86_64
 ./scripts/check_linux_runtime.sh
-./scripts/run_panel.sh data.asa 8088
+swipl pack install .
+swipl asadb
 ```
 
-Open `http://127.0.0.1:8088/`. The panel is localhost-oriented; do not expose it
-directly to an untrusted network.
+Open `http://127.0.0.1:7879/login`. The panel is localhost-oriented; do not
+expose it directly to an untrusted network.
 
 ## Production boundaries
 

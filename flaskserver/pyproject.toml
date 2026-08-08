@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "asadb-flask-server"
+version = "1.5.0"
+description = "Python-first Flask server, remote client, cluster gateway, and admin plane for AsaDB"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-only" }
+authors = [
+  { name = "Kocoy Group and AsaDB contributors" }
+]
+dependencies = [
+  "Flask>=3.1,<4",
+  "Werkzeug>=3.1,<4",
+  "click>=8.1,<9",
+  "requests>=2.32,<3",
+  "waitress>=3.0,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+  "pytest-cov>=5,<8",
+  "ruff>=0.8",
+]
+production = [
+  "gunicorn>=23,<24; platform_system != 'Windows'",
+]
+
+[project.scripts]
+asadb = "asadb_server.cli:main"
+asadb-server = "asadb_server.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+asadb_server = [
+  "templates/*.html",
+  "static/*.css",
+  "static/*.js",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
