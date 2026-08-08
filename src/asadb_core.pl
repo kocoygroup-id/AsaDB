@@ -422,13 +422,11 @@ asadb_boot(InputFile) :-
     tvcc_selected_database(BootDatabase),
     asadb_tvcc_boot(File, BootState, BootDatabase).
 
-% Test-only boot tracing: the Flask-to-SWI E2E runner can opt in while
-% diagnosing a platform durability failure without exposing catalog contents
-% during normal operation.
+% TEMPORARY: retained only while isolating the Windows restart regression.
+% This clause is removed together with the E2E trace once its output has
+% identified the failing transition.
 asadb_boot_trace(Stage, State) :-
-    getenv('ASADB_BOOT_TRACE', '1'), !,
     format(user_error, 'AsaDB boot ~w: ~q~n', [Stage, State]).
-asadb_boot_trace(_, _).
 
 load_storage_config(File) :-
     asadb_config_load('asadb.conf'),
