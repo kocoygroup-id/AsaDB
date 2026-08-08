@@ -104,11 +104,7 @@ initialized service. Keep the service bound to loopback and place TLS/public
 exposure behind a reverse proxy. Never expose the raw panel or its private
 Prolog backend directly to an untrusted network.
 
-The operational model takes inspiration from SiriDB's clear separation of
-service/database administration, access control, status surfaces, and explicit
-server/pool/replica concepts. AsaDB does **not** claim SiriDB-style distributed
-storage or active-active replication: its current server mode is one
-control-plane process around local Prolog-backed `.asa` files, with one writer
+Current server mode is one control-plane process around local Prolog-backed `.asa` files, with one writer
 per physical file and asynchronous snapshot-based replication where enabled.
 See SiriDB's [database administration overview](https://docs.siridb.com/database/)
 and [server/pool/replica model](https://docs.siridb.com/overview/server_pool_replica/)
