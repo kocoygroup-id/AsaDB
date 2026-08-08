@@ -394,6 +394,11 @@ class PanelBackend:
     def save(self) -> dict[str, Any]:
         return self._json_or_error(self.request("POST", "/api/save"))
 
+    def shutdown(self) -> dict[str, Any]:
+        return self._json_or_error(
+            self.request("POST", "/api/shutdown", timeout=10)
+        )
+
     def backup(self, logical_database: str) -> requests.Response:
         response = self.request(
             "POST",
@@ -598,7 +603,15 @@ class PanelBackend:
                 if force:
                     process.kill()
                 else:
-                    process.terminate()
+                    try:
+                        # Popen.terminate() is a forceful TerminateProcess on
+                        # Windows.  Ask the authenticated Prolog endpoint to
+                        # run asadb_shutdown/0 first; it saves state and runs
+                        # its cleanup hooks before halt/0.  A bounded kill is
+                        # retained only as a supervisor fallback.
+                        self.shutdown()
+                    except Exception:
+                        process.terminate()
                 try:
                     process.wait(timeout=10)
                 except subprocess.TimeoutExpired:
