@@ -416,20 +416,8 @@ asadb_record_scan_columns(StoreId, ColumnNames, Names, Rid, Row) :-
     asadb_page_header(Page, _),
     asadb_page_records(Page, Records),
     member(Slot-Bytes, Records),
-    % The position-aware decoder is the hot path for native records.  A
-    % record loaded from a portable/recovered store can still differ from the
-    % current catalog's field layout, though.  Do not make a valid SELECT
-    % disappear in that case: decode the complete row and retain only the
-    % requested fields.  This fallback is deliberately per-record so normal
-    % native scans keep their low-allocation fast path.
-    record_columns_or_full_row(Bytes, ColumnNames, Names, Row),
+    bytes_row_columns(Bytes, ColumnNames, Names, Row),
     Rid = rid(PageNo, Slot).
-
-record_columns_or_full_row(Bytes, ColumnNames, Names, Row) :-
-    bytes_row_columns(Bytes, ColumnNames, Names, Row), !.
-record_columns_or_full_row(Bytes, _ColumnNames, Names, row(Selected)) :-
-    bytes_row(Bytes, row(Pairs)),
-    select_row_pairs(Names, Pairs, Selected).
 
 asadb_record_scan_verified(StoreId, Rid, Row) :-
     store_file(StoreId, File),

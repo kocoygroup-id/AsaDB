@@ -350,9 +350,14 @@ class PanelBackend:
         *,
         offset: int = 0,
     ) -> dict[str, Any]:
-        prefix = f"USE {quote_identifier(logical_database)};"
         with self._database_context_lock, self._execution_lock:
-            return self.query(prefix + "\n" + sql, offset=offset)
+            # Select the logical database as a separate, serialized command.
+            # Prepending USE to a read query turns it into a mixed statement
+            # batch, so the Prolog web layer cannot use its immutable TVCC
+            # read path.  Keeping the caller SQL intact also makes result
+            # payloads contain only the command the caller asked to run.
+            self.query(f"USE {quote_identifier(logical_database)};")
+            return self.query(sql, offset=offset)
 
     def request_in_database(
         self,

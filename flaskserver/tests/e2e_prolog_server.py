@@ -156,7 +156,10 @@ def main() -> None:
             require(restore, 200, "restore")
             restored = client.post(
                 "/api/v1/databases/restore/query",
-                json={"sql": "USE app; SELECT id, name FROM smoke ORDER BY id;"},
+                json={
+                    "logicalDatabase": "app",
+                    "sql": "SELECT id, name FROM smoke ORDER BY id;",
+                },
             )
             require(restored, 200, "restored query")
             restored_text = restored.get_data(as_text=True)
@@ -170,7 +173,10 @@ def main() -> None:
             )
             after_restart = client.post(
                 "/api/v1/databases/main/query",
-                json={"sql": "USE app; SELECT id, name FROM smoke ORDER BY id;"},
+                json={
+                    "logicalDatabase": "app",
+                    "sql": "SELECT id, name FROM smoke ORDER BY id;",
+                },
             )
             require(after_restart, 200, "query after restart")
             after_restart_text = after_restart.get_data(as_text=True)

@@ -1264,18 +1264,11 @@ execute_statement(select(Projection, table_ref(Table, Alias), Where, none, Order
     require_privilege(select, DB, Table),
     get_table_storage(DB, Table, table(Table, Columns, RowStorage, Indexes)),
     paged_row_storage(RowStorage), !,
-    % Projected page scans avoid decoding unrelated values.  Keep that as the
-    % normal path, but portable/recovered stores may contain a record layout
-    % that the projection shortcut cannot safely satisfy.  A valid SELECT
-    % must not become unknown_statement in that case; retry once with the
-    % complete-record scan used by SELECT *.
-    ( storage_projected_select(DB, Table, Alias, Columns, Indexes, RowStorage,
-                               Projection, Where, Order, Limit,
-                               OutColumns, OutRows) -> true
-    ; storage_full_record_select(DB, Table, Alias, Columns, Indexes, RowStorage,
-                                 Projection, Where, Order, Limit,
-                                 OutColumns, OutRows)
-    ).
+    storage_required_columns(Projection, Where, Order, RequiredColumns),
+    storage_source_rows_for_select(DB, Table, Alias, Columns, Indexes,
+                                   RowStorage, Where, Order, Limit,
+                                   RequiredColumns, Filtered),
+    project_rows(Projection, Columns, Filtered, OutColumns, OutRows).
 
 execute_statement(select(Projection, Source, Where, Group, Order, Limit), table(OutColumns, OutRows)) :-
     current_db_or_default(DB),
@@ -1448,21 +1441,6 @@ execute_statement(explain(Statement), table([id,select_type,table,access,index,e
 execute_statement(explain(raw(Rest)), error(explain_unsupported_statement, Rest)).
 
 execute_statement(Stmt, error(unknown_statement, Stmt)).
-
-storage_projected_select(DB, Table, Alias, Columns, Indexes, RowStorage,
-                         Projection, Where, Order, Limit, OutColumns, OutRows) :-
-    storage_required_columns(Projection, Where, Order, RequiredColumns),
-    storage_source_rows_for_select(DB, Table, Alias, Columns, Indexes,
-                                   RowStorage, Where, Order, Limit,
-                                   RequiredColumns, Filtered),
-    project_rows(Projection, Columns, Filtered, OutColumns, OutRows).
-
-storage_full_record_select(DB, Table, Alias, Columns, Indexes, RowStorage,
-                           Projection, Where, Order, Limit, OutColumns, OutRows) :-
-    storage_source_rows_for_select(DB, Table, Alias, Columns, Indexes,
-                                   RowStorage, Where, Order, Limit, all,
-                                   Filtered),
-    project_rows(Projection, Columns, Filtered, OutColumns, OutRows).
 
 % EXPLAIN is derived from the same catalog/index predicates used by execution.
 % The estimates are intentionally transparent heuristics until persistent
