@@ -6,7 +6,6 @@ supervisor.  It does not replace the Prolog engine with a fake.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import tempfile
 import threading
@@ -32,24 +31,6 @@ def require(response, expected: int, label: str) -> None:
         )
 
 
-def file_summary(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {"exists": False}
-    payload = path.read_bytes()
-    return {
-        "exists": True,
-        "size": len(payload),
-        "sha256": hashlib.sha256(payload).hexdigest(),
-        "head": payload[:48].hex(),
-    }
-
-
-def trace_summary(path: Path) -> str:
-    if not path.exists():
-        return "missing"
-    return path.read_text(encoding="utf-8", errors="replace")[-12000:]
-
-
 def main() -> None:
     repo = Path(os.environ["ASADB_REPO_ROOT"]).resolve()
     with tempfile.TemporaryDirectory(prefix="asadb-flask-e2e-") as root:
@@ -63,7 +44,6 @@ def main() -> None:
             "ASADB_CLUSTER_KEY": "integration-cluster-key",
             "ASADB_BACKEND_START_TIMEOUT": "30",
             "ASADB_ALLOW_LOCAL_ONLY": "true",
-            "ASADB_BOOT_TRACE": "1",
         })
         app = create_app({"TESTING": True})
         try:
@@ -191,19 +171,11 @@ def main() -> None:
                 200,
                 "explicit save before restart",
             )
-            catalog_path = base / "databases" / "main.asa"
-            catalog_before_restart = file_summary(catalog_path)
             require(
                 client.post("/api/v1/databases/main/restart"),
                 200,
                 "backend restart",
             )
-            # Capture the freshly booted core before a logical-database query
-            # can issue USE and mask a catalog-load failure by creating that
-            # database again.  The value is only emitted if this regression
-            # fails, where it makes the physical restart boundary diagnosable.
-            restarted_backend = app.extensions["asadb_backends"].get("main")
-            restarted_state = restarted_backend.state()
             after_restart = client.post(
                 "/api/v1/databases/main/query",
                 json={
@@ -234,13 +206,7 @@ def main() -> None:
                     f"projection={after_restart_text}; "
                     f"star={after_restart_star.get_data(as_text=True)}; "
                     f"tables={after_restart_tables.get_data(as_text=True)}; "
-                    f"backend={backend_status}; "
-                    f"backend_path={restarted_backend.database_path}; "
-                    f"state_before_use={restarted_state}; "
-                    f"catalog_before={catalog_before_restart}; "
-                    f"catalog_after={file_summary(catalog_path)}; "
-                    f"boot_trace={trace_summary(catalog_path.with_name(catalog_path.name + '.boot_trace'))}; "
-                    f"database_files={sorted(item.name for item in catalog_path.parent.iterdir())}"
+                    f"backend={backend_status}"
                 )
         finally:
             shutdown(app)
