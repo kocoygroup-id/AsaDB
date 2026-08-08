@@ -49,6 +49,7 @@
 :- http_handler(root('api/execute_stream'), api_execute_stream, []).
 :- http_handler(root('api/warmup'), api_warmup, []).
 :- http_handler(root('api/save'), api_save, []).
+:- http_handler(root('api/shutdown'), api_shutdown, []).
 :- http_handler(root('api/analyze'), api_analyze, []).
 :- http_handler(root('api/state'), api_state, []).
 :- http_handler(root('api/catalog'), api_catalog, []).
@@ -351,6 +352,23 @@ api_save(Request) :-
     ;   json_error('403 Forbidden', 'Forbidden')
     ).
 api_save(_) :-
+    json_error('405 Method Not Allowed', 'POST only').
+
+% The supervised Flask server uses this authenticated localhost endpoint for
+% a normal restart.  On Windows, terminating the SWI process is equivalent to
+% a forced kill and does not run Prolog cleanup hooks.  Reply first, then stop
+% the runtime from a detached thread so the HTTP response reaches the
+% supervisor before halt/0 closes the listener.
+api_shutdown(Request) :-
+    member(method(post), Request), !,
+    (   authorized_api(Request)
+    ->  with_mutex(asadb_execution, asadb_shutdown),
+        thread_create(( sleep(0.25), halt(0) ), _, [detached(true)]),
+        asadb_result_json(ok(shutting_down), JSON),
+        json_response(JSON)
+    ;   json_error('403 Forbidden', 'Forbidden')
+    ).
+api_shutdown(_) :-
     json_error('405 Method Not Allowed', 'POST only').
 
 api_analyze(Request) :-

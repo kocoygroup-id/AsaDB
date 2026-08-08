@@ -397,7 +397,12 @@ asadb_boot(InputFile) :-
     assertz(asadb_file(File)),
     asadb_metadata_open(File),
     ( exists_file(File) ->
-        catch(asadb_load_file(File, State), _, empty_state(State))
+        catch(asadb_load_file(File, State), Error,
+              ( format(user_error,
+                       'AsaDB catalog load failed for ~w: ~p~n',
+                       [File, Error]),
+                empty_state(State)
+              ))
     ; empty_state(State)
     ),
     normalize_state(State, Normalized),
@@ -877,7 +882,7 @@ ensure_file_exists(File) :-
 asadb_load_file(File, State) :-
     asadb_pager_read_file_codes(File, All),
     asadb_magic(Magic),
-    append(Magic, Rest, All),
+    catalog_magic_rest(Magic, All, Rest),
     take_line(Rest, SumCodes, Payload),
     number_codes(Sum, SumCodes),
     decode_codes(Payload, Codes),
@@ -885,6 +890,18 @@ asadb_load_file(File, State) :-
     atom_codes(Atom, Codes),
     atom_to_term(Atom, State, _).
 
+% A binary AsaDB catalog is normally written with LF delimiters.  Some
+% Windows stream configurations preserve the byte content but encode those
+% two textual header delimiters as CRLF.  Accept both on read so a committed
+% catalog is never mistaken for a new empty database after a restart.
+catalog_magic_rest(Magic, All, Rest) :-
+    append(Magic, Rest, All), !.
+catalog_magic_rest(Magic, All, Rest) :-
+    append(Prefix, [10], Magic),
+    append(Prefix, [13,10], WindowsMagic),
+    append(WindowsMagic, Rest, All).
+
+take_line([13,10|Rest], [], Rest) :- !.
 take_line([10|Rest], [], Rest) :- !.
 take_line([C|Cs], [C|Line], Rest) :- take_line(Cs, Line, Rest).
 

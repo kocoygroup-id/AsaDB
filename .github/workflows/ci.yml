@@ -38,6 +38,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - name: Install supported Python for the bundled wheelhouse
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
       - name: Install SWI-Prolog
         shell: pwsh
         run: |
@@ -52,3 +56,6 @@ jobs:
         run: |
           swipl -q -s tests/run_tests.pl
           swipl -q -s tests/tvcc_regression.pl
+      - name: Run pack, offline bootstrap, and real Server Mode E2E
+        shell: pwsh
+        run: .\tests\server_e2e_regression.ps1

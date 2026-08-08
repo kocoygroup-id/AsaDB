@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased hardening
+
+- Reader SQL authorization now fails closed: only one top-level SELECT is
+  accepted without database.write; multi-statement bypasses are rejected.
+- COMMIT and ROLLBACK now change session state only after the Prolog backend
+  confirms success. Failed completion retains the lease with commit_failed or
+  rollback_failed for explicit recovery.
+- Added CI-gated offline wheelhouse, SWI-Prolog pack, and real Server Mode E2E
+  coverage on Linux and Windows runners.
+
 ## 1.5.0
 
 - Align the Flask server package, CLI, and health response with AsaDB Core

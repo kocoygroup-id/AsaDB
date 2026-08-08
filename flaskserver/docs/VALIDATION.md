@@ -18,6 +18,18 @@
 - logical-database client affinity;
 - transactions spanning requests;
 - exclusive transaction ownership;
+- failed COMMIT/ROLLBACK recovery states: a failed backend acknowledgement
+  retains the transaction lease and is never reported as committed or rolled
+  back;
+- reader RBAC rejection of multi-statement and non-SELECT SQL;
+- an offline-wheelhouse bootstrap from a fresh ASADB_HOME, followed by
+  doctor --json;
+- a real Flask-to-supervised-SWI-Prolog path covering login, both workspace
+  choices, SQL, BEGIN/COMMIT/ROLLBACK, streaming, backup/restore, and backend
+  restart.
+- a two-node primary-to-replica snapshot transfer over the internal HTTP
+  endpoint, replica read verification, and a failed replica upload that must
+  not advance replication state.
 - rollback during session close;
 - thread-pool job status and progress;
 - File-Based API inbox/outbox;

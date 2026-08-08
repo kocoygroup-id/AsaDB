@@ -1,5 +1,5 @@
 eb1bcf2cfd4863856da8882102af4ca5e7efc6a35b6067c7e46f346a7f11b036  ./.gitignore
-c0ed70ed4da7e60e4f2ace7758574171f48b9e3352220ce6b769a1497b0e6665  ./CHANGELOG.md
+e5b07c05c7e4f14d2c218af32bff04499ef9b813db675a3052670721b98c682c  ./CHANGELOG.md
 66805d60f9e48ad70942fd1e1c3b0ed51b39ea27f279d822e0fe0b845fda49f5  ./FEATURE_MATRIX.md
 3069f00df82c41a20a4a76b0d5978462c716643a5b645d654c167e0b5859c70e  ./LICENSE-NOTICE.md
 2ee0174276eb0b25f3f976a0603b0e76d508b9a5cc4d9633700cbeecfdcd23cb  ./README.md
@@ -14,10 +14,10 @@ cb5540f230ea052ac2b0c59e7c0f30ca39c0db2ce692833cc8533f27f225f49b  ./docs/CLUSTER
 567607425519be6049f100d5f02b837546d40d46ad38d9a6bd4e541c30d01657  ./docs/FILE_API.md
 0fc43f144581a6de1d2d1b979e9a17a4a50e2ed0193293c6dd495bf0bad71b5f  ./docs/LIMITATIONS.md
 eb25fdfea09a7bf4a16c1f02f6b6feb0ed5d1cfe2460fba43dc86b8f7afdc1d1  ./docs/MERGE_AUDIT.md
-fea0b8404e14cd5f103c8920502dcba35e6c8650abbe4a4bfef5f04b033c22bb  ./docs/SECURITY.md
+e81570f7e6ce6afdcba359644fc7cf3b3632377940c5c965ed84843ddaf4871d  ./docs/SECURITY.md
 833acf75f889f1d1a989bd5a8c82436350eeb622bd7e040ea0ee86f5dd96a639  ./docs/SERVER_ADMIN_GUIDE.md
 a941c29548c331616d4a1fa8a8ef6788eec683938ce3f350e03a77af8ddc6e0e  ./docs/SIRIDB_INSPIRATION.md
-4057903bada57e5da660db621579490a7fd4b88bf52559c994be18ec6f58951f  ./docs/VALIDATION.md
+4582273f253a53746c5321208c5ea1170e45e62f08ebf3af5bd84ca17e9007e7  ./docs/VALIDATION.md
 56eadc587be605bb6774eef962bc0b0acb8826f46bbfaadeee0eac29fd237cb9  ./examples/cluster_setup.sh
 b66e221250b3af3f7a9e0fbff0749af4b2e4a215c0b66a2b571f51b1f1e44fa6  ./examples/file-api-request.json
 833ed45675a9e70c6eaf2b581303b27a35723594e58b648c283a067823d0d2c1  ./examples/file_api_client.py
@@ -26,7 +26,7 @@ b05ba9f50da8970803eedc038da4ee0e3288f5d1a06b198da3b57aa79778a523  ./examples/rem
 ee49135c7238f6511f6b7dc0dd6a4f171a11bf4f13101b50513d9ebc95971585  ./examples/transaction.py
 234342398b11873b9f293fd4c1ba52b899210f805f97b80ba20fcffe00187794  ./pyproject.toml
 5a0652b21e09a7d3cf3bc9a0a80a965d018e128868a35c4650847e9bfb5c2d34  ./pytest.ini
-5cc009a86a183597c3e293568ab925ff8a6c46eaa2be98e1009ec9d18fe0a5e5  ./requirements-bundled.txt
+6d43f25362f4e6709aa3537541a9b9e7791c46fd5ba379c160d9a8d00e258b73  ./requirements-bundled.txt
 e6adc53e7ecb69ace197dc79f743493d73a4c8d06a077583eeedf5fc6d320b53  ./requirements-dev.txt
 80948058a6231846fb564c4613cd180c5864b122f5fda4700e8777637ecb12b8  ./requirements.txt
 42edf48eebc7ea2fdb9d723a5ba229864a3d4012d2360db32c4402f379216dfe  ./scripts/bootstrap_python.py
@@ -39,7 +39,7 @@ e6adc53e7ecb69ace197dc79f743493d73a4c8d06a077583eeedf5fc6d320b53  ./requirements
 74a510e7c24f5e99eaaa6727d08953068e19d611dcfc17ca92952af04168a6ba  ./src/asadb_server/app.py
 05dfe854285f82d550b05d3dd20b3f0f17b70a81ac1e5700121dc883132f93b6  ./src/asadb_server/audit.py
 d8a46251028deee3bde07690348e19c62025c6419abe02db24757052fdc54563  ./src/asadb_server/auth.py
-97668d1ee4d00eb05d05c6a8ddf53e5061c05751a9ada4b945013803bcdb1b9e  ./src/asadb_server/backend.py
+3fdaa334cf0e0028c3a74a863b91d6c65246842b0132741fef174f3279b4c32a  ./src/asadb_server/backend.py
 ec34555b283aedc98fd522c9a0048f9946606f0d22066ecc3023b1debf39a54f  ./src/asadb_server/cli.py
 903a7621fc61b473e04e010250c4b125ebecf5649e106a12d4e0b3626a149067  ./src/asadb_server/client.py
 af30391a9a8bfadd389c2477ad2d7fc94c892bc2cc32df700b1ba8fa915193ca  ./src/asadb_server/cluster.py
@@ -56,7 +56,7 @@ f4509daa5e0748f682e1447e2584c81df581209fffc9ac66f90d37051da7f64a  ./src/asadb_se
 77b1a4ce1652096062a81d7efff694897f0470f50776ab12d38d07b7d238f751  ./src/asadb_server/rbac.py
 92fc7d8c3ba0ff3599426f4456e3af4227e399f1cf355d7f00363f7cd2ba4f03  ./src/asadb_server/registry.py
 11aebaa6bbf936c5768eb072b2456d81a432fbb5590a00325523fb5998699ebb  ./src/asadb_server/replication.py
-73a44e2e3f1eb2e422dd335afe6634bb9316277113994d2a0658edccd2c47bd3  ./src/asadb_server/sessions.py
+6398ad072bb54200361e8acca80b26af7d4d3a7f80cef85f9a7377e6dfecfa57  ./src/asadb_server/sessions.py
 18f9217b973166e5b06545e8dea3cad489beb46564c38ffcb716c1c9763374b3  ./src/asadb_server/static/admin.js
 bedb067215718e2059d874e98492f0be9ea2304ee3145932cb30d18721f0e62e  ./src/asadb_server/static/logout.js
 00a44151f257e4fa97ea80a752054e91c52b987e136f396a67d176670778f9ac  ./src/asadb_server/static/server.css
@@ -64,7 +64,7 @@ bedb067215718e2059d874e98492f0be9ea2304ee3145932cb30d18721f0e62e  ./src/asadb_se
 e16b632450310d1498da04e0e236e765986a910828085e227dd1ef92cfa0615c  ./src/asadb_server/templates/login.html
 0ef226c7b114f6cb7b6c7d7ce7c962fcd3446e5e5b674fd94951db9fbdaaf6c7  ./src/asadb_server/templates/logout.html
 0e2f8336ada205048b17c600cd1d7f29d494990d021d68de1c7aadc285f4487c  ./src/asadb_server/templates/mode.html
-f5302747e6f7489ce28ed97f4adc6e6e8916277016b45c480a409d4a1c4a0651  ./src/asadb_server/util.py
+dcfd18a9b29eaec0f172a1f4b7d1b69d8f12b32c041710dac1984f73ab06b613  ./src/asadb_server/util.py
 d013e12df967fe107a3caa3c39f24ab1ef53249b6ec3aad1d342f251f535a8a5  ./src/asadb_server/web_security.py
 8a674f41d8110db622feb4d389224945e3afdfa3aa31508e4b67dcad8eb2190c  ./tests/conftest.py
 e9008130a907b13bf4a7ecda817fcf18dc4fde3b7d777968be7c93d23fbec5e1  ./tests/test_app.py
@@ -80,7 +80,10 @@ cb18db205bfb977d139dfa16d4a4564e9d4fa9e5ea1e46503502d83d65f86eeb  ./tests/test_f
 f6b2958ab86cf6d61ccf8c30e4863e98ae37e94a380ede786bac0162f23ae77f  ./tests/test_jobs.py
 71e25a9d195a93272c37d82a1c06325b8d089434cf6fa41755bdc530a8a41517  ./tests/test_registry.py
 e2e389c4416bc652853239a9ac8aea71db9e536f97a056bbe18a236dda36afd2  ./tests/test_repository_integration.py
-e5f55beff4389f3997002b44730a5cd6d1b8c14e49cae7d67fe7e2499fb28640  ./tests/test_sessions.py
+2aad526b5504c44579d1eed18ba701433671274304533acacd3404459789a953  ./tests/e2e_prolog_server.py
+674ec7a347d36aa36769f12d8258ba633868dced2b6ce182a8f6886476b2e426  ./tests/hardening_regression.py
+bd6a744d4e345bec4f2e415bda2e213292caea449b654a9159ab5f1b3ecc131b  ./tests/test_sessions.py
+63fc33d794554da61931f038a86e135891634df997153db3da7f41a72f4390a3  ./tests/test_sql_authorization.py
 ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc  ./wheels/blinker-1.9.0-py3-none-any.whl
 62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775  ./wheels/certifi-2026.7.22-py3-none-any.whl
 9bb41182d93ea91f60b4bc8fbf4c820c69ef8a12ab2d917f3f1834f1acad07e8  ./wheels/charset_normalizer-3.4.9-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
@@ -92,6 +95,7 @@ ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc  ./wheels/blink
 84fd18bcc17526fc2b3c1af7d2b9217d32c9c04448c16ec693b9b4f1985c3d33  ./wheels/charset_normalizer-3.4.9-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 fe2c7201c642b7c308f1675355ad7ff7b66acfe3541625efe5a3ad38f29d6115  ./wheels/charset_normalizer-3.4.9-cp313-cp313-win_amd64.whl
 e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76  ./wheels/click-8.4.2-py3-none-any.whl
+4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6  ./wheels/colorama-0.4.6-py2.py3-none-any.whl
 f4bcbefc124291925f1a26446da31a5178f9483862233b23c0c96a20701f670c  ./wheels/flask-3.1.3-py3-none-any.whl
 7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2  ./wheels/idna-3.18-py3-none-any.whl
 c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef  ./wheels/itsdangerous-2.2.0-py3-none-any.whl

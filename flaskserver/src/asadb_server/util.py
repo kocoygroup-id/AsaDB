@@ -115,13 +115,104 @@ def quote_identifier(identifier: str) -> str:
     return "`" + identifier.replace("`", "``") + "`"
 
 
+def sql_statements(sql: str) -> list[str]:
+    """Split SQL only at top-level semicolons.
+
+    This is intentionally not an SQL parser.  It is a small lexer used at the
+    HTTP authorization boundary so a semicolon in a literal, quoted identifier,
+    or comment cannot hide a second statement.  The Prolog engine remains the
+    authoritative parser for accepted SQL.
+    """
+    statements: list[str] = []
+    current: list[str] = []
+    index = 0
+    quote: str | None = None
+    length = len(sql)
+
+    while index < length:
+        char = sql[index]
+        following = sql[index + 1] if index + 1 < length else ""
+        if quote:
+            current.append(char)
+            if char == quote:
+                # SQL escapes a quote by doubling it: 'it''s'.
+                if following == quote:
+                    current.append(following)
+                    index += 2
+                    continue
+                quote = None
+            elif char == "\\" and quote in {"'", '"'} and following:
+                # Preserve common backslash escapes as one literal unit.
+                current.append(following)
+                index += 2
+                continue
+            index += 1
+            continue
+
+        if char in {"'", '"', chr(96)}:
+            quote = char
+            current.append(char)
+            index += 1
+            continue
+        if char == "-" and following == "-":
+            index = sql.find("\n", index + 2)
+            if index < 0:
+                break
+            current.append(" ")
+            index += 1
+            continue
+        if char == "#":
+            index = sql.find("\n", index + 1)
+            if index < 0:
+                break
+            current.append(" ")
+            index += 1
+            continue
+        if char == "/" and following == "*":
+            end = sql.find("*/", index + 2)
+            if end < 0:
+                # An unterminated comment is not an authorized read.
+                return []
+            current.append(" ")
+            index = end + 2
+            continue
+        if char == ";":
+            statement = "".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current = []
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+
+    if quote:
+        # Let the database report the syntax error, but never treat malformed
+        # input as a safe reader query.
+        return []
+    statement = "".join(current).strip()
+    if statement:
+        statements.append(statement)
+    return statements
+
+
+def is_single_select_statement(sql: str) -> bool:
+    """Return true only for the conservative reader-safe SQL subset.
+
+    Reader accounts deliberately support one top-level SELECT statement only.
+    WITH, SHOW, and EXPLAIN are not granted by inference: a future parser-backed
+    classifier can expand this set without weakening the current boundary.
+    """
+    statements = sql_statements(sql)
+    return len(statements) == 1 and bool(
+        re.match(r"^SELECT\b", statements[0], flags=re.IGNORECASE)
+    )
+
+
 def looks_like_write(sql: str) -> bool:
-    stripped = re.sub(r"/\*.*?\*/", " ", sql, flags=re.S)
-    stripped = re.sub(r"--[^\n]*", " ", stripped)
-    tokens = re.findall(r"[A-Za-z_]+", stripped.upper())
-    write_words = {
-        "ALTER", "BEGIN", "COMMIT", "CREATE", "DELETE", "DROP", "GRANT",
-        "INSERT", "LOGIN", "RENAME", "REPLACE", "RESTORE", "REVOKE",
-        "ROLLBACK", "START", "TRUNCATE", "UPDATE", "USE",
-    }
-    return any(token in write_words for token in tokens[:12])
+    """Whether SQL requires database.write at the server boundary.
+
+    Anything other than one unambiguous SELECT is treated as write-capable.
+    This fails closed for reader accounts and blocks multi-statement bypasses.
+    """
+    return not is_single_select_statement(sql)

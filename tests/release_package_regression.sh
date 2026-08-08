@@ -39,11 +39,12 @@ for required in \
   web/assets/app.legacy.js web/assets/app-loader.js \
   web/assets/fonts/noto-sans-jp-japanese-400-normal.woff2 web/assets/fonts/noto-sans-jp-japanese-400-normal.woff \
   tests/run_tests.pl tests/join_15000_regression.pl tests/production_backup_regression.pl tests/schema_integrity_backup_regression.pl tests/production_backup_http_regression.sh tests/interchange_regression.pl tests/interchange_http_regression.sh tests/interchange_stress.pl tests/prolog_module_audit.sh tests/guardian_regression.sh tests/windows_source_package_regression.sh tests/ui_regression.js \
-  tests/launcher_regression.sh tests/release_package_regression.sh tests/pack_regression.sh tools/asadb_pack.pl tools/asadb_launcher.pl \
+  tests/launcher_regression.sh tests/release_package_regression.sh tests/pack_regression.sh tests/server_e2e_regression.sh tests/server_e2e_regression.ps1 tools/asadb_pack.pl tools/asadb_launcher.pl \
   flaskserver/pyproject.toml flaskserver/requirements-bundled.txt flaskserver/scripts/bootstrap_python.py \
   flaskserver/src/asadb_server/app.py flaskserver/src/asadb_server/backend.py flaskserver/src/asadb_server/panel.py \
   flaskserver/src/asadb_server/templates/login.html flaskserver/src/asadb_server/templates/mode.html flaskserver/src/asadb_server/templates/logout.html \
-  flaskserver/src/asadb_server/static/server.css flaskserver/src/asadb_server/static/logout.js flaskserver/docs/MERGE_AUDIT.md
+  flaskserver/src/asadb_server/static/server.css flaskserver/src/asadb_server/static/logout.js flaskserver/docs/MERGE_AUDIT.md \
+  flaskserver/tests/e2e_prolog_server.py flaskserver/tests/hardening_regression.py
 do
   if ! grep -Fx "$NAME/$required" "$LIST_FILE" >/dev/null; then
     echo "Release is missing required path: $required" >&2
