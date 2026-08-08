@@ -57,6 +57,7 @@ def main() -> None:
             "ASADB_CLUSTER_KEY": "integration-cluster-key",
             "ASADB_BACKEND_START_TIMEOUT": "30",
             "ASADB_ALLOW_LOCAL_ONLY": "true",
+            "ASADB_BOOT_TRACE": "1",
         })
         app = create_app({"TESTING": True})
         try:
