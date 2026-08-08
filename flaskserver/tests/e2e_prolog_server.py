@@ -173,8 +173,11 @@ def main() -> None:
                 json={"sql": "USE app; SELECT id, name FROM smoke ORDER BY id;"},
             )
             require(after_restart, 200, "query after restart")
-            if "committed" not in after_restart.get_data(as_text=True):
-                raise AssertionError("data was not durable after backend restart")
+            after_restart_text = after_restart.get_data(as_text=True)
+            if "committed" not in after_restart_text:
+                raise AssertionError(
+                    f"data was not durable after backend restart: {after_restart_text}"
+                )
         finally:
             shutdown(app)
 

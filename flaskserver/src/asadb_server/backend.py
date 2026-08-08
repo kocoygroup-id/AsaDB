@@ -629,7 +629,12 @@ class BackendManager:
         with self._lock:
             backend = self._backends.pop(database_id, None)
         if backend is not None:
-            backend.stop(force=True)
+            # A restart is an administrative durability boundary, not a crash
+            # simulation.  stop() saves first, requests a bounded graceful
+            # shutdown, and only kills a process that does not exit in time.
+            # Using force=True here could kill the Prolog process while the
+            # platform is still completing its final filesystem writes.
+            backend.stop()
         backend = self.get(database_id)
         backend.start()
         return backend.status()
