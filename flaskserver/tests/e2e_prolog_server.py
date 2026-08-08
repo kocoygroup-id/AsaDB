@@ -292,6 +292,15 @@ def replication_e2e(repo: Path) -> None:
                 )
                 if not completed.get("result", {}).get("sha256"):
                     raise AssertionError(f"replication did not report snapshot digest: {completed}")
+                replica_record = replica.extensions["asadb_registry"].get("main")
+                if replica_record.get("replicaState") != "ready":
+                    raise AssertionError(
+                        f"replica accepted a snapshot without ready state: {replica_record}"
+                    )
+                if not replica.extensions["asadb_cluster"].local_can_serve_read("main"):
+                    raise AssertionError(
+                        f"replica cannot serve its accepted snapshot: {replica_record}"
+                    )
 
                 replica_client = replica.test_client()
                 login(replica_client)
