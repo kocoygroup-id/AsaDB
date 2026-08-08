@@ -181,8 +181,25 @@ def main() -> None:
             require(after_restart, 200, "query after restart")
             after_restart_text = after_restart.get_data(as_text=True)
             if "committed" not in after_restart_text:
+                after_restart_star = client.post(
+                    "/api/v1/databases/main/query",
+                    json={
+                        "logicalDatabase": "app",
+                        "sql": "SELECT * FROM smoke ORDER BY id;",
+                    },
+                )
+                after_restart_tables = client.post(
+                    "/api/v1/databases/main/query",
+                    json={
+                        "logicalDatabase": "app",
+                        "sql": "SHOW TABLES;",
+                    },
+                )
                 raise AssertionError(
-                    f"data was not durable after backend restart: {after_restart_text}"
+                    "data was not durable after backend restart: "
+                    f"projection={after_restart_text}; "
+                    f"star={after_restart_star.get_data(as_text=True)}; "
+                    f"tables={after_restart_tables.get_data(as_text=True)}"
                 )
         finally:
             shutdown(app)
