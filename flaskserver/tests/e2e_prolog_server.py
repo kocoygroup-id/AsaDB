@@ -44,6 +44,12 @@ def file_summary(path: Path) -> dict[str, object]:
     }
 
 
+def trace_summary(path: Path) -> str:
+    if not path.exists():
+        return "missing"
+    return path.read_text(encoding="utf-8", errors="replace")[-12000:]
+
+
 def main() -> None:
     repo = Path(os.environ["ASADB_REPO_ROOT"]).resolve()
     with tempfile.TemporaryDirectory(prefix="asadb-flask-e2e-") as root:
@@ -233,6 +239,7 @@ def main() -> None:
                     f"state_before_use={restarted_state}; "
                     f"catalog_before={catalog_before_restart}; "
                     f"catalog_after={file_summary(catalog_path)}; "
+                    f"boot_trace={trace_summary(catalog_path.with_name(catalog_path.name + '.boot_trace'))}; "
                     f"database_files={sorted(item.name for item in catalog_path.parent.iterdir())}"
                 )
         finally:

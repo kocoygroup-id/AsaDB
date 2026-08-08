@@ -405,12 +405,12 @@ asadb_boot(InputFile) :-
               ))
     ; empty_state(State)
     ),
-    asadb_boot_trace(loaded, State),
+    asadb_boot_trace(File, loaded, State),
     normalize_state(State, Normalized),
-    asadb_boot_trace(normalized, Normalized),
+    asadb_boot_trace(File, normalized, Normalized),
     mark_state_upgrade(State),
     recover_wal_state(Normalized, Recovered),
-    asadb_boot_trace(recovered, Recovered),
+    asadb_boot_trace(File, recovered, Recovered),
     assertz(asadb_state(Recovered)),
     ensure_catalog,
     restore_current_db,
@@ -422,11 +422,20 @@ asadb_boot(InputFile) :-
     tvcc_selected_database(BootDatabase),
     asadb_tvcc_boot(File, BootState, BootDatabase).
 
-% TEMPORARY: retained only while isolating the Windows restart regression.
-% This clause is removed together with the E2E trace once its output has
-% identified the failing transition.
-asadb_boot_trace(Stage, State) :-
-    format(user_error, 'AsaDB boot ~w: ~q~n', [Stage, State]).
+% Test-only boot tracing: the Flask-to-SWI E2E runner opts in while isolating
+% a platform durability regression.  A file is used because user_error on the
+% Windows SWI console is not reliably forwarded through a supervised pipe.
+asadb_boot_trace(File, Stage, State) :-
+    getenv('ASADB_BOOT_TRACE', '1'), !,
+    atom_concat(File, '.boot_trace', TraceFile),
+    catch(setup_call_cleanup(
+              open(TraceFile, append, Stream, [encoding(utf8)]),
+              ( write_canonical(Stream, trace(Stage, State)),
+                write(Stream, '.\n'),
+                flush_output(Stream)
+              ),
+              close(Stream)), _, true).
+asadb_boot_trace(_, _, _).
 
 load_storage_config(File) :-
     asadb_config_load('asadb.conf'),
