@@ -6,6 +6,7 @@ supervisor.  It does not replace the Prolog engine with a fake.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 import threading
@@ -29,6 +30,18 @@ def require(response, expected: int, label: str) -> None:
             f"{label}: expected HTTP {expected}, got {response.status_code}: "
             f"{response.get_data(as_text=True)[:2000]}"
         )
+
+
+def file_summary(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {"exists": False}
+    payload = path.read_bytes()
+    return {
+        "exists": True,
+        "size": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "head": payload[:48].hex(),
+    }
 
 
 def main() -> None:
@@ -167,6 +180,13 @@ def main() -> None:
                 raise AssertionError(f"restore data mismatch: {restored_text}")
 
             require(
+                client.post("/api/v1/databases/main/save"),
+                200,
+                "explicit save before restart",
+            )
+            catalog_path = base / "databases" / "main.asa"
+            catalog_before_restart = file_summary(catalog_path)
+            require(
                 client.post("/api/v1/databases/main/restart"),
                 200,
                 "backend restart",
@@ -201,7 +221,10 @@ def main() -> None:
                     f"projection={after_restart_text}; "
                     f"star={after_restart_star.get_data(as_text=True)}; "
                     f"tables={after_restart_tables.get_data(as_text=True)}; "
-                    f"backend={backend_status}"
+                    f"backend={backend_status}; "
+                    f"catalog_before={catalog_before_restart}; "
+                    f"catalog_after={file_summary(catalog_path)}; "
+                    f"database_files={sorted(item.name for item in catalog_path.parent.iterdir())}"
                 )
         finally:
             shutdown(app)
