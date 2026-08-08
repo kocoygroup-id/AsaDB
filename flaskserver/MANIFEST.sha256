@@ -26,7 +26,7 @@ b05ba9f50da8970803eedc038da4ee0e3288f5d1a06b198da3b57aa79778a523  ./examples/rem
 ee49135c7238f6511f6b7dc0dd6a4f171a11bf4f13101b50513d9ebc95971585  ./examples/transaction.py
 234342398b11873b9f293fd4c1ba52b899210f805f97b80ba20fcffe00187794  ./pyproject.toml
 5a0652b21e09a7d3cf3bc9a0a80a965d018e128868a35c4650847e9bfb5c2d34  ./pytest.ini
-5cc009a86a183597c3e293568ab925ff8a6c46eaa2be98e1009ec9d18fe0a5e5  ./requirements-bundled.txt
+6d43f25362f4e6709aa3537541a9b9e7791c46fd5ba379c160d9a8d00e258b73  ./requirements-bundled.txt
 e6adc53e7ecb69ace197dc79f743493d73a4c8d06a077583eeedf5fc6d320b53  ./requirements-dev.txt
 80948058a6231846fb564c4613cd180c5864b122f5fda4700e8777637ecb12b8  ./requirements.txt
 42edf48eebc7ea2fdb9d723a5ba229864a3d4012d2360db32c4402f379216dfe  ./scripts/bootstrap_python.py
@@ -95,6 +95,7 @@ ba0efaa9080b619ff2f3459d1d500c57bddea4a6b424b60a91141db6fd2f08bc  ./wheels/blink
 84fd18bcc17526fc2b3c1af7d2b9217d32c9c04448c16ec693b9b4f1985c3d33  ./wheels/charset_normalizer-3.4.9-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl
 fe2c7201c642b7c308f1675355ad7ff7b66acfe3541625efe5a3ad38f29d6115  ./wheels/charset_normalizer-3.4.9-cp313-cp313-win_amd64.whl
 e6f9f66136c816745b9d65817da91d61d957fb16e02e4dcd0552553c5a197b76  ./wheels/click-8.4.2-py3-none-any.whl
+4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6  ./wheels/colorama-0.4.6-py2.py3-none-any.whl
 f4bcbefc124291925f1a26446da31a5178f9483862233b23c0c96a20701f670c  ./wheels/flask-3.1.3-py3-none-any.whl
 7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2  ./wheels/idna-3.18-py3-none-any.whl
 c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef  ./wheels/itsdangerous-2.2.0-py3-none-any.whl
