@@ -574,7 +574,19 @@ run_logic_jit_assertions :-
     ),
     % Exercise eviction as well as hits: both caches must stay bounded even
     % when an application emits many literal-specific query/filter shapes.
-    forall(between(1, 140, N),
+    forall(between(1, 64, N),
+           ( format(atom(SQL), 'SELECT id FROM truth_table WHERE id = ~d;', [N]),
+             asadb_parse_sql(SQL, _),
+             Expression = cmp('=', col(id), value(N)),
+             asadb_core:prepare_row_filter(Expression, _)
+           )),
+    % Refresh this hot query before adding more than half a cache worth of
+    % one-off shapes.  A true LRU must retain the reused query and filter.
+    asadb_parse_sql(Query, _),
+    HotExpression = xor(cmp('=', col(enabled), value(1)),
+                        cmp('=', col(blocked), value(1))),
+    asadb_core:prepare_row_filter(HotExpression, _),
+    forall(between(65, 140, N),
            ( format(atom(SQL), 'SELECT id FROM truth_table WHERE id = ~d;', [N]),
              asadb_parse_sql(SQL, _),
              Expression = cmp('=', col(id), value(N)),
@@ -586,6 +598,8 @@ run_logic_jit_assertions :-
     get_dict(sql_cache_limit, BoundedJit, SQLCacheLimit),
     get_dict(filter_cache_entries, BoundedJit, BoundedFilterEntries),
     get_dict(filter_cache_limit, BoundedJit, BoundedFilterLimit),
+    get_dict(parse_hits, BoundedJit, ParseHitsBeforeReuse),
+    get_dict(filter_hits, BoundedJit, FilterHitsBeforeReuse),
     ( SQLCacheEntries =:= SQLCacheLimit,
       BoundedFilterEntries =:= BoundedFilterLimit ->
         true
@@ -595,9 +609,22 @@ run_logic_jit_assertions :-
         cleanup,
         halt(1)
     ),
-    % The original plan was among the oldest entries and may have been
-    % evicted. Recompilation after eviction must remain transparent.
+    % The refreshed hot plan is retained while one-off plans are evicted.
+    % Query results must stay identical across the specialized path.
     expect_sql(Query, table([id], [[1],[3]])),
+    asadb_storage_stats(RetainedStats),
+    get_dict(jit, RetainedStats, RetainedJit),
+    get_dict(parse_hits, RetainedJit, ParseHitsAfterReuse),
+    get_dict(filter_hits, RetainedJit, FilterHitsAfterReuse),
+    ( ParseHitsAfterReuse > ParseHitsBeforeReuse,
+      FilterHitsAfterReuse > FilterHitsBeforeReuse ->
+        true
+    ;   format('ASSERTION FAILED: hot JIT plans did not survive LRU pressure: ~w.~n',
+               [RetainedJit]),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ),
     asadb_shutdown,
     cleanup.
 

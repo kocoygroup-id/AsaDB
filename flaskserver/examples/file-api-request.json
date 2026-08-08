@@ -1,0 +1,11 @@
+{
+  "action": "query",
+  "payload": {
+    "auth": {
+      "token": "replace-with-bearer-token"
+    },
+    "databaseId": "main",
+    "logicalDatabase": "app",
+    "sql": "SELECT * FROM users LIMIT 10;"
+  }
+}

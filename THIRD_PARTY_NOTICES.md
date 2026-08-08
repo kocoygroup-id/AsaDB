@@ -40,6 +40,23 @@ under the SIL Open Font License 1.1. The complete license is included at
 Source package:
 https://www.npmjs.com/package/@fontsource/noto-sans-jp
 
+## Flask Server offline wheelhouse
+
+`flaskserver/wheels/` contains the exact, redistributable Python wheels used
+only for AsaDB Server Mode: Flask, Werkzeug, Click, Requests, Waitress and
+their locked transitive dependencies, plus pip/setuptools/wheel for bootstrap.
+The source names, versions, and SHA-256 values are pinned in
+`flaskserver/requirements-bundled.txt` and `flaskserver/MANIFEST.sha256`.
+Each upstream wheel retains its own `*.dist-info` license metadata and notices;
+those upstream licenses remain independent from AsaDB's GPL-3.0-only source.
+The wheelhouse is installed with `--no-index` into a user-owned environment and
+is not linked into the SWI-Prolog engine or database files.
+
+Official project pages: Flask (Pallets), Requests, Waitress, and the Python
+Packaging Authority projects `pip`, `setuptools`, `wheel`, and `packaging`.
+Release maintainers must run `flaskserver/scripts/build_wheelhouse.py` and
+re-audit the exact wheel metadata whenever versions change.
+
 ## AsaDB Media
 
 The following project-owned media are distributed with AsaDB under

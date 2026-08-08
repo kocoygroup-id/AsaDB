@@ -976,8 +976,15 @@ prepare_row_filter(Expression, compiled(PlanId)) :-
 prepare_row_filter(Expression, interpreted(Expression)).
 
 cached_or_compile_filter(Hash, Expression, _, _, PlanId) :-
-    asadb_hot_filter_cache(Hash, CachedExpression, PlanId, _, _),
+    % Refresh the LRU position on each hit.  The expression check deliberately
+    % precedes the cut: two distinct expressions may share term_hash/2.
+    asadb_hot_filter_cache(Hash, CachedExpression, PlanId, ClauseRef, OldTick),
     Expression == CachedExpression, !,
+    retract(asadb_hot_filter_cache(Hash, CachedExpression, PlanId, ClauseRef,
+                                   OldTick)),
+    next_hot_filter_tick(NewTick),
+    assertz(asadb_hot_filter_cache(Hash, CachedExpression, PlanId, ClauseRef,
+                                   NewTick)),
     increment_logic_jit_flag(asadb_jit_filter_hits).
 cached_or_compile_filter(Hash, Expression, Row, Body, PlanId) :-
     increment_logic_jit_flag(asadb_jit_filter_misses),

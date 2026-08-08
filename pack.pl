@@ -14,11 +14,12 @@ packager('Kocoy Group', 'https://github.com/kocoygroup-id').
 pack_version(1).
 home('https://github.com/kocoygroup-id/AsaDB').
 download('https://github.com/kocoygroup-id/AsaDB.git').
-requires(prolog >= '9.0.4').
+% Pack applications (`swipl asadb`) were added in SWI-Prolog 9.1.18.
+requires(prolog >= '9.1.18').
 provides(asadb_sql).
 keywords([database, sql, prolog, local, storage, backup, interchange]).
 description([
-    'Local SQL database engine and web workspace powered by SWI-Prolog.',
+    'One Pack, Two Modes: local SQL engine, web workspace, and Flask server.',
     'Provides a documented Prolog API for embedded use and the complete',
-    'AsaDB CLI and AsAPanel source tree for local operation.'
+    'AsaDB CLI, AsAPanel, offline Python wheelhouse, and server source tree.'
 ]).

@@ -1,0 +1,89 @@
+/* Reuses the canonical AsAPanel tokens from web/assets/style.css. */
+:root { color-scheme: light; }
+body.auth-page { min-height: 100vh; overflow: auto; background: var(--bg); color: var(--text); }
+a { color: var(--accent-dark); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: .65rem .75rem;
+}
+button { cursor: pointer; }
+.button-link { display: inline-flex; align-items: center; min-height: 32px; padding: .65rem .75rem; border: 1px solid var(--line-strong); border-radius: 6px; }
+.auth-page { min-height: 100vh; display: grid; place-items: center; padding: 1rem; }
+.auth-card {
+  width: min(500px, 100%);
+  padding: 2rem;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+}
+.auth-card form { display: grid; gap: 1rem; margin: 1.5rem 0; }
+.auth-card label { display: grid; gap: .4rem; color: var(--muted); font-weight: 600; }
+.eyebrow { color: var(--accent); font-size: .8rem; letter-spacing: .08em; text-transform: uppercase; }
+.auth-brand { display: flex; gap: 10px; align-items: center; margin-bottom: 1.25rem; }
+.auth-brand img { width: 44px; height: 44px; object-fit: contain; }
+.auth-brand div { display: grid; }
+.auth-brand strong { font-size: 17px; }
+.auth-brand span { color: var(--muted); }
+.mode-card { width: min(620px, 100%); }
+.mode-choices { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.mode-choice { min-height: 140px; text-align: left; display: grid; align-content: start; gap: .5rem; }
+.mode-choice strong { font-size: 16px; }
+.mode-choice span { color: var(--muted); font-weight: 400; line-height: 1.45; }
+.mode-choice.primary span { color: #fff; }
+.logout-form { grid-template-columns: 1fr auto; align-items: center; }
+.topbar {
+  position: sticky; top: 0; z-index: 10;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 1rem 1.5rem; background: var(--sidebar); backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+.topbar span { margin-left: .7rem; color: var(--muted); }
+.topbar nav { display: flex; gap: 1rem; }
+.admin-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem; padding: 1rem; max-width: 1500px; margin: auto;
+}
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 1rem; min-width: 0; box-shadow: var(--shadow); }
+.span-2 { grid-column: span 2; }
+.card h2 { margin-top: 0; }
+.card form { display: grid; gap: .6rem; }
+.inline-form { grid-template-columns: repeat(4, minmax(0, 1fr)) auto; }
+.section-title { display: flex; justify-content: space-between; align-items: center; }
+pre, textarea {
+  width: 100%; overflow: auto; white-space: pre-wrap; word-break: break-word;
+  background: var(--surface-soft); border: 1px solid var(--line); border-radius: 6px; padding: .8rem;
+}
+.table-wrap table { width: 100%; border-collapse: collapse; }
+.table-wrap th, .table-wrap td { padding: .6rem; border-bottom: 1px solid var(--line); text-align: left; }
+@media (max-width: 800px) {
+  .admin-grid { grid-template-columns: 1fr; }
+  .span-2 { grid-column: span 1; }
+  .inline-form { grid-template-columns: 1fr; }
+}
+
+.error-box { margin: 1rem 0; padding: .8rem; border: 1px solid #e1b8c0; background: #fff7f7; color: #7b2a34; border-radius: 6px; }
+
+/* Injected into the canonical panel only after the user has authenticated. */
+.asadb-server-bar {
+  position: fixed; z-index: 99999; top: 10px; right: 12px;
+  display: flex; align-items: center; gap: .45rem; flex-wrap: wrap;
+  max-width: min(720px, calc(100vw - 24px)); padding: .55rem .7rem;
+  border: 1px solid var(--accent-border); border-radius: 8px;
+  background: var(--surface);
+  background: color-mix(in srgb, var(--surface) 95%, var(--accent-soft));
+  box-shadow: var(--shadow); color: var(--text); font: 12px/1.35 var(--font-main);
+}
+.asadb-server-bar > strong { color: var(--accent-dark); }
+.asadb-server-bar > span { color: var(--muted); }
+.asadb-server-bar b { color: var(--text); }
+.asadb-server-bar nav { margin-left: .2rem; white-space: nowrap; }
+@media (max-width: 800px) {
+  .asadb-server-bar { position: static; margin: 0 0 12px; max-width: none; }
+  .logout-form { grid-template-columns: 1fr; }
+}

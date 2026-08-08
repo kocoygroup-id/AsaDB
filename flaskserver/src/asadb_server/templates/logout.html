@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Keluar · AsaDB</title>
+  <link rel="icon" type="image/png" href="{{ url_for('panel.public_panel_asset', asset_path='asadb-logo.png') }}">
+  <link rel="stylesheet" href="{{ url_for('panel.public_panel_asset', asset_path='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='server.css') }}">
+</head>
+<body class="auth-page">
+  <main class="auth-card">
+    <div class="eyebrow">AsaDB account</div>
+    <h1>Keluar dari AsAPanel?</h1>
+    {% if active_transactions %}
+    <div class="error-box">Ada {{ active_transactions }} transaksi aktif. Keluar akan melakukan rollback sebelum sesi ditutup.</div>
+    {% else %}
+    <p>Token browser akan dicabut dan semua sesi database milik akun ini akan ditutup.</p>
+    {% endif %}
+    <form method="post" class="logout-form"><button class="danger" type="submit">Keluar dan tutup sesi</button><a class="button-link" href="/">Batal</a></form>
+  </main>
+  <script src="{{ url_for('static', filename='logout.js') }}"></script>
+</body>
+</html>

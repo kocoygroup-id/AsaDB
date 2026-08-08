@@ -7,9 +7,18 @@
 *.asa.meta.tmp
 *.asa.wal
 *.asa.store/
+*.asa.reservoir/
+*.asa.tvcc/
+*.asa*.meta
+*.asa*.wal
 asadb.port
 # SWI-Prolog pack manager state created by `swipl pack install .`
 status.db
+
+# Flask Server development artefacts (wheelhouse is intentionally tracked).
+flaskserver/.pytest_cache/
+flaskserver/src/*.egg-info/
+flaskserver/build/
 
 # Generated tests and releases
 tests/*_generated.sql

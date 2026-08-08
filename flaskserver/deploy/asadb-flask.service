@@ -1,0 +1,28 @@
+[Unit]
+Description=AsaDB Flask Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=asadb
+Group=asadb
+WorkingDirectory=/opt/asadb/flaskserver
+EnvironmentFile=/etc/asadb-flask.env
+ExecStart=/opt/asadb/flaskserver/.venv/bin/asadb server --host 127.0.0.1 --port 7879 --threads 8
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=60
+TimeoutStopSec=45
+KillSignal=SIGTERM
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/asadb
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

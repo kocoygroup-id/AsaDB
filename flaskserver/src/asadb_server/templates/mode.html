@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Pilih Workspace · AsaDB</title>
+  <link rel="icon" type="image/png" href="{{ url_for('panel.public_panel_asset', asset_path='asadb-logo.png') }}">
+  <link rel="stylesheet" href="{{ url_for('panel.public_panel_asset', asset_path='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='server.css') }}">
+</head>
+<body class="auth-page">
+  <main class="auth-card mode-card">
+    <div class="auth-brand"><img src="{{ url_for('panel.public_panel_asset', asset_path='asadb-logo.png') }}" alt="AsaDB"><div><strong>AsAPanel</strong><span>{{ user.username }}</span></div></div>
+    <div class="eyebrow">Workspace</div>
+    <h1>Pilih cara kerja</h1>
+    <p>Satu panel dan satu engine resmi. Pilihan ini disimpan hanya untuk sesi browser Anda.</p>
+    <form method="post" class="mode-choices">
+      {% if local_workspace_available %}
+      <button class="mode-choice" name="mode" value="local" type="submit">
+        <strong>Local Workspace</strong>
+        <span>Untuk pemakaian pribadi pada perangkat ini. Tetap memerlukan login; tidak tersedia dari jaringan luar.</span>
+      </button>
+      {% endif %}
+      <button class="mode-choice primary" name="mode" value="server" type="submit">
+        <strong>Server Workspace</strong>
+        <span>Untuk RBAC, sesi, API remote, streaming, pekerjaan latar, dan administrasi server.</span>
+      </button>
+    </form>
+    <small><a href="/logout">Keluar dari akun</a></small>
+  </main>
+</body>
+</html>

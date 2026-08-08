@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Admin AsAPanel · AsaDB</title>
+  <link rel="icon" type="image/png" href="{{ url_for('panel.public_panel_asset', asset_path='asadb-logo.png') }}">
+  <link rel="stylesheet" href="{{ url_for('panel.public_panel_asset', asset_path='style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='server.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <strong>AsaDB Server Admin</strong>
+      <span>node {{ node_id }}</span>
+    </div>
+    <nav>
+      <a href="/">AsAPanel</a>
+      <a href="/logout">Logout</a>
+    </nav>
+  </header>
+  <main class="admin-grid">
+    <section class="card span-2">
+      <div class="section-title">
+        <h2>Database files</h2>
+        <button data-action="reload">Refresh</button>
+      </div>
+      <form id="database-form" class="inline-form">
+        <input name="id" placeholder="id, e.g. main" required>
+        <input name="filename" placeholder="data.asa" required>
+        <input name="logicalDatabase" placeholder="replication DB (optional)">
+        <input name="replicaNodes" placeholder="replicas: node-2,node-3">
+        <button>Register</button>
+      </form>
+      <div id="databases" class="table-wrap"></div>
+    </section>
+
+    <section class="card">
+      <h2>Users & RBAC</h2>
+      <form id="user-form">
+        <input name="username" placeholder="username" required>
+        <input name="password" type="password" placeholder="password (8+)" required>
+        <select name="role">
+          <option>reader</option>
+          <option>writer</option>
+          <option>operator</option>
+          <option>replicator</option>
+          <option>admin</option>
+        </select>
+        <button>Create user</button>
+      </form>
+      <pre id="users"></pre>
+    </section>
+
+    <section class="card">
+      <h2>Cluster nodes</h2>
+      <form id="node-form">
+        <input name="id" placeholder="node-2" required>
+        <input name="url" placeholder="https://node-2.example" required>
+        <button>Add node</button>
+      </form>
+      <pre id="nodes"></pre>
+    </section>
+
+    <section class="card">
+      <h2>Workers</h2>
+      <pre id="workers"></pre>
+    </section>
+
+    <section class="card">
+      <h2>Jobs & progress</h2>
+      <pre id="jobs"></pre>
+    </section>
+
+    <section class="card span-2">
+      <h2>Mutable configuration</h2>
+      <p>Saved to <code>server-state/config.json</code>. Restart the service after changes.</p>
+      <textarea id="config" rows="12"></textarea>
+      <button id="save-config">Save configuration</button>
+    </section>
+
+    <section class="card span-2">
+      <h2>Audit</h2>
+      <pre id="audit"></pre>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='admin.js') }}"></script>
+</body>
+</html>

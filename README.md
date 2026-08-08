@@ -4,9 +4,9 @@
 [![Release: 1.5.0 Stable](https://img.shields.io/badge/release-1.5.0%20Stable-16803c.svg)](RELEASE_NOTES.md)
 [![Runtime: SWI-Prolog](https://img.shields.io/badge/runtime-SWI--Prolog-E61B23.svg)](https://www.swi-prolog.org/)
 
-AsaDB is a local SQL database experiment powered by SWI-Prolog. It ships with
-AsAPanel, a small local web workspace for creating databases, running SQL,
-importing/exporting data, and inspecting tables without a cloud server.
+AsaDB is a local-first SQL database runtime powered by SWI-Prolog. It ships
+with AsAPanel, a login-first web workspace for creating databases, running SQL,
+importing/exporting data, and inspecting tables without a cloud dependency.
 
 Current release: **v1.5.0 Stable**. The publication artifact
 `AsaDB-1.5.0-linux-x86_64.tar.Z` is a complete open-source distribution
@@ -29,10 +29,10 @@ supported release contract.
 ## SWI-Prolog pack
 
 AsaDB has a first-class `asadb` pack manifest and an embeddable
-`library(asadb)` API. The pack contains the complete CLI, panel backend,
-frontend assets, engine, launchers, examples, documentation, and tests. After
-publication to the SWI-Prolog pack server, the normal cross-platform commands
-are:
+`library(asadb)` API. **One Pack, Two Modes** contains the complete CLI, panel
+backend, frontend assets, engine, Flask Server source, offline Python
+wheelhouse, launchers, examples, documentation, and tests. After publication
+to the SWI-Prolog pack server, the normal cross-platform commands are:
 
 ```sh
 swipl pack install asadb
@@ -49,7 +49,72 @@ use the documented `swipl pack ...` form instead. See
 [docs/swi-prolog-pack.md](docs/swi-prolog-pack.md) for repository, stable,
 upgrade, remove, API, and publishing commands.
 The command semantics are based on SWI-Prolog's official
-[`library(prolog_pack)` guide](https://www.swi-prolog.org/pldoc/man?section=prologpack).
+[`library(prolog_pack)` guide](https://www.swi-prolog.org/pldoc/man?section=prologpack)
+and its [pack application mechanism](https://www.swi-prolog.org/pldoc/man?section=swipl-app).
+
+After installation, start AsaDB on Linux or Windows with exactly one command:
+
+```sh
+swipl asadb
+```
+
+The first run builds the bundled offline Python gateway in a per-user location,
+asks for the first administrator once, registers `data.asa`, then opens
+`http://127.0.0.1:7879/login`. Login always comes before selecting Local
+Workspace (loopback only) or Server Workspace. Flask only hosts and protects
+the web/API boundary: the SWI-Prolog backend remains the sole SQL parser,
+executor, transaction manager, and `.asa` storage engine. No `pip install` or
+manual virtual environment is required.
+
+Use `swipl asadb --help` for the explicit local CLI, maintenance, or remote
+commands. `swipl asadb` requires SWI-Prolog 9.1.18 or newer; this is the
+version where pack applications became available. See
+[the pack guide](docs/swi-prolog-pack.md) for offline/repository installation
+and upgrade/removal commands.
+
+## Server Mode: login-first web delivery
+
+Server Mode turns one local AsaDB installation into an authenticated web
+workspace without adding a second SQL engine. The bundled Python component
+handles HTTP, login sessions, role checks, registered physical database files,
+and operational endpoints; it starts and proxies the official Prolog web
+backend. Prolog remains the authority for SQL parsing, query execution,
+transactions, TVCC, Reservoir jobs, backup/restore, import/export, and `.asa`
+storage.
+
+Start the normal local portal:
+
+```sh
+swipl asadb
+```
+
+On first use it asks for an administrator and opens
+`http://127.0.0.1:7879/login`. Sign in, choose **Local Workspace** or
+**Server Workspace**, then use **Admin** for users, database registration,
+jobs, health, and safe mutable settings. Useful operational commands are:
+
+```sh
+swipl asadb doctor --json
+swipl asadb start --host 127.0.0.1 --port 7879
+swipl asadb server --host 127.0.0.1 --port 7879
+```
+
+`start` performs first-run setup when necessary; `server` is for an already
+initialized service. Keep the service bound to loopback and place TLS/public
+exposure behind a reverse proxy. Never expose the raw panel or its private
+Prolog backend directly to an untrusted network.
+
+The operational model takes inspiration from SiriDB's clear separation of
+service/database administration, access control, status surfaces, and explicit
+server/pool/replica concepts. AsaDB does **not** claim SiriDB-style distributed
+storage or active-active replication: its current server mode is one
+control-plane process around local Prolog-backed `.asa` files, with one writer
+per physical file and asynchronous snapshot-based replication where enabled.
+See SiriDB's [database administration overview](https://docs.siridb.com/database/)
+and [server/pool/replica model](https://docs.siridb.com/overview/server_pool_replica/)
+for the architectural references; see AsaDB's
+[server feature matrix](flaskserver/FEATURE_MATRIX.md) and
+[boundaries](flaskserver/docs/LIMITATIONS.md) for the implemented scope.
 
 AsaDB is developed in the open under **GNU GPL v3.0 only**. Bug reports, test
 cases, documentation, storage-engine review, and code contributions are
@@ -145,10 +210,10 @@ format behavior, input limits, and regression commands.
 
 Every 1.5.0 source package includes the SQL engine, page storage, B+Tree and
 metadata layers, Reservoir bridge, AsAPanel modern and compatibility bundles,
-ID/JP/EN assets, tests, build scripts, Linux/POSIX launchers, Windows batch
-launchers, operational guardian, and GPL notices. The Linux and main-source
-archives are gzip-compressed tar streams under `.tar.Z`; the Windows
-source-launcher is a ZIP with its own SHA-256 file.
+ID/JP/EN assets, tests, build scripts, SWI-Prolog `app/asadb.pl`, Linux/POSIX
+launchers, Windows batch launchers, operational guardian, and GPL notices. The
+Linux and main-source archives are gzip-compressed tar streams under `.tar.Z`;
+the Windows source-launcher is a ZIP with its own SHA-256 file.
 
 The Windows ZIP is a source/runtime-launcher package, not a relabelled native
 executable: install SWI-Prolog first. The portable executable remains a
@@ -280,10 +345,13 @@ sha256sum -c AsaDB-1.5.0-linux-x86_64.tar.Z.sha256
 tar -xzf AsaDB-1.5.0-linux-x86_64.tar.Z
 cd AsaDB-1.5.0-linux-x86_64
 ./scripts/check_linux_runtime.sh
-./scripts/run_panel.sh data.asa 8088
+swipl pack install .
+swipl asadb
 ```
 
-The `.tar.Z` file is gzip-compressed. `swipl` is a separate runtime dependency.
+On first run the command asks for administrator credentials, then opens the
+login page at `http://127.0.0.1:7879/login`. The `.tar.Z` file is
+gzip-compressed. `swipl` is a separate runtime dependency.
 
 ## Running The Portable Windows Release
 

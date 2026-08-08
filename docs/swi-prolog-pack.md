@@ -1,18 +1,14 @@
 # SWI-Prolog pack installation
 
 AsaDB is prepared as the `asadb` SWI-Prolog pack. It requires SWI-Prolog
-9.0.4 or newer; it is tested with both SWI-Prolog 9.0.4 and 10.0.2.
-SWI-Prolog 10 provides the convenient `swipl pack ...` command-line app used
-in the examples below. SWI-Prolog 9 remains supported through the equivalent
-one-line API commands documented under [SWI-Prolog 9 compatibility](#swi-prolog-9-compatibility).
+9.1.18 or newer, because it uses SWI-Prolog's official pack-app mechanism for
+the one-command launcher. It is tested against the current 10.x runtime.
 
 ## Command syntax
 
-`swipl install asadb` is not a SWI-Prolog command: stock SWI-Prolog treats
-`install` as a source filename. Do not replace or shadow the user's `swipl`
-executable to make that spelling work. The supported, cross-platform commands
-are `swipl pack install asadb`, `swipl pack install --upgrade asadb`,
-`swipl pack info asadb`, and `swipl pack remove asadb`.
+`swipl install asadb` is not a SWI-Prolog command: use `swipl pack install
+asadb`. Once installed, AsaDB is an official pack application, so the normal
+cross-platform start command is simply `swipl asadb`.
 
 These command forms are the CLI surface of SWI-Prolog's documented
 [`library(prolog_pack)` manager](https://www.swi-prolog.org/pldoc/man?section=prologpack).
@@ -26,15 +22,18 @@ The same commands work in a Linux terminal and Windows PowerShell/CMD once
 ## Stable release channel
 
 An installed `asadb` pack contains the complete AsaDB source distribution:
-the SQL engine, CLI, AsAPanel backend and web assets, launchers, interchange
-and backup support, examples, documentation, and tests. It is not a reduced
-API-only package.
+the SQL engine, CLI, AsAPanel backend and web assets, Flask Server source,
+offline Python wheelhouse, launchers, interchange and backup support, examples,
+documentation, and tests. It is not a reduced API-only package. Python 3.10+
+is a runtime prerequisite for Server Mode, but installing Flask, Waitress,
+Requests, and their dependencies is automatic and offline from the bundle.
 
 For normal users, use the registered release channel once a stable version has
 been published:
 
 ```sh
 swipl pack install asadb
+swipl asadb
 ```
 
 Check the installed package and its version:
@@ -88,45 +87,45 @@ when you need the canonical name: SWI-Prolog derives `AsaDB` from that Git URL
 on current runtimes. The helper and explicit API form force `asadb`, so later
 inspection, upgrade, and removal use one stable name.
 
-## SWI-Prolog 9 compatibility
+## Running Local and Server Mode from the installed pack
 
-SWI-Prolog 9.0.4 supports the pack manager API, although it does not provide
-the `swipl pack` command-line app. These commands are equivalent to install,
-inspect, upgrade, and remove on that runtime:
-
-```sh
-swipl -q -g "use_module(library(prolog_pack)), pack_install(asadb, [interactive(false)]), halt"
-swipl -q -g "use_module(library(prolog_pack)), pack_info(asadb), halt"
-swipl -q -g "use_module(library(prolog_pack)), pack_upgrade(asadb), halt"
-swipl -q -g "use_module(library(prolog_pack)), pack_remove(asadb), halt"
-```
-
-As with SWI-Prolog 10, the short pack name becomes available only after AsaDB
-has been published to the public pack registry. Before that, use the direct
-Git installation form on SWI-Prolog 10 or install from a checked-out source
-directory during development.
-
-## Running the installed CLI and panel
-
-SWI-Prolog keeps packs outside the system `PATH`. This prevents one package
-from silently replacing a system command. Resolve the installed directory
-once, then run the complete installed CLI or panel directly with SWI-Prolog:
+The pack's `app/asadb.pl` is discovered directly by SWI-Prolog. After a normal
+pack installation, this is the only browser command needed:
 
 ```sh
-ASADB_HOME=$(swipl -q -g "use_module(library(prolog_pack)), pack_property(asadb, directory(Dir)), writeln(Dir), halt")
-ASADB_DATA="$HOME/AsaDB-data"
-mkdir -p "$ASADB_DATA"
-
-(cd "$ASADB_HOME" && swipl -q -s src/asadb.pl -- "$ASADB_DATA/data.asa" examples/demo.sql)
-(cd "$ASADB_HOME" && swipl -q -s src/asadb_web.pl -- "$ASADB_DATA/data.asa" 8088)
+swipl asadb
 ```
 
-The `bin/asadb`, `scripts/run_asadb.sh`, and `scripts/run_panel.sh` launchers
-are included too, matching an extracted release. The direct `swipl -s` form is
-the portable recommendation because it does not depend on archive formats
-preserving a shell script's executable permission. Keeping database files in
-`$HOME/AsaDB-data` is important: `swipl pack install --upgrade asadb` updates
-pack code, while user data remains outside the package directory.
+No `pip install`, `venv`, or exported server secrets are required. The first
+run creates the per-user runtime from the bundled offline wheelhouse, prompts
+for the administrator, registers the default database, and opens the
+login-first portal. Python is a web/control-plane dependency only: the
+official Prolog backend retains SQL, storage, transactions, backup, import,
+and export authority.
+
+The first start asks for administrator credentials, then opens
+`http://127.0.0.1:7879/login`. Login always precedes workspace selection.
+Local Workspace is visible only on an allowed loopback browser and remains
+authenticated; use the explicit local CLI below for no-login terminal work.
+Maintenance commands are also cross-platform:
+
+```sh
+swipl asadb doctor --json
+swipl asadb python setup
+swipl asadb python repair
+swipl asadb reset python --yes
+```
+
+When a changed pack refreshes the bundled runtime, the launcher keeps a dated
+copy of its launcher configuration and secrets under
+`server-state/upgrade-backups/`. It never deletes the data directory or `.asa`
+files. `reset python --yes` removes only the regenerable virtual environment;
+`reset config --yes` moves configuration aside as a dated backup.
+
+`swipl asadb ...` is a native SWI-Prolog pack app, not a wrapper that replaces
+the user's executable. It works on Linux and Windows wherever SWI-Prolog 9.1.18
+or newer is installed. The `bin/asadb` and `scripts/run_panel.*` launchers are
+also retained for extracted source releases.
 
 For a checked-out development tree, test the exact pack installer without
 copying source files by running this command from the repository root:
@@ -148,12 +147,10 @@ Version = '1.5.0'.
    asadb_shutdown.
 ```
 
-The CLI and local panel remain source entrypoints because they deliberately
-perform process-level setup:
+The direct CLI remains available for explicit no-login terminal work:
 
 ```sh
 swipl -q -s src/asadb.pl -- data.asa script.sql
-swipl -q -s src/asadb_web.pl -- data.asa 8088
 ```
 
 ## Publishing a new AsaDB pack version
@@ -177,3 +174,4 @@ package name.
 - [SWI-Prolog pack manager (`library(prolog_pack)`)](https://www.swi-prolog.org/pldoc/man?section=prologpack)
 - [SWI-Prolog `pack_install/2` options and CLI mapping](https://www.swi-prolog.org/pldoc/doc_for?object=pack_install%2F2)
 - [SWI-Prolog pack format and `pack.pl` metadata](https://www.swi-prolog.org/pldoc/man?section=libpl)
+- [SWI-Prolog pack applications](https://www.swi-prolog.org/pldoc/man?section=swipl-app)
