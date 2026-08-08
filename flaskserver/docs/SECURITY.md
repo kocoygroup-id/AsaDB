@@ -23,6 +23,18 @@ The existing AsaDB SQL user/grant catalog remains available inside the engine.
 It is a separate SQL authorization surface. Deployments may use both layers,
 but Flask RBAC is the mandatory network boundary.
 
+## SQL reader boundary
+
+The server treats any SQL other than one top-level SELECT as write-capable at
+the network authorization boundary. This deliberately conservative rule applies
+to stateless queries, durable sessions, jobs, the panel proxy, and the file
+API. It rejects multi-statement input for a reader even when a write follows a
+harmless-looking SELECT.
+
+This lexer is not presented as an SQL parser. AsaDB's Prolog engine remains
+the parser of record; a future parser-backed classifier may broaden the
+reader-safe subset only with equivalent regression coverage.
+
 ## Filesystem permissions
 
 Protect these paths:

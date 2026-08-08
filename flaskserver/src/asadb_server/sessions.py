@@ -134,6 +134,13 @@ class SessionManager:
             session = self.get(session_id, user_id)
             database_id = str(session["databaseId"])
             self.assert_database_available(database_id, session_id)
+            if session.get("transactionActive") and session.get("transactionState") != "active":
+                raise TransactionConflict(
+                    "TRANSACTION_RECOVERY_REQUIRED",
+                    "The transaction outcome is uncertain; retry COMMIT or ROLLBACK before running SQL.",
+                    409,
+                    {"transactionState": session.get("transactionState")},
+                )
             if looks_like_write(sql) and not allow_write:
                 raise AsaServerError(
                     "WRITE_FORBIDDEN",
@@ -181,13 +188,22 @@ class SessionManager:
                 )
             try:
                 result = self.backends.get(database_id).query(sql)
-            finally:
+            except Exception:
+                # Do not report a transaction outcome that the backend did not
+                # confirm.  Keep its exclusive lease so a different client
+                # cannot observe or overwrite possibly transaction-local state.
+                session["transactionState"] = (
+                    "commit_failed" if final_state == "committed" else "rollback_failed"
+                )
+                self.touch(session)
+                raise
+            else:
                 with self._lock:
                     self._tx_owner.pop(database_id, None)
                 session["transactionActive"] = False
                 session["transactionState"] = final_state
                 self.touch(session)
-            return {"session": session, "result": result}
+                return {"session": session, "result": result}
 
     def assert_database_available(
         self,
@@ -214,7 +230,12 @@ class SessionManager:
                 try:
                     self.backends.get(database_id).query("ROLLBACK;")
                 except Exception:
-                    pass
+                    # A failed cleanup is an uncertain transaction, not a
+                    # successful logout/close.  Preserve the session and lease
+                    # for an explicit recovery attempt or administrator action.
+                    session["transactionState"] = "rollback_failed"
+                    self.touch(session)
+                    raise
             with self._lock:
                 if self._tx_owner.get(database_id) == session_id:
                     self._tx_owner.pop(database_id, None)

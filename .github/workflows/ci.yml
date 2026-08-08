@@ -52,3 +52,6 @@ jobs:
         run: |
           swipl -q -s tests/run_tests.pl
           swipl -q -s tests/tvcc_regression.pl
+      - name: Run pack, offline bootstrap, and real Server Mode E2E
+        shell: pwsh
+        run: .\tests\server_e2e_regression.ps1
