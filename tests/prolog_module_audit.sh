@@ -43,7 +43,7 @@ require_edge() {
 for module in \
   asadb_buffer_pool.pl asadb_pager.pl asadb_btree.pl asadb_config.pl \
   asadb_record_manager.pl asadb_metadata.pl asadb_mysql55_compat.pl \
-  asadb_prolog_jit.pl asadb_sql_frontend.pl
+  asadb_prolog_jit.pl asadb_schema.pl asadb_sql_frontend.pl
 do
   require_edge src/asadb_core.pl "$module"
 done

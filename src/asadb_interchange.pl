@@ -290,7 +290,8 @@ interchange_write_mysql(Out, Database, Tables, Views, Options,
         format(Out, 'CREATE DATABASE IF NOT EXISTS ~w;~nUSE ~w;~n~n', [DB, DB])
     ; true
     ),
-    interchange_write_sql_tables(mysql, Out, Tables, Options,
+    interchange_order_tables(Tables, OrderedTables),
+    interchange_write_sql_tables(mysql, Out, OrderedTables, Options,
                                  0, TableCount, 0, RowCount),
     interchange_write_sql_views(mysql, Out, Database, Views, Options,
                                 0, ViewCount),
@@ -306,7 +307,8 @@ interchange_write_postgresql(Out, Database, Tables, Views, Options,
         format(Out, 'SET search_path TO ~w;~n~n', [Schema])
     ; true
     ),
-    interchange_write_sql_tables(postgresql, Out, Tables, Options,
+    interchange_order_tables(Tables, OrderedTables),
+    interchange_write_sql_tables(postgresql, Out, OrderedTables, Options,
                                  0, TableCount, 0, RowCount),
     interchange_write_sql_views(postgresql, Out, Database, Views, Options,
                                 0, ViewCount).
@@ -366,9 +368,84 @@ interchange_write_table_schema(Dialect, Out, Name, Columns, Indexes, Options) :-
     ),
     format(Out, 'CREATE TABLE ~w (~n', [TableSQL]),
     interchange_write_columns(Dialect, Out, Columns, 0),
+    interchange_write_table_constraints(Dialect, Out, Indexes, Columns),
     format(Out, '~n);~n', []),
     interchange_write_indexes(Dialect, Out, Name, Indexes),
     nl(Out).
+
+% The catalog is newest-first, while foreign-key DDL requires the parent to
+% exist first on both MySQL and PostgreSQL.  Stable topological order keeps
+% SQL exports executable without weakening or dropping constraints.
+interchange_order_tables(Tables, Ordered) :-
+    interchange_order_tables_(Tables, [], Ordered).
+
+interchange_order_tables_([], Ordered, Ordered).
+interchange_order_tables_(Remaining, Ordered0, Ordered) :-
+    select(Ready, Remaining, Rest),
+    interchange_table_ready(Ready, Ordered0), !,
+    append(Ordered0, [Ready], Ordered1),
+    interchange_order_tables_(Rest, Ordered1, Ordered).
+interchange_order_tables_(Remaining, _, _) :-
+    throw(error(domain_error(interchange_foreign_key_dependency_cycle, Remaining), _)).
+
+interchange_table_ready(Table, Ordered) :-
+    interchange_table_parts(Table, Name, _Columns, _Storage, Indexes),
+    forall(member(foreign_key(_, _, RefTable, _, restrict, restrict), Indexes),
+           ( interchange_same_identifier(Name, RefTable)
+           ; interchange_ordered_table(RefTable, Ordered)
+           )).
+
+interchange_ordered_table(Name, [Table|_]) :-
+    interchange_table_parts(Table, Existing, _Columns, _Storage, _Indexes),
+    interchange_same_identifier(Name, Existing), !.
+interchange_ordered_table(Name, [_|Tables]) :-
+    interchange_ordered_table(Name, Tables).
+
+interchange_write_table_constraints(Dialect, Out, Indexes, Columns) :-
+    interchange_table_constraint_sqls(Dialect, Indexes, ConstraintSQL),
+    ( Columns = [] -> PrefixComma = false ; PrefixComma = true ),
+    interchange_emit_table_constraints(Out, ConstraintSQL, PrefixComma).
+
+interchange_emit_table_constraints(_, [], _).
+interchange_emit_table_constraints(Out, [SQL|SQLs], true) :- !,
+    format(Out, ',~n  ~w', [SQL]),
+    interchange_emit_table_constraints(Out, SQLs, true).
+interchange_emit_table_constraints(Out, [SQL|SQLs], false) :-
+    format(Out, '  ~w', [SQL]),
+    interchange_emit_table_constraints(Out, SQLs, true).
+
+interchange_table_constraint_sqls(_, [], []).
+interchange_table_constraint_sqls(Dialect, [Index|Indexes], SQLs) :-
+    ( interchange_table_constraint_sql(Dialect, Index, SQL) ->
+        SQLs = [SQL|Rest]
+    ; SQLs = Rest
+    ),
+    interchange_table_constraint_sqls(Dialect, Indexes, Rest).
+
+interchange_table_constraint_sql(Dialect, index('PRIMARY', Columns, _), SQL) :- !,
+    interchange_constraint_columns(Dialect, Columns, ColumnSQL),
+    atomic_list_concat(['PRIMARY KEY (', ColumnSQL, ')'], SQL).
+interchange_table_constraint_sql(Dialect, index(Name, Columns, unique), SQL) :- !,
+    sql_identifier(Dialect, Name, NameSQL),
+    interchange_constraint_columns(Dialect, Columns, ColumnSQL),
+    atomic_list_concat(['CONSTRAINT ', NameSQL, ' UNIQUE (', ColumnSQL, ')'], SQL).
+interchange_table_constraint_sql(Dialect, check(Name, Expr), SQL) :- !,
+    sql_identifier(Dialect, Name, NameSQL),
+    asadb_constraint_expression_sql(Expr, ExprSQL),
+    atomic_list_concat(['CONSTRAINT ', NameSQL, ' CHECK (', ExprSQL, ')'], SQL).
+interchange_table_constraint_sql(Dialect,
+                                 foreign_key(Name, Local, RefTable, Ref, restrict, restrict), SQL) :- !,
+    sql_identifier(Dialect, Name, NameSQL),
+    interchange_constraint_columns(Dialect, Local, LocalSQL),
+    sql_identifier(Dialect, RefTable, RefTableSQL),
+    interchange_constraint_columns(Dialect, Ref, RefSQL),
+    atomic_list_concat(['CONSTRAINT ', NameSQL, ' FOREIGN KEY (', LocalSQL,
+                        ') REFERENCES ', RefTableSQL, ' (', RefSQL,
+                        ') ON DELETE RESTRICT ON UPDATE RESTRICT'], SQL).
+
+interchange_constraint_columns(Dialect, Columns, SQL) :-
+    maplist(sql_identifier(Dialect), Columns, SQLColumns),
+    atomic_list_concat(SQLColumns, ', ', SQL).
 
 interchange_write_columns(_, _, [], _).
 interchange_write_columns(Dialect, Out, [Column|Columns], Index) :-
@@ -392,14 +469,17 @@ interchange_column_options_sql(Dialect, [Option|Options], SQL) :-
 
 interchange_column_option_sql(_, not_null, ' NOT NULL') :- !.
 interchange_column_option_sql(_, nullable, '') :- !.
-interchange_column_option_sql(_, primary_key, ' PRIMARY KEY') :- !.
-interchange_column_option_sql(_, unique, ' UNIQUE') :- !.
+interchange_column_option_sql(_, primary_key, '') :- !.
+interchange_column_option_sql(_, unique, '') :- !.
 interchange_column_option_sql(mysql, auto_increment, ' AUTO_INCREMENT') :- !.
 interchange_column_option_sql(postgresql, auto_increment,
                               ' GENERATED BY DEFAULT AS IDENTITY') :- !.
 interchange_column_option_sql(Dialect, default(Value), SQL) :- !,
     sql_value(Dialect, Value, Literal),
     atomic_list_concat([' DEFAULT ', Literal], SQL).
+interchange_column_option_sql(_, check(Expr), SQL) :- !,
+    asadb_constraint_expression_sql(Expr, ExprSQL),
+    atomic_list_concat([' CHECK (', ExprSQL, ')'], SQL).
 interchange_column_option_sql(_, raw_option(_), '') :- !.
 interchange_column_option_sql(_, _, '').
 
@@ -437,6 +517,7 @@ interchange_write_indexes(Dialect, Out, Table, [Index|Indexes]) :-
 
 interchange_index_sql(_, _, index(Name, _, _), _) :-
     interchange_same_identifier(Name, 'PRIMARY'), !, fail.
+interchange_index_sql(_, _, index(_, _, unique), _) :- !, fail.
 interchange_index_sql(Dialect, Table, index(Name, Columns, Kind), SQL) :-
     Columns \= [],
     sql_identifier(Dialect, Name, IndexSQL),

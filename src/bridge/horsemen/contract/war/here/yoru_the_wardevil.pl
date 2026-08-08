@@ -387,7 +387,9 @@ supervise(Context, Attempt0, Status) :-
         write_state(Context, running, _{}, Child.pid), get_time(Now), heartbeat_mtime(Context, Heartbeat),
         NextAudit is Now + Context.options.audit_every,
         monitor_child(Context, Child.pid, Queue, Now, Heartbeat, none, NextAudit, Result),
-        stop_child_io(Queue, Threads),
+        stop_child_io(Threads),
+        drain_child_io(Context, Queue),
+        catch(message_queue_destroy(Queue), _, true),
         handle_result(Context, Attempt0, Result, Status)
     ; handle_result(Context, Attempt0, spawn_error, Status)
     ).
@@ -414,9 +416,23 @@ wait_child(Pid, Queue) :-
     catch(process_wait(Pid, ProcessStatus), Error, ProcessStatus = error(Error)),
     thread_send_message(Queue, done(ProcessStatus)).
 
-stop_child_io(Queue, Threads) :-
-    forall(member(Thread, Threads), catch(thread_join(Thread, _), _, true)),
-    catch(message_queue_destroy(Queue), _, true).
+stop_child_io(Threads) :-
+    forall(member(Thread, Threads), catch(thread_join(Thread, _), _, true)).
+
+% A child may exit before its stdout/stderr forwarding thread enqueues the
+% final line.  Wait for those threads before discarding their queued messages;
+% otherwise short-lived commands can be reported as complete without their
+% final audit output.
+drain_child_io(Context, Queue) :-
+    ( thread_get_message(Queue, Message, [timeout(0)]) ->
+        drain_child_message(Message, Context),
+        drain_child_io(Context, Queue)
+    ; true
+    ).
+
+drain_child_message(output(Label, Text), Context) :- !,
+    log_event(Context, child_output, _{stream:Label, text:Text}).
+drain_child_message(_Message, _Context).
 
 monitor_child(Context, Pid, Queue, Last0, Heartbeat0, Nudge0, NextAudit0, Result) :-
     ( thread_get_message(Queue, Message, [timeout(0.25)]) ->

@@ -31,7 +31,7 @@ const I18N = {
     'startup.title': 'Asa lagi pemanasan',
     'startup.copy': 'Nyambungin panel ke engine dan katalog lokal.',
     'brand.admin': 'Admin AsaDB',
-    'brand.support': 'Traktir Mi',
+    'brand.support': 'Ko-fi',
     'aria.databaseSelector': 'Pemilih database',
     'aria.databaseTools': 'Alat database',
     'aria.databaseQuickActions': 'Aksi cepat database',
@@ -245,7 +245,7 @@ const I18N = {
     'startup.title': 'Asa is warming up',
     'startup.copy': 'Connecting the panel to the local engine and catalog.',
     'brand.admin': 'AsaDB Admin',
-    'brand.support': 'Buy Me Noodles',
+    'brand.support': 'Ko-fi',
     'aria.databaseSelector': 'Database selector',
     'aria.databaseTools': 'Database tools',
     'aria.databaseQuickActions': 'Database quick actions',
@@ -459,7 +459,7 @@ const I18N = {
     'startup.title': 'アサは準備中です',
     'startup.copy': 'パネルをローカルエンジンとカタログに接続しています。',
     'brand.admin': 'AsaDB 管理',
-    'brand.support': '麺をごちそうする',
+    'brand.support': 'Ko-fi',
     'aria.databaseSelector': 'データベース選択',
     'aria.databaseTools': 'データベースツール',
     'aria.databaseQuickActions': 'データベースのクイック操作',
@@ -1009,9 +1009,7 @@ let tableDataPageState = null;
 let tableDetailRequestId = 0;
 let asaRunPrimePromise = null;
 let sqlLineRenderFrame = 0;
-let sqlScrollRestoreFrame = 0;
-let sqlPasteInProgress = false;
-let sqlPasteAnchor = { top: 0, left: 0 };
+let sqlPasteAnchor = null;
 let sqlEditorMetrics = { lineCount: 1, large: false, textLength: 0 };
 let archiveRefreshTimer = 0;
 let archiveSnapshot = {
@@ -2378,29 +2376,30 @@ function syncSqlScroll() {
   positionSqlCompletions();
 }
 
-function sqlCaretScrollTarget() {
-  const caret = sqlInput.selectionStart ?? sqlInput.value.length;
-  const line = lineNumberAtIndex(sqlInput.value, caret);
-  const viewport = sqlInput.clientHeight || 420;
-  const target = ((line - 1) * SQL_EDITOR_LINE_HEIGHT) - (viewport * 0.45);
-  const max = Math.max(0, sqlInput.scrollHeight - viewport);
-  return Math.max(0, Math.min(max, target));
+function captureSqlSelection() {
+  const length = sqlInput.value.length;
+  const start = Math.max(0, Math.min(length, Number(sqlInput.selectionStart) || 0));
+  const end = Math.max(start, Math.min(length, Number(sqlInput.selectionEnd) || start));
+  const direction = ['forward', 'backward', 'none'].includes(sqlInput.selectionDirection)
+    ? sqlInput.selectionDirection
+    : 'none';
+  return { start, end, direction };
 }
 
-function restoreSqlViewport(top, left, frames = 2) {
-  cancelAnimationFrame(sqlScrollRestoreFrame);
-  const apply = (remaining) => {
-    sqlInput.scrollTop = Math.max(0, Number(top) || 0);
-    sqlInput.scrollLeft = Math.max(0, Number(left) || 0);
-    syncSqlScroll();
-    if (remaining > 0) sqlScrollRestoreFrame = requestAnimationFrame(() => apply(remaining - 1));
-  };
-  apply(frames);
+function restoreSqlSelection(selection) {
+  if (!selection || document.activeElement !== sqlInput) return;
+  const length = sqlInput.value.length;
+  const start = Math.max(0, Math.min(length, Number(selection.start) || 0));
+  const end = Math.max(start, Math.min(length, Number(selection.end) || start));
+  sqlInput.setSelectionRange(start, end, selection.direction);
 }
 
 function updateSqlEditor(options = {}) {
   const requestedTop = Number.isFinite(options.scrollTop) ? options.scrollTop : sqlInput.scrollTop;
   const requestedLeft = Number.isFinite(options.scrollLeft) ? options.scrollLeft : sqlInput.scrollLeft;
+  // The syntax layer is rebuilt on every edit. Keep the textarea selection as
+  // the source of truth so its native caret cannot drift from the typed text.
+  const selection = options.selection || captureSqlSelection();
   const sql = sqlInput.value;
   sqlEditorMetrics = measureSqlEditor(sql);
   sqlEditor.classList.toggle('large-script', sqlEditorMetrics.large);
@@ -2410,7 +2409,7 @@ function updateSqlEditor(options = {}) {
   sqlInput.scrollTop = requestedTop;
   sqlInput.scrollLeft = requestedLeft;
   syncSqlScroll();
-  if (options.persistScroll) restoreSqlViewport(requestedTop, requestedLeft);
+  restoreSqlSelection(selection);
   return sqlEditorMetrics;
 }
 
@@ -6154,20 +6153,21 @@ function handleSqlIndentKey(event) {
 }
 
 sqlInput.addEventListener('paste', () => {
-  sqlPasteInProgress = true;
   sqlPasteAnchor = { top: sqlInput.scrollTop, left: sqlInput.scrollLeft };
   requestAnimationFrame(() => {
-    sqlPasteInProgress = false;
+    sqlPasteAnchor = null;
   });
 });
 sqlInput.addEventListener('input', (event) => {
-  const pasted = sqlPasteInProgress || event.inputType === 'insertFromPaste';
+  const pasteAnchor = sqlPasteAnchor;
+  const pasted = Boolean(pasteAnchor) || event.inputType === 'insertFromPaste';
   if (!pasted) applySqlAutoCorrection(false);
-  const scrollTop = pasted
-    ? Math.max(sqlPasteAnchor.top, sqlInput.scrollTop, sqlCaretScrollTarget())
-    : sqlInput.scrollTop;
-  const scrollLeft = pasted ? Math.max(sqlPasteAnchor.left, sqlInput.scrollLeft) : sqlInput.scrollLeft;
-  updateSqlEditor({ scrollTop, scrollLeft, persistScroll: pasted });
+  // Preserve the user's viewport once. The old multi-frame restoration could
+  // replay a stale scroll position after the user had already started scrolling.
+  const scrollTop = pasted ? Math.max(pasteAnchor?.top || 0, sqlInput.scrollTop) : sqlInput.scrollTop;
+  const scrollLeft = pasted ? Math.max(pasteAnchor?.left || 0, sqlInput.scrollLeft) : sqlInput.scrollLeft;
+  updateSqlEditor({ scrollTop, scrollLeft, selection: captureSqlSelection() });
+  sqlPasteAnchor = null;
   scheduleSqlAnalysis();
   updateSqlCompletions();
 });
