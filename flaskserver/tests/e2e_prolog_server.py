@@ -195,11 +195,13 @@ def main() -> None:
                         "sql": "SHOW TABLES;",
                     },
                 )
+                backend_status = app.extensions["asadb_backends"].get("main").status()
                 raise AssertionError(
                     "data was not durable after backend restart: "
                     f"projection={after_restart_text}; "
                     f"star={after_restart_star.get_data(as_text=True)}; "
-                    f"tables={after_restart_tables.get_data(as_text=True)}"
+                    f"tables={after_restart_tables.get_data(as_text=True)}; "
+                    f"backend={backend_status}"
                 )
         finally:
             shutdown(app)

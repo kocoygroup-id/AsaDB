@@ -397,7 +397,12 @@ asadb_boot(InputFile) :-
     assertz(asadb_file(File)),
     asadb_metadata_open(File),
     ( exists_file(File) ->
-        catch(asadb_load_file(File, State), _, empty_state(State))
+        catch(asadb_load_file(File, State), Error,
+              ( format(user_error,
+                       'AsaDB catalog load failed for ~w: ~p~n',
+                       [File, Error]),
+                empty_state(State)
+              ))
     ; empty_state(State)
     ),
     normalize_state(State, Normalized),
