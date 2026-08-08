@@ -119,10 +119,23 @@ zero_bytes(N, [0|Zeros]) :-
 asadb_pager_read_file_codes(File, Codes) :-
     setup_call_cleanup(
         open(File, read, Stream, [type(binary)]),
-        read_pages(Stream, File, 0, Pages),
+        read_binary_codes(Stream, Codes),
         close(Stream)
-    ),
-    append(Pages, Codes).
+    ).
+
+% This helper is used for the compact catalog envelope, not heap-page scans.
+% `get_byte/2` is deliberately used instead of `read_string/3`: the catalog
+% payload is XOR-obfuscated and therefore contains arbitrary octets.  Some
+% Windows stream implementations can apply text/string conversion while
+% constructing a Prolog string, even when a stream was opened as binary.  A
+% raw byte loop keeps catalog decoding byte-for-byte identical on NTFS and
+% POSIX filesystems.  Large table scans continue to use the paged bulk path.
+read_binary_codes(Stream, Codes) :-
+    get_byte(Stream, Byte),
+    ( Byte =:= -1 -> Codes = []
+    ; Codes = [Byte|Rest],
+      read_binary_codes(Stream, Rest)
+    ).
 
 asadb_pager_write_file_codes(File, Codes) :-
     asadb_pager_invalidate_file(File),
