@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections
+import os
 import queue
 import re
 import subprocess
@@ -590,33 +591,107 @@ class PanelBackend:
     def stderr_tail(self, limit: int = 30) -> list[str]:
         return list(self._stderr_lines)[-limit:]
 
-    def stop(self, *, force: bool = False) -> None:
+    @staticmethod
+    def _listener_alive(base_url: str) -> bool:
+        try:
+            response = requests.get(base_url + "/", timeout=0.25)
+        except requests.RequestException:
+            return False
+        return response.status_code > 0
+
+    def _wait_for_listener_exit(self, base_url: str, timeout: float = 10) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not self._listener_alive(base_url):
+                return True
+            time.sleep(0.05)
+        return not self._listener_alive(base_url)
+
+    def _force_stop_process_tree(self, process: subprocess.Popen[str]) -> None:
+        # A Windows launcher can leave the actual SWI-Prolog child running
+        # after its parent wrapper has exited.  /T makes the fallback target
+        # the known supervised process tree instead of an arbitrary process.
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        else:
+            process.kill()
+
+    def _wait_for_catalog_settle(self, timeout: float = 10) -> None:
+        catalog = self.database_path
+        temporary = Path(str(catalog) + ".tmp")
+        backup = Path(str(catalog) + ".bak")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if catalog.exists() and not temporary.exists() and not backup.exists():
+                return
+            time.sleep(0.05)
+        raise BackendUnavailable(
+            "BACKEND_SHUTDOWN_INCOMPLETE",
+            "AsaDB catalog did not reach a stable durable state before restart.",
+            503,
+            {
+                "catalog": str(catalog),
+                "catalogExists": catalog.exists(),
+                "temporaryExists": temporary.exists(),
+                "backupExists": backup.exists(),
+            },
+        )
+
+    def stop(self, *, force: bool = False, require_durable: bool = False) -> None:
         with self._lifecycle_lock:
             process = self.process
             if process is None:
                 return
+            catalog_was_present = self.database_path.exists()
+            base_url = self.base_url if self.port is not None else ""
             if process.poll() is None:
-                try:
-                    self.save()
-                except Exception:
-                    pass
-                if force:
-                    process.kill()
-                else:
-                    try:
-                        # Popen.terminate() is a forceful TerminateProcess on
-                        # Windows.  Ask the authenticated Prolog endpoint to
-                        # run asadb_shutdown/0 first; it saves state and runs
-                        # its cleanup hooks before halt/0.  A bounded kill is
-                        # retained only as a supervisor fallback.
-                        self.shutdown()
-                    except Exception:
-                        process.terminate()
+                with self._execution_lock:
+                    if require_durable:
+                        # A restart is a durability boundary.  Do not quietly
+                        # discard a failed checkpoint and pretend the next
+                        # process is a healthy continuation.
+                        self.save()
+                    else:
+                        try:
+                            self.save()
+                        except Exception:
+                            pass
+                    if force:
+                        self._force_stop_process_tree(process)
+                    else:
+                        try:
+                            # Popen.terminate() is a forceful TerminateProcess on
+                            # Windows.  Ask the authenticated Prolog endpoint to
+                            # run asadb_shutdown/0 first; it saves state and runs
+                            # its cleanup hooks before halt/0.  A bounded kill is
+                            # retained only as a supervisor fallback.
+                            self.shutdown()
+                        except Exception:
+                            process.terminate()
                 try:
                     process.wait(timeout=10)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    self._force_stop_process_tree(process)
                     process.wait(timeout=5)
+            # `wait()` covers the tracked parent.  On Windows a launcher can
+            # outlive that parent briefly, so prove that the old HTTP listener
+            # has gone away before a new backend may touch the same .asa file.
+            if base_url and not self._wait_for_listener_exit(base_url):
+                self._force_stop_process_tree(process)
+                if not self._wait_for_listener_exit(base_url, timeout=5):
+                    raise BackendUnavailable(
+                        "BACKEND_SHUTDOWN_INCOMPLETE",
+                        "The previous AsaDB backend listener did not stop.",
+                        503,
+                        {"databaseId": self.database_id, "baseUrl": base_url},
+                    )
+            if catalog_was_present:
+                self._wait_for_catalog_settle()
             self.process = None
             self._ready.clear()
             self.panel_token = None
@@ -652,7 +727,15 @@ class BackendManager:
             # shutdown, and only kills a process that does not exit in time.
             # Using force=True here could kill the Prolog process while the
             # platform is still completing its final filesystem writes.
-            backend.stop()
+            try:
+                backend.stop(require_durable=True)
+            except Exception:
+                # Preserve the still-supervised backend if its durable stop
+                # could not be proven.  Starting a second process for the
+                # same catalog after that failure would risk split state.
+                with self._lock:
+                    self._backends.setdefault(database_id, backend)
+                raise
         backend = self.get(database_id)
         backend.start()
         return backend.status()
