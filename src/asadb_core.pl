@@ -1097,7 +1097,10 @@ execution_result_error(error(_, _)).
 % into an unbounded mega-statement.  The old collector merged a complete SQL
 % dump into one row list; a 72k-row panel import consequently exhausted the
 % Reservoir worker stack before storage could checkpoint a bounded run.
-insert_run_row_limit(4096).
+% Storage-page checksums and constraint validation are intentionally bounded
+% to a worker-safe row unit as well as an SQL-byte unit.  A 512 KiB INSERT can
+% otherwise still expand into thousands of rows after parsing.
+insert_run_row_limit(512).
 
 collect_insert_run([insert(NextTable, NextColumns, NextRows)|Stmts],
                    Table, Columns, RowCount0, Groups0, Groups, Rest) :-
@@ -1366,10 +1369,8 @@ execute_statement(create_database(Name), ok(created_database(Name))) :-
 
 execute_statement(use_database(Name), ok(using_database(Name))) :-
     asadb_state(State),
-    ( db_exists(State, Name) ->
-        retractall(asadb_current_db(_)), assertz(asadb_current_db(Name))
-    ; update_state(create_db(Name)), retractall(asadb_current_db(_)), assertz(asadb_current_db(Name))
-    ),
+    db_exists(State, Name), !,
+    retractall(asadb_current_db(_)), assertz(asadb_current_db(Name)),
     persist_current_db(Name),
     % `USE` changes the database context without changing table pages. Publish
     % a catalog-equivalent generation so a snapshot never combines an older
@@ -1377,13 +1378,19 @@ execute_statement(use_database(Name), ok(using_database(Name))) :-
     asadb_file(File),
     asadb_state(CurrentState),
     asadb_tvcc_publish(File, CurrentState, Name).
+execute_statement(use_database(Name),
+                  error(existence_error(database, Name), use_database(Name))).
 
 execute_statement(drop_database(Name), ok(dropped_database(Name))) :-
-    update_state(drop_db(Name)),
     ( asadb_current_db(Name) ->
         retractall(asadb_current_db(_)),
         clear_persisted_current_db
-    ; true ).
+    ; true
+    ),
+    % Clear the durable selection before update_state/1 checkpoints and
+    % publishes its TVCC generation; otherwise the just-dropped database can
+    % be captured as the next reader context and appear to resurrect.
+    update_state(drop_db(Name)).
 
 execute_statement(create_table(Name, Columns, Options), ok(created_table(Name))) :-
     current_db_or_default(DB),

@@ -21,6 +21,21 @@ from .util import quote_identifier, reserve_local_port, result_rows
 READY_RE = re.compile(r"AsAPanel running at http://127\.0\.0\.1:(\d+)/")
 
 
+def query_result_has_error(result: dict[str, Any]) -> bool:
+    """Return whether an AsaDB JSON query result contains a SQL error."""
+    return any(
+        isinstance(item, dict) and item.get("status") == "error"
+        for item in result.get("results", [])
+    )
+
+
+def query_result_error_message(result: dict[str, Any]) -> str:
+    for item in result.get("results", []):
+        if isinstance(item, dict) and item.get("status") == "error":
+            return str(item.get("message") or "Logical database does not exist.")
+    return "Logical database does not exist."
+
+
 class SizedReader:
     """File-like wrapper that gives Requests an exact Content-Length."""
 
@@ -357,7 +372,12 @@ class PanelBackend:
             # batch, so the Prolog web layer cannot use its immutable TVCC
             # read path.  Keeping the caller SQL intact also makes result
             # payloads contain only the command the caller asked to run.
-            self.query(f"USE {quote_identifier(logical_database)};")
+            selected = self.query(f"USE {quote_identifier(logical_database)};")
+            # USE is an existence check, never an implicit CREATE.  Do not
+            # run the caller SQL in whatever prior context happens to remain
+            # when logical-database selection failed.
+            if query_result_has_error(selected):
+                return selected
             return self.query(sql, offset=offset)
 
     def request_in_database(
@@ -369,14 +389,22 @@ class PanelBackend:
     ) -> requests.Response:
         with self._database_context_lock, self._execution_lock:
             selected = self.query(f"USE {quote_identifier(logical_database)};")
+            if query_result_has_error(selected):
+                raise BackendError(
+                    "LOGICAL_DATABASE_NOT_FOUND",
+                    query_result_error_message(selected),
+                    404,
+                    selected,
+                )
             return self.request(method, path, **kwargs)
 
     def begin_transaction(self, logical_database: str | None = None) -> dict[str, Any]:
         with self._database_context_lock, self._execution_lock:
             if logical_database:
-                return self.query(
-                    f"USE {quote_identifier(logical_database)};\nBEGIN;"
-                )
+                selected = self.query(f"USE {quote_identifier(logical_database)};")
+                if query_result_has_error(selected):
+                    return selected
+                return self.query("BEGIN;")
             return self.query("BEGIN;")
 
     def analyze(self, sql: str) -> dict[str, Any]:
@@ -537,7 +565,14 @@ class PanelBackend:
     ) -> Iterator[dict[str, Any]]:
         with self._database_context_lock, self._execution_lock:
             # Select once and retain the context lock for the full page stream.
-            self.query(f"USE {quote_identifier(logical_database)};")
+            selected = self.query(f"USE {quote_identifier(logical_database)};")
+            if query_result_has_error(selected):
+                raise BackendError(
+                    "LOGICAL_DATABASE_NOT_FOUND",
+                    query_result_error_message(selected),
+                    404,
+                    selected,
+                )
             yield from self.stream_query_pages(
                 sql,
                 page_size,

@@ -18,6 +18,7 @@ panel:
 test:
 	swipl -q -s tests/run_tests.pl
 	swipl -q -s tests/reservoir_tests.pl
+	./tests/reservoir_large_sql_regression.sh
 	swipl -q -s tests/tvcc_regression.pl
 
 test-ui:

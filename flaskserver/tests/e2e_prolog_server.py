@@ -105,6 +105,17 @@ def main() -> None:
                     "Local Workspace did not reach the Prolog backend: "
                     f"{local_query.get_data(as_text=True)}"
                 )
+            # Local Workspace SQL DROP: this is the same authenticated panel
+            # command path used by a typed DROP DATABASE statement.
+            local_drop = client.post(
+                "/api/query",
+                data={"sql": "CREATE DATABASE local_drop; USE local_drop; DROP DATABASE local_drop;"},
+            )
+            require(local_drop, 200, "Local Workspace SQL DROP DATABASE")
+            local_catalog = client.post("/api/query", data={"sql": "SHOW DATABASES;"})
+            require(local_catalog, 200, "Local Workspace catalog after DROP")
+            if b"local_drop" in local_catalog.data:
+                raise AssertionError("Local Workspace DROP DATABASE resurrected local_drop")
             require(client.post("/mode", data={"mode": "server"}), 302, "Server Workspace")
 
             # Exercise the exact authenticated browser proxy used by the
@@ -144,6 +155,51 @@ def main() -> None:
                     f"panel CSV rows missing: {imported.get_data(as_text=True)}"
                 )
 
+            # The browser defaults the import selector to ``auto``.  Exercise
+            # that exact Reservoir upload route with MySQL-style SQL as well:
+            # headers have to survive Flask, dialect detection has to select
+            # MySQL from the original filename, and the resulting transaction
+            # must commit before the panel reports success.
+            mysql_payload = b"""
+CREATE DATABASE panel_mysql;
+USE panel_mysql;
+CREATE TABLE `panel_rows` (`id` INT PRIMARY KEY, `name` VARCHAR(40));
+INSERT INTO `panel_rows` (`id`, `name`) VALUES (1, 'Ayu'), (2, 'Asa');
+""".lstrip()
+            mysql_import = client.post(
+                "/api/reservoir/jobs",
+                data=mysql_payload,
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": str(len(mysql_payload)),
+                    "X-AsaDB-Job-Label": "panel.mysql",
+                    "X-AsaDB-Idempotency-Key": "panel-mysql-auto-e2e",
+                    "X-AsaDB-Stop-On-Error": "true",
+                    "X-AsaDB-Import-Format": "auto",
+                    "X-AsaDB-Import-Name": "panel.mysql",
+                    "X-AsaDB-Import-Table": "",
+                    "X-AsaDB-Import-Mode": "replace",
+                },
+            )
+            require(mysql_import, 202, "panel MySQL auto admission")
+            mysql_admission = mysql_import.get_json()
+            wait_for_panel_reservoir(client, mysql_admission["job_id"])
+            mysql_rows = client.post(
+                "/api/query",
+                data={
+                    "sql": (
+                        "USE panel_mysql; "
+                        "SELECT id, name FROM panel_rows ORDER BY id;"
+                    )
+                },
+            )
+            require(mysql_rows, 200, "panel imported MySQL query")
+            if b"Ayu" not in mysql_rows.data or b"Asa" not in mysql_rows.data:
+                raise AssertionError(
+                    "panel MySQL auto-import rows missing: "
+                    f"{mysql_rows.get_data(as_text=True)}"
+                )
+
             panel_export = client.post(
                 "/api/export",
                 data={
@@ -160,14 +216,16 @@ def main() -> None:
             if b"id,name" not in panel_export.data or b"Ayu" not in panel_export.data:
                 raise AssertionError("panel export omitted backend rows")
 
+            # Server Workspace trash-button path emits this direct small DDL
+            # request, then verifies SHOW DATABASES and refreshes the catalog.
             panel_drop = client.post(
                 "/api/query",
                 data={
                     "sql": (
-                        "CREATE DATABASE panel_drop; USE panel_drop; "
+                        "CREATE DATABASE server_drop; USE server_drop; "
                         "CREATE TABLE disposable (id INT); "
                         "INSERT INTO disposable VALUES (1); "
-                        "DROP DATABASE panel_drop;"
+                        "DROP DATABASE server_drop;"
                     )
                 },
             )
@@ -176,12 +234,50 @@ def main() -> None:
                 "/api/query", data={"sql": "SHOW DATABASES;"}
             )
             require(databases_after_drop, 200, "panel databases after DROP")
-            if b"panel_drop" in databases_after_drop.data:
+            if b"server_drop" in databases_after_drop.data:
                 raise AssertionError(
                     "panel DROP DATABASE left a catalog entry: "
                     f"drop={panel_drop.get_data(as_text=True)}; "
                     f"databases={databases_after_drop.get_data(as_text=True)}"
                 )
+            # A failed USE must leave Flask's logical-database session intact.
+            require(
+                client.post(
+                    "/api/query",
+                    data={"sql": "CREATE DATABASE retained_panel; USE retained_panel;"},
+                ),
+                200,
+                "panel retained database setup",
+            )
+            failed_use = client.post(
+                "/api/query", data={"sql": "USE never_created_panel;"}
+            )
+            require(failed_use, 200, "panel missing USE response")
+            if b'"status":"error"' not in failed_use.data:
+                raise AssertionError(
+                    "USE of a missing database was accepted: "
+                    f"{failed_use.get_data(as_text=True)}"
+                )
+            still_selected = client.post(
+                "/api/query", data={"sql": "CREATE TABLE retained_ok (id INT);"}
+            )
+            require(still_selected, 200, "failed USE retained prior selection")
+            if b'"status":"error"' in still_selected.data:
+                raise AssertionError(
+                    "failed USE changed Flask logical database: "
+                    f"{still_selected.get_data(as_text=True)}"
+                )
+            require(
+                client.post(
+                    "/api/query", data={"sql": "DROP DATABASE retained_panel;"}
+                ),
+                200,
+                "drop retained selected database",
+            )
+            post_drop_request = client.post("/api/query", data={"sql": "SHOW DATABASES;"})
+            require(post_drop_request, 200, "new panel request after DROP")
+            if b"retained_panel" in post_drop_request.data:
+                raise AssertionError("new request resurrected dropped selected database")
 
             setup = client.post(
                 "/api/v1/databases/main/query",
@@ -285,6 +381,16 @@ def main() -> None:
                 200,
                 "backend restart",
             )
+            after_restart_catalog = client.post(
+                "/api/v1/databases/main/query", json={"sql": "SHOW DATABASES;"}
+            )
+            require(after_restart_catalog, 200, "catalog after backend restart")
+            for dropped_name in ("local_drop", "server_drop", "retained_panel"):
+                if dropped_name in after_restart_catalog.get_data(as_text=True):
+                    raise AssertionError(
+                        f"backend restart resurrected {dropped_name}: "
+                        f"{after_restart_catalog.get_data(as_text=True)}"
+                    )
             after_restart = client.post(
                 "/api/v1/databases/main/query",
                 json={

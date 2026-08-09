@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,29 @@ from .backend import BackendManager
 from .errors import AsaServerError, TransactionConflict
 from .file_store import AtomicJsonStore
 from .util import epoch, looks_like_write, new_id, utc_now
+
+
+DROP_DATABASE_RE = re.compile(
+    r"(?:^|;)\s*DROP\s+DATABASE(?:\s+IF\s+EXISTS)?\s+"
+    r"(?:`([^`]+)`|([A-Za-z0-9_.-]+))\s*;",
+    re.IGNORECASE,
+)
+
+
+def dropped_selected_database(sql: str, result: dict[str, Any], selected: object) -> bool:
+    if not isinstance(selected, str):
+        return False
+    results = result.get("results") if isinstance(result, dict) else None
+    if not isinstance(results, list) or any(
+        isinstance(item, dict) and item.get("status") == "error"
+        for item in results
+    ):
+        return False
+    dropped = {
+        (quoted or plain).casefold()
+        for quoted, plain in DROP_DATABASE_RE.findall(sql or "")
+    }
+    return selected.casefold() in dropped
 
 
 class SessionManager:
@@ -153,6 +177,10 @@ class SessionManager:
                 result = backend.query_in_database(str(logical_database), sql)
             else:
                 result = backend.query(sql)
+            if dropped_selected_database(sql, result, logical_database):
+                # Do not persist a session affinity that no longer exists;
+                # the next HTTP request must not issue a stale USE.
+                session["logicalDatabase"] = None
             self.touch(session)
             return result
 
