@@ -842,17 +842,21 @@ th {
 }
 
 .save-db-icon {
-  display: block;
-  width: 22px;
-  height: 22px;
-  background: url("Icon/save.png") center / contain no-repeat;
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  background: url("Icon/save.png") 50% 50% / 24px 24px no-repeat;
 }
 
 .trash-db-icon {
-  display: block;
-  width: 23px;
-  height: 23px;
-  background: url("Icon/tong_sampah.png") center / contain no-repeat;
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  background: url("Icon/tong_sampah.png") 50% 50% / 24px 24px no-repeat;
 }
 
 .status {
@@ -970,6 +974,10 @@ th {
   tab-size: 4;
   font-family: var(--font-mono);
   font-size: 13px;
+  font-weight: 400;
+  font-style: normal;
+  font-kerning: none;
+  font-synthesis: none;
   line-height: 1.55;
   letter-spacing: 0;
   font-variant-ligatures: none;
@@ -981,6 +989,18 @@ th {
   overflow: hidden;
   background: transparent;
   color: var(--text);
+}
+
+/*
+ * The highlight layer sits directly behind the transparent textarea.  Every
+ * token must retain the textarea's glyph advance; otherwise a bold or italic
+ * token makes the visible text drift away from the native caret.
+ */
+.sql-highlight span {
+  font: inherit;
+  font-kerning: inherit;
+  font-synthesis: inherit;
+  letter-spacing: inherit;
 }
 
 #sqlInput {
@@ -1140,12 +1160,12 @@ th {
   text-align: right;
 }
 
-.sql-keyword { color: var(--accent-dark); font-weight: 700; }
-.sql-type { color: #73550d; font-weight: 650; }
-.sql-function { color: #6f4f00; font-weight: 650; }
+.sql-keyword { color: var(--accent-dark); }
+.sql-type { color: #73550d; }
+.sql-function { color: #6f4f00; }
 .sql-string { color: #a31515; }
 .sql-number { color: #098658; }
-.sql-comment { color: #12805c; font-style: italic; }
+.sql-comment { color: #12805c; }
 .sql-operator { color: #5d6675; }
 .sql-identifier { color: #475569; }
 

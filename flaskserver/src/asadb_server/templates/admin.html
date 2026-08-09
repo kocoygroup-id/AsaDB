@@ -8,80 +8,92 @@
   <link rel="stylesheet" href="{{ url_for('panel.public_panel_asset', asset_path='style.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='server.css') }}">
 </head>
-<body>
-  <header class="topbar">
-    <div>
-      <strong>AsaDB Server Admin</strong>
-      <span>node {{ node_id }}</span>
-    </div>
-    <nav>
-      <a href="/">AsAPanel</a>
-      <a href="/logout">Logout</a>
+<body class="server-admin">
+  <header class="server-admin-topbar">
+    <a class="server-admin-brand" href="/" aria-label="Open AsAPanel">
+      <img src="{{ url_for('panel.public_panel_asset', asset_path='asadb-logo.png') }}" alt="">
+      <span><strong>AsAPanel</strong><small>Server administration</small></span>
+    </a>
+    <nav aria-label="Server administration navigation">
+      <a href="/">Workspace</a>
+      <a href="/mode">Switch workspace</a>
+      <a class="danger-link" href="/logout">Logout</a>
     </nav>
   </header>
-  <main class="admin-grid">
-    <section class="card span-2">
-      <div class="section-title">
-        <h2>Database files</h2>
-        <button data-action="reload">Refresh</button>
+  <main class="server-admin-main">
+    <section class="server-admin-intro">
+      <div>
+        <p class="eyebrow">AsaDB control plane</p>
+        <h1>Server administration</h1>
+        <p>Manage registered database files, access roles, cluster members, and operational state from one place.</p>
       </div>
-      <form id="database-form" class="inline-form">
-        <input name="id" placeholder="id, e.g. main" required>
-        <input name="filename" placeholder="data.asa" required>
-        <input name="logicalDatabase" placeholder="replication DB (optional)">
-        <input name="replicaNodes" placeholder="replicas: node-2,node-3">
-        <button>Register</button>
-      </form>
-      <div id="databases" class="table-wrap"></div>
+      <dl class="server-admin-facts">
+        <div><dt>This node</dt><dd>{{ node_id }}</dd></div>
+        <div><dt>Control plane</dt><dd>Authenticated</dd></div>
+      </dl>
     </section>
 
-    <section class="card">
-      <h2>Users & RBAC</h2>
-      <form id="user-form">
-        <input name="username" placeholder="username" required>
-        <input name="password" type="password" placeholder="password (8+)" required>
-        <select name="role">
+    <section class="card admin-card admin-databases">
+      <div class="admin-section-heading">
+        <div><p class="eyebrow">Storage</p><h2>Database files</h2><p>Register the database file that this server can supervise.</p></div>
+        <button class="secondary-action" data-action="reload" type="button">Refresh</button>
+      </div>
+      <form id="database-form" class="admin-form database-form">
+        <label><span>Database ID</span><input name="id" placeholder="main" required></label>
+        <label><span>File name</span><input name="filename" placeholder="data.asa" required></label>
+        <label><span>Replication database <em>optional</em></span><input name="logicalDatabase" placeholder="production"></label>
+        <label><span>Replica nodes <em>optional</em></span><input name="replicaNodes" placeholder="node-2, node-3"></label>
+        <button class="primary" type="submit">Register database</button>
+      </form>
+      <div id="databases" class="table-wrap admin-data" aria-live="polite"></div>
+    </section>
+
+    <section class="card admin-card">
+      <div class="admin-section-heading compact"><div><p class="eyebrow">Access</p><h2>Users &amp; roles</h2><p>Give each account the least privilege it needs.</p></div></div>
+      <form id="user-form" class="admin-form stacked-form">
+        <label><span>Username</span><input name="username" placeholder="e.g. analyst" required></label>
+        <label><span>Password</span><input name="password" type="password" placeholder="At least 8 characters" required></label>
+        <label><span>Role</span><select name="role">
           <option>reader</option>
           <option>writer</option>
           <option>operator</option>
           <option>replicator</option>
           <option>admin</option>
-        </select>
-        <button>Create user</button>
+        </select></label>
+        <button class="primary" type="submit">Create user</button>
       </form>
-      <pre id="users"></pre>
+      <div id="users" class="table-wrap admin-data" aria-live="polite"></div>
     </section>
 
-    <section class="card">
-      <h2>Cluster nodes</h2>
-      <form id="node-form">
-        <input name="id" placeholder="node-2" required>
-        <input name="url" placeholder="https://node-2.example" required>
-        <button>Add node</button>
+    <section class="card admin-card">
+      <div class="admin-section-heading compact"><div><p class="eyebrow">Topology</p><h2>Cluster nodes</h2><p>Register known peers before assigning replica roles.</p></div></div>
+      <form id="node-form" class="admin-form stacked-form">
+        <label><span>Node ID</span><input name="id" placeholder="node-2" required></label>
+        <label><span>Server URL</span><input name="url" placeholder="https://node-2.example" required></label>
+        <button class="primary" type="submit">Add node</button>
       </form>
-      <pre id="nodes"></pre>
+      <div id="nodes" class="table-wrap admin-data" aria-live="polite"></div>
     </section>
 
-    <section class="card">
-      <h2>Workers</h2>
-      <pre id="workers"></pre>
+    <section class="card admin-card">
+      <div class="admin-section-heading compact"><div><p class="eyebrow">Runtime</p><h2>Workers</h2><p>Backend process health for every registered database.</p></div></div>
+      <div id="workers" class="table-wrap admin-data" aria-live="polite"></div>
     </section>
 
-    <section class="card">
-      <h2>Jobs & progress</h2>
-      <pre id="jobs"></pre>
+    <section class="card admin-card">
+      <div class="admin-section-heading compact"><div><p class="eyebrow">Operations</p><h2>Jobs &amp; progress</h2><p>Background work is retained here until it completes or fails.</p></div></div>
+      <div id="jobs" class="table-wrap admin-data" aria-live="polite"></div>
     </section>
 
-    <section class="card span-2">
-      <h2>Mutable configuration</h2>
-      <p>Saved to <code>server-state/config.json</code>. Restart the service after changes.</p>
+    <section class="card admin-card admin-wide">
+      <div class="admin-section-heading"><div><p class="eyebrow">Configuration</p><h2>Mutable configuration</h2><p>Saved to <code>server-state/config.json</code>. Restart the service after changing it.</p></div></div>
       <textarea id="config" rows="12"></textarea>
-      <button id="save-config">Save configuration</button>
+      <button id="save-config" class="primary" type="button">Save configuration</button>
     </section>
 
-    <section class="card span-2">
-      <h2>Audit</h2>
-      <pre id="audit"></pre>
+    <section class="card admin-card admin-wide">
+      <div class="admin-section-heading"><div><p class="eyebrow">Audit</p><h2>Recent activity</h2><p>Latest server-side actions, shown as an immutable event feed.</p></div></div>
+      <pre id="audit" class="admin-json" aria-live="polite"></pre>
     </section>
   </main>
   <script src="{{ url_for('static', filename='admin.js') }}"></script>

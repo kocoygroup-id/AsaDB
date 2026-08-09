@@ -243,15 +243,15 @@ def panel_root():
     server_bar = f"""
     <aside id="asadb-server-bar" class="asadb-server-bar" aria-label="AsaDB workspace status">
       <strong>{escape(mode_name)}</strong>
-      <span>File: <b>{escape(database_id)}</b></span>
-      <span>User: <b>{escape(str(user['username']))}</b></span>
-      <span>Node: <b>{escape(ext('asadb_settings').node_id)}</b></span>
-      <nav>{admin_link}<a href="/mode">Switch workspace</a> · <a href="/logout">Logout</a></nav>
+      <span>File <b>{escape(database_id)}</b></span>
+      <span>User <b>{escape(str(user['username']))}</b></span>
+      <span>Node <b>{escape(ext('asadb_settings').node_id)}</b></span>
+      <nav>{admin_link}<a href="/mode">Switch workspace</a><a href="/logout">Logout</a></nav>
     </aside>
     """
     server_css = '<link rel="stylesheet" href="/static/server.css">'
     html = html.replace("</head>", server_css + "\n</head>")
-    html = html.replace("</body>", server_bar + "\n</body>")
+    html = html.replace('<main class="main">', '<main class="main">' + server_bar, 1)
     return Response(html, mimetype="text/html")
 
 

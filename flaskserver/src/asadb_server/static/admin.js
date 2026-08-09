@@ -14,6 +14,63 @@ function pretty(value) {
   return JSON.stringify(value, null, 2);
 }
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[character]);
+}
+
+function badge(label, state = "") {
+  return `<span class="admin-badge ${escapeHtml(state)}">${escapeHtml(label)}</span>`;
+}
+
+function empty(message) {
+  return `<p class="admin-empty">${escapeHtml(message)}</p>`;
+}
+
+function table(headings, rows, emptyMessage) {
+  if (!rows.length) return empty(emptyMessage);
+  return `<table><thead><tr>${headings.map(heading => `<th>${escapeHtml(heading)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "—";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function renderUsers(users) {
+  return table(["User", "Role & scope", "Status"], users.map(user => {
+    const bindings = Array.isArray(user.bindings) ? user.bindings : [];
+    const roles = bindings.map(binding => `${escapeHtml(binding.role || "reader")} · ${escapeHtml(binding.scope || "*")}`).join("<br>") || "reader · *";
+    return `<tr><td><strong>${escapeHtml(user.username)}</strong></td><td>${roles}</td><td>${badge(user.enabled ? "Enabled" : "Disabled", user.enabled ? "ok" : "danger")}</td></tr>`;
+  }), "No user accounts are registered.");
+}
+
+function renderNodes(nodes) {
+  return table(["Node", "Address", "State"], nodes.map(node =>
+    `<tr><td><strong>${escapeHtml(node.id)}</strong>${node.local ? " <span class=\"admin-badge\">local</span>" : ""}</td><td><code>${escapeHtml(node.url || "—")}</code></td><td>${badge(node.status || "unknown", node.status === "online" ? "ok" : "warn")}</td></tr>`
+  ), "No cluster nodes are registered.");
+}
+
+function renderWorkers(databases) {
+  return table(["Database", "Role", "Backend"], databases.map(database => {
+    const online = Boolean(database.backend?.alive);
+    return `<tr><td><strong>${escapeHtml(database.id)}</strong></td><td>${escapeHtml(database.localRole || "primary")}</td><td>${badge(online ? "Online" : "Stopped", online ? "ok" : "warn")}</td></tr>`;
+  }), "No database workers are registered.");
+}
+
+function renderJobs(jobs) {
+  return table(["Job", "State", "Progress", "Message"], jobs.map(job => {
+    const state = String(job.status || "unknown");
+    const stateClass = state === "completed" ? "ok" : ["failed", "cancelled", "interrupted"].includes(state) ? "danger" : "warn";
+    const progress = Number(job.progress);
+    return `<tr><td><code>${escapeHtml(job.kind || job.id || "job")}</code></td><td>${badge(state, stateClass)}</td><td>${Number.isFinite(progress) ? `${Math.round(progress)}%` : "—"}</td><td>${escapeHtml(job.message || "—")}</td></tr>`;
+  }), "No background jobs are active.");
+}
+
 async function loadAll() {
   const [dbs, users, nodes, jobs, config, audit] = await Promise.all([
     api("/api/v1/databases"),
@@ -23,20 +80,18 @@ async function loadAll() {
     api("/api/v1/config"),
     api("/api/v1/audit?limit=100")
   ]);
-  document.getElementById("databases").innerHTML = `
-    <table><thead><tr><th>ID</th><th>File</th><th>Role</th><th>Backend</th><th>Panel</th></tr></thead>
-    <tbody>${dbs.databases.map(db => `<tr>
-      <td>${db.id}</td><td>${db.filename}</td><td>${db.localRole}</td>
-      <td>${db.backend?.alive ? "online" : "stopped"}
-        ${db.replicationLogicalDatabase ? `· repl ${db.replicationLogicalDatabase}` : ""}</td>
-      <td><a href="/panel/select/${encodeURIComponent(db.id)}">Open</a></td>
-    </tr>`).join("")}</tbody></table>`;
-  document.getElementById("users").textContent = pretty(users.users);
-  document.getElementById("nodes").textContent = pretty(nodes.nodes);
-  document.getElementById("jobs").textContent = pretty(jobs.jobs);
-  document.getElementById("workers").textContent = pretty(
-    dbs.databases.map(x => ({ id: x.id, backend: x.backend }))
+  document.getElementById("databases").innerHTML = table(
+    ["Database", "File", "Size", "Role", "Backend", "Workspace"],
+    dbs.databases.map(db => {
+      const online = Boolean(db.backend?.alive);
+      return `<tr><td><strong>${escapeHtml(db.id)}</strong>${db.replicationLogicalDatabase ? `<br><small>replication: ${escapeHtml(db.replicationLogicalDatabase)}</small>` : ""}</td><td><code>${escapeHtml(db.filename)}</code></td><td>${formatBytes(db.sizeBytes)}</td><td>${escapeHtml(db.localRole || "primary")}</td><td>${badge(online ? "Online" : "Stopped", online ? "ok" : "warn")}</td><td><a href="/panel/select/${encodeURIComponent(db.id)}">Open</a></td></tr>`;
+    }),
+    "No database files are registered."
   );
+  document.getElementById("users").innerHTML = renderUsers(users.users || []);
+  document.getElementById("nodes").innerHTML = renderNodes(nodes.nodes || []);
+  document.getElementById("jobs").innerHTML = renderJobs(jobs.jobs || []);
+  document.getElementById("workers").innerHTML = renderWorkers(dbs.databases || []);
   document.getElementById("config").value = pretty(config.config);
   document.getElementById("audit").textContent = pretty(audit.events);
 }
