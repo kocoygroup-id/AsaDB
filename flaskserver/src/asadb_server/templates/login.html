@@ -18,9 +18,9 @@
     <form method="post">
       <label>Username<input name="username" required autofocus autocomplete="username"></label>
       <label>Password<input name="password" type="password" required autocomplete="current-password"></label>
-      <button class="primary" type="submit">Masuk dan pilih workspace</button>
+      <button class="primary" type="submit">Masuk ke Server Workspace</button>
     </form>
-    {% if local_workspace_available %}<small>Local Workspace tersedia dari perangkat ini setelah login.</small>{% else %}<small>Local Workspace hanya dapat dipilih pada loopback yang diizinkan administrator.</small>{% endif %}
+    {% if local_workspace_available %}<small>Server Workspace memakai backend Prolog secara default. Local Workspace tetap tersedia dari perangkat ini lewat Switch workspace.</small>{% else %}<small>Server Workspace memakai backend Prolog secara default. Local Workspace hanya dapat dipilih pada loopback yang diizinkan administrator.</small>{% endif %}
   </main>
 </body>
 </html>

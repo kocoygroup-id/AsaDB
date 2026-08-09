@@ -86,11 +86,19 @@ def login_page():
             return render_template("login.html", error=error.message), error.status
         limiter.success(limit_key)
         session["asadb_auth"] = token
-        # A login deliberately does not infer a workspace.  The following
-        # screen makes the browser's Local/Server context explicit and keeps
-        # the indicator accurate if the user switches later.
-        session.pop("asadb_workspace_mode", None)
-        response = redirect(url_for("panel.mode_page"))
+        # Server Workspace is the safe production default for the unified
+        # launcher.  It makes `swipl asadb` reach the supervised Prolog
+        # backend immediately after authentication instead of silently
+        # falling back to the browser sandbox.  Local Workspace remains an
+        # explicit, authenticated choice from the workspace switcher.
+        if ext("asadb_registry").list():
+            session["asadb_workspace_mode"] = "server"
+            response = redirect(url_for("panel.panel_root"))
+        else:
+            # An explicitly initialized control plane without a database must
+            # still be able to reach the mode/admin flow and register one.
+            session.pop("asadb_workspace_mode", None)
+            response = redirect(url_for("panel.mode_page"))
         response.set_cookie(
             "asadb_auth",
             token,
@@ -241,7 +249,7 @@ def panel_root():
         else ""
     )
     server_bar = f"""
-    <aside id="asadb-server-bar" class="asadb-server-bar" aria-label="AsaDB workspace status">
+    <aside id="asadb-server-bar" class="asadb-server-bar" data-workspace-mode="{escape(workspace_mode)}" aria-label="AsaDB workspace status">
       <strong>{escape(mode_name)}</strong>
       <span>File <b>{escape(database_id)}</b></span>
       <span>User <b>{escape(str(user['username']))}</b></span>

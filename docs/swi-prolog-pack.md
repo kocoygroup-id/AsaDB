@@ -104,9 +104,13 @@ official Prolog backend retains SQL, storage, transactions, backup, import,
 and export authority.
 
 The first start asks for administrator credentials, then opens
-`http://127.0.0.1:7879/login`. Login always precedes workspace selection.
-Local Workspace is visible only on an allowed loopback browser and remains
-authenticated; use the explicit local CLI below for no-login terminal work.
+`http://127.0.0.1:7879/login`. Login always precedes workspace access.
+After login, a registered database opens directly in Server Workspace, which
+uses the supervised Prolog backend. Local Workspace is visible only on an
+allowed loopback browser and remains an explicit authenticated switch; use the
+local CLI below for no-login terminal work.
+If the backend health check fails, Server Workspace fails closed instead of
+writing to the browser sandbox.
 Maintenance commands are also cross-platform:
 
 ```sh

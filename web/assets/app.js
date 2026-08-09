@@ -143,6 +143,7 @@ const I18N = {
     'mode.detecting': 'Mode: mendeteksi...',
     'mode.backend': 'Mode: backend Prolog online',
     'mode.sandbox': 'Mode: sandbox browser',
+    'mode.unavailable': 'Mode: backend Prolog offline',
     'state.unavailable': 'Tidak tersedia',
     'state.offline': 'Offline',
     'state.pending': 'Tertunda',
@@ -204,6 +205,7 @@ const I18N = {
     'table.tablesShown': '{shown} dari {total} tabel ditampilkan',
     'log.connected': 'Terhubung ke engine Prolog AsaDB lokal.',
     'log.sandbox': 'Backend tidak terdeteksi; memakai sandbox browser lokal.',
+    'log.backendUnavailable': 'Backend Prolog offline; Server Workspace menonaktifkan sandbox browser.',
     'log.dropFailed': 'Penghapusan {kind} {name} gagal. Daftar lokal tidak diubah.',
     'log.dropVerifyFailed': 'Backend belum bisa memastikan {kind} {name} terhapus. Daftar lokal dipertahankan.',
     'log.dropped': '{kind} {name} berhasil dihapus.',
@@ -357,6 +359,7 @@ const I18N = {
     'mode.detecting': 'Mode: detecting...',
     'mode.backend': 'Mode: Prolog backend online',
     'mode.sandbox': 'Mode: browser sandbox',
+    'mode.unavailable': 'Mode: Prolog backend offline',
     'state.unavailable': 'Unavailable',
     'state.offline': 'Offline',
     'state.pending': 'Pending',
@@ -418,6 +421,7 @@ const I18N = {
     'table.tablesShown': '{shown} of {total} tables shown',
     'log.connected': 'Connected to the local Prolog AsaDB engine.',
     'log.sandbox': 'No backend detected; using the local browser sandbox.',
+    'log.backendUnavailable': 'Prolog backend offline; Server Workspace has disabled the browser sandbox.',
     'log.dropFailed': 'Failed to drop {kind} {name}. The local list was not changed.',
     'log.dropVerifyFailed': 'The backend could not confirm that {kind} {name} was dropped. The local list was preserved.',
     'log.dropped': 'Dropped {kind} {name}.',
@@ -571,6 +575,7 @@ const I18N = {
     'mode.detecting': 'モード: 検出中...',
     'mode.backend': 'モード: Prolog バックエンド接続中',
     'mode.sandbox': 'モード: ブラウザーサンドボックス',
+    'mode.unavailable': 'モード: Prolog バックエンドオフライン',
     'state.unavailable': '利用不可',
     'state.offline': 'オフライン',
     'state.pending': '保留中',
@@ -632,6 +637,7 @@ const I18N = {
     'table.tablesShown': '{total} テーブル中 {shown} テーブルを表示',
     'log.connected': 'ローカル Prolog AsaDB エンジンに接続しました。',
     'log.sandbox': 'バックエンドが見つからないため、ローカルのブラウザーサンドボックスを使用します。',
+    'log.backendUnavailable': 'Prolog バックエンドがオフラインのため、Server Workspace はブラウザーサンドボックスを無効にしました。',
     'log.dropFailed': '{kind} {name} を削除できませんでした。ローカル一覧は変更していません。',
     'log.dropVerifyFailed': '{kind} {name} の削除をバックエンドで確認できませんでした。ローカル一覧を保持しました。',
     'log.dropped': '{kind} {name} を削除しました。',
@@ -912,6 +918,7 @@ const metadataCache = $('metadataCache');
 const metadataCheckpoint = $('metadataCheckpoint');
 const metadataReservoir = $('metadataReservoir');
 const languageSwitcher = $('languageSwitcher');
+const serverWorkspace = document.getElementById('asadb-server-bar')?.dataset.workspaceMode === 'server';
 
 const views = {
   sql: $('sqlView'),
@@ -1055,7 +1062,7 @@ function updatePageTitle() {
 }
 
 function updateEngineStatus() {
-  const key = !engineCheckCompleted ? 'mode.detecting' : backendOnline ? 'mode.backend' : 'mode.sandbox';
+  const key = !engineCheckCompleted ? 'mode.detecting' : backendOnline ? 'mode.backend' : serverWorkspace ? 'mode.unavailable' : 'mode.sandbox';
   engineStatus.textContent = t(key);
   engineStatus.className = !engineCheckCompleted ? 'status muted' : backendOnline ? 'status ok' : 'status warn';
 }
@@ -3475,7 +3482,7 @@ async function checkEngine() {
   }
   engineCheckCompleted = true;
   updateEngineStatus();
-  log(backendOnline ? t('log.connected') : t('log.sandbox'));
+  log(backendOnline ? t('log.connected') : serverWorkspace ? t('log.backendUnavailable') : t('log.sandbox'));
   if (backendOnline) {
     refreshDatabaseMetadata().catch(() => renderDatabaseMetadata(null));
     resumeActiveReservoirJob().catch(() => null);
@@ -3843,6 +3850,9 @@ function applySandboxAlter(db, tableName, operations) {
 }
 
 function sandboxExec(sql) {
+  if (serverWorkspace && !backendOnline) {
+    return { results: [{ status: 'error', message: t('log.backendUnavailable') }] };
+  }
   const results = [];
   for (const stmt of splitStatementsDetailed(sql)) {
     const line = stmt.line;
@@ -4406,6 +4416,11 @@ async function selectDatabaseByName(nextDb) {
       log(t('log.databaseSelectFallback', { error: err.message }));
     }
   }
+  if (serverWorkspace && !backendOnline) {
+    const unavailable = { results: [{ status: 'error', message: t('log.backendUnavailable') }] };
+    renderResults(unavailable.results);
+    return;
+  }
   sandbox.currentDb = nextDb;
   sandbox.dbs[nextDb] ||= {};
   sandbox.views ||= {};
@@ -4431,6 +4446,12 @@ async function saveCurrentDatabase() {
       updateEngineStatus();
       log(t('log.databaseSaveFallback', { error: err.message }));
     }
+  }
+
+  if (serverWorkspace && !backendOnline) {
+    const unavailable = { results: [{ status: 'error', message: t('log.backendUnavailable') }] };
+    renderResults(unavailable.results);
+    return;
   }
 
   saveSandbox();
@@ -4861,6 +4882,12 @@ async function saveCreateTable(event) {
     }
   }
 
+  if (serverWorkspace && !backendOnline) {
+    const unavailable = { results: [{ status: 'error', message: t('log.backendUnavailable') }] };
+    renderResults(unavailable.results);
+    return;
+  }
+
   sandbox.dbs[activeDb] ||= {};
   sandbox.dbs[activeDb][tableName] = tableRecord;
   saveSandbox();
@@ -5095,6 +5122,9 @@ async function submitProductionBackupPayload(file) {
 }
 
 async function importFromBuffer(name, rawBuffer, selectedFormat) {
+  if (serverWorkspace && !backendOnline) {
+    throw new Error(t('log.backendUnavailable'));
+  }
   let buffer = rawBuffer;
   let cleanName = name;
   if (/\.gz$/i.test(cleanName)) {
@@ -5242,6 +5272,9 @@ function mergeSandbox(incoming, replace) {
 }
 
 function upsertMatrixTable(tableName, matrix, mode) {
+  if (serverWorkspace && !backendOnline) {
+    throw new Error(t('log.backendUnavailable'));
+  }
   const activeDb = ensureCurrentDb('import table');
   if (!activeDb) throw new Error(t('database.selectFirst'));
   const rows = matrix.filter(row => row.some(cell => String(cell ?? '').trim() !== ''));
@@ -5363,6 +5396,12 @@ function convertCopyBlocks(sql) {
 async function exportDatabase() {
   const format = checkedValue('exportFormat');
   const output = checkedValue('exportOutput');
+  if (serverWorkspace && !backendOnline) {
+    const message = t('log.backendUnavailable');
+    exportPreview.textContent = `${ASA_ERROR_LABEL}: ${message}`;
+    log(t('log.exportFailed', { error: message }));
+    return;
+  }
   if (backendOnline) {
     try {
       exportDatabaseFromBackend(output, format);

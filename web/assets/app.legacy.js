@@ -171,6 +171,7 @@ var I18N = {
     'mode.detecting': 'Mode: mendeteksi...',
     'mode.backend': 'Mode: backend Prolog online',
     'mode.sandbox': 'Mode: sandbox browser',
+    'mode.unavailable': 'Mode: backend Prolog offline',
     'state.unavailable': 'Tidak tersedia',
     'state.offline': 'Offline',
     'state.pending': 'Tertunda',
@@ -232,6 +233,7 @@ var I18N = {
     'table.tablesShown': '{shown} dari {total} tabel ditampilkan',
     'log.connected': 'Terhubung ke engine Prolog AsaDB lokal.',
     'log.sandbox': 'Backend tidak terdeteksi; memakai sandbox browser lokal.',
+    'log.backendUnavailable': 'Backend Prolog offline; Server Workspace menonaktifkan sandbox browser.',
     'log.dropFailed': 'Penghapusan {kind} {name} gagal. Daftar lokal tidak diubah.',
     'log.dropVerifyFailed': 'Backend belum bisa memastikan {kind} {name} terhapus. Daftar lokal dipertahankan.',
     'log.dropped': '{kind} {name} berhasil dihapus.',
@@ -385,6 +387,7 @@ var I18N = {
     'mode.detecting': 'Mode: detecting...',
     'mode.backend': 'Mode: Prolog backend online',
     'mode.sandbox': 'Mode: browser sandbox',
+    'mode.unavailable': 'Mode: Prolog backend offline',
     'state.unavailable': 'Unavailable',
     'state.offline': 'Offline',
     'state.pending': 'Pending',
@@ -446,6 +449,7 @@ var I18N = {
     'table.tablesShown': '{shown} of {total} tables shown',
     'log.connected': 'Connected to the local Prolog AsaDB engine.',
     'log.sandbox': 'No backend detected; using the local browser sandbox.',
+    'log.backendUnavailable': 'Prolog backend offline; Server Workspace has disabled the browser sandbox.',
     'log.dropFailed': 'Failed to drop {kind} {name}. The local list was not changed.',
     'log.dropVerifyFailed': 'The backend could not confirm that {kind} {name} was dropped. The local list was preserved.',
     'log.dropped': 'Dropped {kind} {name}.',
@@ -599,6 +603,7 @@ var I18N = {
     'mode.detecting': 'モード: 検出中...',
     'mode.backend': 'モード: Prolog バックエンド接続中',
     'mode.sandbox': 'モード: ブラウザーサンドボックス',
+    'mode.unavailable': 'モード: Prolog バックエンドオフライン',
     'state.unavailable': '利用不可',
     'state.offline': 'オフライン',
     'state.pending': '保留中',
@@ -660,6 +665,7 @@ var I18N = {
     'table.tablesShown': '{total} テーブル中 {shown} テーブルを表示',
     'log.connected': 'ローカル Prolog AsaDB エンジンに接続しました。',
     'log.sandbox': 'バックエンドが見つからないため、ローカルのブラウザーサンドボックスを使用します。',
+    'log.backendUnavailable': 'Prolog バックエンドがオフラインのため、Server Workspace はブラウザーサンドボックスを無効にしました。',
     'log.dropFailed': '{kind} {name} を削除できませんでした。ローカル一覧は変更していません。',
     'log.dropVerifyFailed': '{kind} {name} の削除をバックエンドで確認できませんでした。ローカル一覧を保持しました。',
     'log.dropped': '{kind} {name} を削除しました。',
@@ -865,6 +871,7 @@ var createComment = $('createComment');
 var createAllAutoIncrement = $('createAllAutoIncrement');
 var createAutoIncrementHelpBtn = $('createAutoIncrementHelpBtn');
 var autoIncrementHelpPopover = $('autoIncrementHelpPopover');
+var serverWorkspace = Boolean(document.getElementById('asadb-server-bar') && document.getElementById('asadb-server-bar').getAttribute('data-workspace-mode') === 'server');
 var backendOnline = false;
 var engineCheckCompleted = false;
 var selectedTable = '';
@@ -946,7 +953,7 @@ function updatePageTitle() {
   pageTitle.textContent = t(key);
 }
 function updateEngineStatus() {
-  var key = !engineCheckCompleted ? 'mode.detecting' : backendOnline ? 'mode.backend' : 'mode.sandbox';
+  var key = !engineCheckCompleted ? 'mode.detecting' : backendOnline ? 'mode.backend' : serverWorkspace ? 'mode.unavailable' : 'mode.sandbox';
   engineStatus.textContent = t(key);
   engineStatus.className = !engineCheckCompleted ? 'status muted' : backendOnline ? 'status ok' : 'status warn';
 }
@@ -4334,7 +4341,7 @@ function _checkEngine() {
         case 8:
           engineCheckCompleted = true;
           updateEngineStatus();
-          log(backendOnline ? t('log.connected') : t('log.sandbox'));
+          log(backendOnline ? t('log.connected') : serverWorkspace ? t('log.backendUnavailable') : t('log.sandbox'));
           if (backendOnline) {
             refreshDatabaseMetadata().catch(function () {
               return renderDatabaseMetadata(null);
@@ -4875,6 +4882,14 @@ function applySandboxAlter(db, tableName, operations) {
   return '';
 }
 function sandboxExec(sql) {
+  if (serverWorkspace && !backendOnline) {
+    return {
+      results: [{
+        status: 'error',
+        message: t('log.backendUnavailable')
+      }]
+    };
+  }
   var results = [];
   var _iterator17 = _createForOfIteratorHelper(splitStatementsDetailed(sql)),
     _step17;
@@ -5914,6 +5929,13 @@ function _selectDatabaseByName() {
             error: _t25.message
           }));
         case 6:
+          if (serverWorkspace && !backendOnline) {
+            renderResults([{
+              status: 'error',
+              message: t('log.backendUnavailable')
+            }]);
+            return _context27.a(2);
+          }
           sandbox.currentDb = nextDb;
           (_sandbox$dbs9 = sandbox.dbs)[nextDb] || (_sandbox$dbs9[nextDb] = {});
           (_sandbox6 = sandbox).views || (_sandbox6.views = {});
@@ -5972,6 +5994,13 @@ function _saveCurrentDatabase() {
             error: _t26.message
           }));
         case 6:
+          if (serverWorkspace && !backendOnline) {
+            renderResults([{
+              status: 'error',
+              message: t('log.backendUnavailable')
+            }]);
+            return _context28.a(2);
+          }
           saveSandbox();
           if (!data) data = {
             results: [{
@@ -6738,6 +6767,13 @@ function _saveCreateTable() {
             error: _t33.message
           }));
         case 12:
+          if (serverWorkspace && !backendOnline) {
+            renderResults([{
+              status: 'error',
+              message: t('log.backendUnavailable')
+            }]);
+            return _context34.a(2);
+          }
           (_sandbox$dbs0 = sandbox.dbs)[activeDb] || (_sandbox$dbs0[activeDb] = {});
           sandbox.dbs[activeDb][tableName] = tableRecord;
           saveSandbox();
@@ -7164,6 +7200,9 @@ function _importFromBuffer() {
     return _regenerator().w(function (_context39) {
       while (1) switch (_context39.n) {
         case 0:
+          if (serverWorkspace && !backendOnline) {
+            throw new Error(t('log.backendUnavailable'));
+          }
           buffer = rawBuffer;
           cleanName = name;
           if (!/\.gz$/i.test(cleanName)) {
@@ -7467,6 +7506,9 @@ function mergeSandbox(incoming, replace) {
   sandbox.currentDb = incoming.currentDb || sandbox.currentDb;
 }
 function upsertMatrixTable(tableName, matrix, mode) {
+  if (serverWorkspace && !backendOnline) {
+    throw new Error(t('log.backendUnavailable'));
+  }
   var _sandbox$dbs7;
   var activeDb = ensureCurrentDb('import table');
   if (!activeDb) throw new Error(t('database.selectFirst'));
@@ -7650,6 +7692,13 @@ function _exportDatabase() {
         case 0:
           format = checkedValue('exportFormat');
           output = checkedValue('exportOutput');
+          if (serverWorkspace && !backendOnline) {
+            exportPreview.textContent = `${ASA_ERROR_LABEL}: ${t('log.backendUnavailable')}`;
+            log(t('log.exportFailed', {
+              error: t('log.backendUnavailable')
+            }));
+            return _context40.a(2);
+          }
           _context40.p = 1;
           _context40.n = 2;
           return buildExportPackage(format);

@@ -263,7 +263,7 @@ def start_portal(
         opener.start()
     click.echo(
         f"AsaDB portal is starting at http://{effective_host}:{effective_port}/login "
-        "(sign in, then choose Local Workspace or Server Workspace)."
+        "(sign in; Server Workspace opens by default; use Switch workspace for Local Workspace)."
     )
     serve_server(effective_host, effective_port, threads, development)
 

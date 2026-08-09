@@ -68,15 +68,18 @@ def test_health_and_password_login(monkeypatch, tmp_path: Path):
     assert logout.status_code == 200
     assert app.extensions["asadb_sessions"].store.read(session_record["id"]) is None
 
-    # The browser flow is intentionally login-first.  It selects a workspace
-    # only after credentials have been accepted, and Local Workspace is never
-    # a remote authentication bypass.
+    # The browser flow is intentionally login-first.  Server Workspace is the
+    # safe backend default after credentials are accepted, and Local Workspace
+    # is never a remote authentication bypass.
     browser_login = client.post(
         "/login",
         data={"username": "admin", "password": "very-secure-password"},
     )
     assert browser_login.status_code == 302
-    assert browser_login.headers["Location"].endswith("/mode")
+    assert browser_login.headers["Location"].endswith("/")
+    default_panel = client.get("/")
+    assert default_panel.status_code == 200
+    assert b"Server Workspace" in default_panel.data
     mode_page = client.get("/mode")
     assert mode_page.status_code == 200
     assert b"Local Workspace" in mode_page.data
