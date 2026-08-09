@@ -34,6 +34,7 @@ main :-
     run_native_storage_accelerator_assertions,
     run_logic_jit_assertions,
     run_drop_table_cleanup_assertions,
+    run_drop_database_assertions,
     run_catalog_multitable_assertions,
     run_critical_select_assertions,
     run_join_syntax_compat_assertions,
@@ -925,6 +926,58 @@ run_drop_table_cleanup_assertions :-
                table([table], [])),
     expect_sql('DROP TABLE IF EXISTS doomed;',
                ok(dropped_table(doomed))),
+    asadb_shutdown,
+    cleanup.
+
+% DROP DATABASE is both a catalog mutation and a destructive heap cleanup.
+% It must clear the selected database, publish the new TVCC generation, and
+% remain absent after restart; otherwise the panel can report a stale database
+% after the SQL command or Delete DB control has already returned success.
+run_drop_database_assertions :-
+    cleanup,
+    asadb_boot('tests/testdata.asa'),
+    Setup = 'CREATE DATABASE retained_db; CREATE DATABASE doomed_db; USE doomed_db; CREATE TABLE rows_to_remove (id INT PRIMARY KEY); INSERT INTO rows_to_remove VALUES (1);',
+    asadb_exec_sql(Setup, SetupResult),
+    ( result_has_error(SetupResult) ->
+        asadb_format_result(SetupResult),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ; true
+    ),
+    expect_sql('DROP DATABASE doomed_db;', ok(dropped_database(doomed_db))),
+    ( asadb_current_database(none) -> true
+    ; format('ASSERTION FAILED: DROP DATABASE left the removed database selected.~n', []),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    expect_sql('SHOW DATABASES;', table([database], [[retained_db]])),
+    size_file('tests/testdata.asa.wal', WalSize),
+    ( WalSize =:= 0 -> true
+    ; format('ASSERTION FAILED: DROP DATABASE was left WAL-only (~w bytes).~n', [WalSize]),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    asadb_shutdown,
+    asadb_boot('tests/testdata.asa'),
+    ( asadb_current_database(none) -> true
+    ; format('ASSERTION FAILED: dropped database selection survived restart.~n', []),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    expect_sql('SHOW DATABASES;', table([database], [[retained_db]])),
+    asadb_exec_sql('CREATE DATABASE doomed_db; USE doomed_db; SHOW TABLES;', Recreated),
+    ( Recreated = multi([ok(created_database(doomed_db)),
+                         ok(using_database(doomed_db)),
+                         table([table], [])]) -> true
+    ; format('ASSERTION FAILED: dropped database recreated with stale tables: ~w~n', [Recreated]),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
     asadb_shutdown,
     cleanup.
 

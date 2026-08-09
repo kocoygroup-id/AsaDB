@@ -2189,6 +2189,11 @@ assert_checkpoint_dirty :-
 
 paged_storage_action(create_table(_, _, _)).
 paged_storage_action(create_table(_, _, _, _)).
+% Database catalog changes must publish a checkpoint just like table changes.
+% Leaving DROP DATABASE in the WAL-only path made a completed destructive
+% command invisible to the next TVCC generation until a later unrelated save.
+paged_storage_action(create_db(_)).
+paged_storage_action(drop_db(_)).
 paged_storage_action(drop_table(_, _)).
 paged_storage_action(truncate_table(_, _)).
 paged_storage_action(insert_rows(_, _, _, _)).
