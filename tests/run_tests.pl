@@ -19,6 +19,7 @@ main :-
     run_alter_order_assertions,
     run_auto_increment_assertions,
     run_schema_integrity_assertions,
+    run_incremental_insert_assertions,
     run_order_by_duplicate_assertions,
     run_order_by_wildcard_assertions,
     run_order_by_filtered_projection_assertions,
@@ -265,6 +266,75 @@ expect_integrity_rejected(SQL) :-
       cleanup,
       halt(1)
     ).
+
+run_incremental_insert_assertions :-
+    cleanup,
+    asadb_boot('tests/testdata.asa'),
+    Setup = 'CREATE DATABASE incremental_insert_assert; USE incremental_insert_assert; CREATE TABLE parent (id INT PRIMARY KEY); CREATE TABLE child (id INT PRIMARY KEY, parent_id INT, CONSTRAINT child_parent FOREIGN KEY (parent_id) REFERENCES parent (id)); INSERT INTO parent VALUES (1), (2), (3);',
+    asadb_exec_sql(Setup, SetupResult),
+    ( result_has_error(SetupResult) ->
+        asadb_format_result(SetupResult),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ; true
+    ),
+    % A projected equality lookup materializes the persistent primary-key
+    % index.  Rejected INSERTs must probe it without invalidating it.
+    expect_sql('SELECT id FROM parent WHERE id = 2;', table([id], [[2]])),
+    expect_sql('SELECT id FROM parent WHERE id = 2;', table([id], [[2]])),
+    expect_sql('SELECT id FROM parent WHERE id = 2;', table([id], [[2]])),
+    asadb_record_manager:asadb_record_store_id(incremental_insert_assert,
+                                                parent, ParentStore),
+    asadb_record_manager:asadb_record_index_file(ParentStore, id, IndexFile),
+    asadb_storage_stats(BeforeStats),
+    get_dict(planner, BeforeStats, BeforePlanner),
+    get_dict(insert_validation_scans, BeforePlanner, Scans0),
+    get_dict(insert_index_probes, BeforePlanner, Probes0),
+    expect_integrity_rejected('INSERT INTO parent VALUES (2);'),
+    expect_integrity_rejected('INSERT INTO parent VALUES (2.0);'),
+    asadb_storage_stats(RejectedStats),
+    get_dict(planner, RejectedStats, RejectedPlanner),
+    get_dict(insert_validation_scans, RejectedPlanner, Scans0),
+    get_dict(insert_index_probes, RejectedPlanner, Probes1),
+    ( Probes1 > Probes0, exists_file(IndexFile) -> true
+    ; format('ASSERTION FAILED: indexed INSERT validation did not preserve/probe the index: ~w~n',
+             [RejectedPlanner]),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    expect_sql('SELECT id FROM parent ORDER BY id;',
+               table([id], [[1],[2],[3]])),
+    % New-batch uniqueness is checked before any page mutation.
+    expect_integrity_rejected('INSERT INTO parent VALUES (4), (4);'),
+    expect_integrity_rejected('INSERT INTO parent VALUES (5), (5.0);'),
+    expect_sql('SELECT id FROM parent ORDER BY id;',
+               table([id], [[1],[2],[3]])),
+    expect_integrity_rejected('INSERT INTO child VALUES (1, 99);'),
+    expect_sql('SELECT id FROM child;', table([id], [])),
+    expect_sql('INSERT INTO child VALUES (1, 2);', ok(inserted(child, 1))),
+    % A successful indexed-table INSERT invalidates the stale persistent file;
+    % the next indexed query will rebuild it from committed rows.
+    expect_sql('INSERT INTO parent VALUES (4);', ok(inserted(parent, 1))),
+    ( \+ exists_file(IndexFile) -> true
+    ; format('ASSERTION FAILED: successful INSERT left a stale B+Tree index.~n', []),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    expect_sql('SELECT id FROM parent WHERE id = 4;', table([id], [[4]])),
+    expect_sql('BEGIN;', ok(started_transaction)),
+    expect_sql('INSERT INTO parent VALUES (6);', ok(inserted(parent, 1))),
+    expect_sql('ROLLBACK;', ok(rolled_back)),
+    expect_sql('BEGIN;', ok(started_transaction)),
+    expect_sql('INSERT INTO parent VALUES (6);', ok(inserted(parent, 1))),
+    expect_sql('COMMIT;', ok(committed)),
+    expect_integrity_rejected('INSERT INTO parent VALUES (6);'),
+    expect_sql('SELECT id FROM parent ORDER BY id;',
+               table([id], [[1],[2],[3],[4],[6]])),
+    asadb_shutdown,
+    cleanup.
 
 run_order_by_duplicate_assertions :-
     cleanup,
@@ -605,6 +675,8 @@ run_logic_jit_assertions :-
     Query = 'SELECT id FROM truth_table WHERE enabled = 1 XOR blocked = 1 ORDER BY id;',
     expect_sql(Query, table([id], [[1],[3]])),
     expect_sql(Query, table([id], [[1],[3]])),
+    expect_sql(Query, table([id], [[1],[3]])),
+    expect_sql(Query, table([id], [[1],[3]])),
     expect_sql('SELECT id FROM truth_table WHERE enabled IS TRUE XOR blocked IS TRUE ORDER BY id;',
                table([id], [[1],[3]])),
     expect_sql('SELECT id FROM truth_table WHERE enabled IS UNKNOWN ORDER BY id;',
@@ -631,8 +703,8 @@ run_logic_jit_assertions :-
         cleanup,
         halt(1)
     ),
-    % Exercise eviction as well as hits: both caches must stay bounded even
-    % when an application emits many literal-specific query/filter shapes.
+    % Exercise cache pressure: SQL ASTs stay bounded, while one-off filter
+    % shapes remain interpreted instead of filling the compiled-plan cache.
     forall(between(1, 64, N),
            ( format(atom(SQL), 'SELECT id FROM truth_table WHERE id = ~d;', [N]),
              asadb_parse_sql(SQL, _),
@@ -640,7 +712,8 @@ run_logic_jit_assertions :-
              asadb_core:prepare_row_filter(Expression, _)
            )),
     % Refresh this hot query before adding more than half a cache worth of
-    % one-off shapes.  A true LRU must retain the reused query and filter.
+    % one-off shapes. The compiled filter remains resident because cold
+    % expressions never displace compiled plans.
     asadb_parse_sql(Query, _),
     HotExpression = xor(cmp('=', col(enabled), value(1)),
                         cmp('=', col(blocked), value(1))),
@@ -659,8 +732,12 @@ run_logic_jit_assertions :-
     get_dict(filter_cache_limit, BoundedJit, BoundedFilterLimit),
     get_dict(parse_hits, BoundedJit, ParseHitsBeforeReuse),
     get_dict(filter_hits, BoundedJit, FilterHitsBeforeReuse),
+    get_dict(filter_hotness_entries, BoundedJit, HotnessEntries),
+    get_dict(filter_hotness_limit, BoundedJit, HotnessLimit),
     ( SQLCacheEntries =:= SQLCacheLimit,
-      BoundedFilterEntries =:= BoundedFilterLimit ->
+      BoundedFilterEntries >= 1,
+      BoundedFilterEntries =< BoundedFilterLimit,
+      HotnessEntries =< HotnessLimit ->
         true
     ;   format('ASSERTION FAILED: Prolog JIT caches exceeded or missed their bounds: ~w.~n',
                [BoundedJit]),
@@ -668,7 +745,8 @@ run_logic_jit_assertions :-
         cleanup,
         halt(1)
     ),
-    % The refreshed hot plan is retained while one-off plans are evicted.
+    % The hot plan remains resident while one-off expressions are denied
+    % admission to the compiled-plan cache.
     % Query results must stay identical across the specialized path.
     expect_sql(Query, table([id], [[1],[3]])),
     asadb_storage_stats(RetainedStats),
@@ -678,14 +756,77 @@ run_logic_jit_assertions :-
     ( ParseHitsAfterReuse > ParseHitsBeforeReuse,
       FilterHitsAfterReuse > FilterHitsBeforeReuse ->
         true
-    ;   format('ASSERTION FAILED: hot JIT plans did not survive LRU pressure: ~w.~n',
+    ;   format('ASSERTION FAILED: hot JIT plans did not survive cache pressure: ~w.~n',
                [RetainedJit]),
         asadb_shutdown,
         cleanup,
         halt(1)
     ),
+    run_jit_hotness_and_concurrency_assertions,
     asadb_shutdown,
     cleanup.
+
+run_jit_hotness_and_concurrency_assertions :-
+    asadb_core:reset_logic_jit,
+    forall(between(1, 140, N),
+           ( Expression = cmp('=', col(id), value(N)),
+             asadb_core:prepare_row_filter(Expression, interpreted(Expression))
+           )),
+    asadb_storage_stats(ColdStats),
+    get_dict(jit, ColdStats, ColdJit),
+    get_dict(filter_cache_entries, ColdJit, 0),
+    get_dict(filter_specializations, ColdJit, 0),
+    get_dict(filter_hotness_entries, ColdJit, ColdEntries),
+    get_dict(filter_hotness_limit, ColdJit, ColdLimit),
+    ColdEntries =< ColdLimit,
+    Hot = cmp('=', col(id), value(999)),
+    asadb_core:prepare_row_filter(Hot, interpreted(Hot)),
+    asadb_core:prepare_row_filter(Hot, interpreted(Hot)),
+    SavedFilter = compiled(PlanId, Hot),
+    asadb_core:prepare_row_filter(Hot, SavedFilter),
+    asadb_storage_stats(CompiledStats),
+    get_dict(jit, CompiledStats, CompiledJit),
+    get_dict(filter_specializations, CompiledJit, Specializations0),
+    asadb_core:prepare_row_filter(Hot, compiled(PlanId, Hot)),
+    asadb_storage_stats(HitStats),
+    get_dict(jit, HitStats, HitJit),
+    get_dict(filter_specializations, HitJit, Specializations0),
+    findall(Thread,
+            ( between(1, 4, Worker),
+              thread_create(jit_cache_worker(Worker), Thread, [])
+            ),
+            Threads),
+    maplist(join_jit_thread, Threads),
+    % Eviction may happen after a query has prepared its filter handle.  The
+    % saved handle must retain interpreter-correct behavior without pinning an
+    % unbounded dynamic clause.
+    forall(between(1, 140, N),
+           ( Value is 10000 + N,
+             Expression = cmp('=', col(id), value(Value)),
+             asadb_core:prepare_row_filter(Expression, _),
+             asadb_core:prepare_row_filter(Expression, _),
+             asadb_core:prepare_row_filter(Expression, _)
+           )),
+    asadb_core:row_filter_matches(SavedFilter, row([id=999])),
+    \+ asadb_core:row_filter_matches(SavedFilter, row([id=998])),
+    asadb_storage_stats(ConcurrentStats),
+    get_dict(jit, ConcurrentStats, ConcurrentJit),
+    get_dict(filter_cache_entries, ConcurrentJit, ConcurrentEntries),
+    get_dict(filter_cache_limit, ConcurrentJit, ConcurrentLimit),
+    ConcurrentEntries =< ConcurrentLimit.
+
+jit_cache_worker(Worker) :-
+    forall(between(1, 500, N),
+           ( Value is Worker * 1000 + (N mod 8),
+             Expression = cmp('=', col(id), value(Value)),
+             asadb_core:prepare_row_filter(Expression, _)
+           )).
+
+join_jit_thread(Thread) :-
+    thread_join(Thread, Status),
+    ( Status == true -> true
+    ; throw(error(jit_worker_failed(Thread, Status), _))
+    ).
 
 run_drop_table_cleanup_assertions :-
     cleanup,
@@ -837,4 +978,5 @@ cleanup :-
     ( exists_file('tests/testdata.asa.meta') -> delete_file('tests/testdata.asa.meta') ; true ),
     ( exists_file('tests/testdata.asa.meta.tmp') -> delete_file('tests/testdata.asa.meta.tmp') ; true ),
     ( exists_file('tests/testdata.asa.meta.bak') -> delete_file('tests/testdata.asa.meta.bak') ; true ),
-    ( exists_directory('tests/testdata.asa.store') -> delete_directory_and_contents('tests/testdata.asa.store') ; true ).
+    ( exists_directory('tests/testdata.asa.store') -> delete_directory_and_contents('tests/testdata.asa.store') ; true ),
+    ( exists_directory('tests/testdata.asa.tvcc') -> delete_directory_and_contents('tests/testdata.asa.tvcc') ; true ).
