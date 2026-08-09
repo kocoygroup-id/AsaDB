@@ -26,6 +26,7 @@
     asadb_shutdown/0,
     asadb_save/0,
     asadb_exec_sql/2,
+    asadb_exec_sql_stop_on_error/2,
     asadb_exec_sql_limited/3,
     asadb_exec_sql_page/4,
     asadb_exec_sql_snapshot_limited/3,
@@ -946,6 +947,17 @@ asadb_exec_sql(SQL, Result) :-
         Result = multi(Results)
     )), Error, Result = error(runtime_error, Error)).
 
+% Transactional imports need a real stop boundary.  Parsing a bounded batch
+% once is substantially cheaper than reparsing every statement, but the
+% executor must not continue past the first failed statement when the caller
+% requested stop-on-error semantics.
+asadb_exec_sql_stop_on_error(SQL, Result) :-
+    catch(with_query_batch((
+        asadb_parse_sql(SQL, Statements),
+        execute_many_stop_on_error(Statements, Results),
+        Result = multi(Results)
+    )), Error, Result = error(runtime_error, Error)).
+
 asadb_exec_sql_limited(SQL, MaxRows, Result) :-
     catch(with_query_batch((
         asadb_parse_sql(SQL, Statements0),
@@ -1055,24 +1067,49 @@ end_query_batch(true) :-
 % Execution stays in the stateful core.  The SQL frontend only produces ASTs;
 % batching consecutive INSERT statements here retains the previous atomic
 % execution and checkpoint semantics.
-execute_many([], []).
-execute_many([insert(Table, Columns, Rows)|Stmts], [Result|Results]) :- !,
-    collect_insert_run(Stmts, Table, Columns, [Rows], RowGroups, Rest),
+execute_many([], []) :- !.
+execute_many(Statements, [Result|Results]) :-
+    execute_next_statement(Statements, Result, Rest),
+    execute_many(Rest, Results).
+
+execute_many_stop_on_error([], []) :- !.
+execute_many_stop_on_error(Statements, [Result|Results]) :-
+    execute_next_statement(Statements, Result, Rest),
+    ( execution_result_error(Result) -> Results = []
+    ; execute_many_stop_on_error(Rest, Results)
+    ).
+
+execute_next_statement([insert(Table, Columns, Rows)|Stmts], Result, Rest) :- !,
+    length(Rows, RowCount),
+    collect_insert_run(Stmts, Table, Columns, RowCount, [Rows], RowGroups, Rest),
     append(RowGroups, CombinedRows),
     once(catch(execute_statement(insert(Table, Columns, CombinedRows), Result),
                Error,
-               Result = error(runtime_error, Error))),
-    execute_many(Rest, Results).
-execute_many([Stmt|Stmts], [Result|Results]) :-
-    once(catch(execute_statement(Stmt, Result), Error, Result = error(runtime_error, Error))),
-    execute_many(Stmts, Results).
+               Result = error(runtime_error, Error))).
+execute_next_statement([Stmt|Stmts], Result, Stmts) :-
+    !,
+    once(catch(execute_statement(Stmt, Result), Error,
+               Result = error(runtime_error, Error))).
+
+execution_result_error(error(_, _)).
+
+% Consecutive INSERT statements are still coalesced for throughput, but never
+% into an unbounded mega-statement.  The old collector merged a complete SQL
+% dump into one row list; a 72k-row panel import consequently exhausted the
+% Reservoir worker stack before storage could checkpoint a bounded run.
+insert_run_row_limit(4096).
 
 collect_insert_run([insert(NextTable, NextColumns, NextRows)|Stmts],
-                   Table, Columns, Groups0, Groups, Rest) :-
+                   Table, Columns, RowCount0, Groups0, Groups, Rest) :-
     same_identifier(Table, NextTable),
-    same_identifier_list(Columns, NextColumns), !,
-    collect_insert_run(Stmts, Table, Columns, [NextRows|Groups0], Groups, Rest).
-collect_insert_run(Rest, _, _, RevGroups, Groups, Rest) :-
+    same_identifier_list(Columns, NextColumns),
+    length(NextRows, NextCount),
+    RowCount is RowCount0 + NextCount,
+    insert_run_row_limit(Limit),
+    RowCount =< Limit, !,
+    collect_insert_run(Stmts, Table, Columns, RowCount,
+                       [NextRows|Groups0], Groups, Rest).
+collect_insert_run(Rest, _, _, _, RevGroups, Groups, Rest) :-
     reverse(RevGroups, Groups).
 
 same_identifier_list([], []).

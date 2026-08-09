@@ -1759,6 +1759,28 @@ function currentDbName() {
   return sandbox.currentDb && !isSystemDb(sandbox.currentDb) ? sandbox.currentDb : '';
 }
 
+function sandboxDatabaseName(name) {
+  const expected = String(name || '').toLowerCase();
+  const names = visibleDbNames();
+  for (let index = 0; index < names.length; index += 1) {
+    if (String(names[index]).toLowerCase() === expected) return names[index];
+  }
+  return '';
+}
+
+function dropSandboxDatabase(name) {
+  const databaseName = sandboxDatabaseName(name);
+  if (!databaseName) return '';
+  delete sandbox.dbs[databaseName];
+  if (sandbox.views) delete sandbox.views[databaseName];
+  if (String(sandbox.currentDb || '').toLowerCase() === databaseName.toLowerCase()) {
+    const remaining = visibleDbNames();
+    sandbox.currentDb = remaining[0] || '';
+  }
+  if (selectedTable && !currentRelation(selectedTable)) selectedTable = '';
+  return databaseName;
+}
+
 function ensureCurrentDb(action = 'melakukan aksi ini') {
   const current = currentDbName();
   if (current) return current;
@@ -3878,12 +3900,10 @@ function sandboxExec(sql) {
       sandbox.views[m[1]] ||= {};
       sandbox.currentDb = m[1];
       add({ status: 'ok', message: `using_database(${m[1]})` });
-    } else if ((m = /^DROP DATABASE(?: IF EXISTS)? `?([\w$]+)`?$/i.exec(s))) {
-      delete sandbox.dbs[m[1]];
-      if (sandbox.views) delete sandbox.views[m[1]];
-      if (sandbox.currentDb === m[1]) sandbox.currentDb = '';
-      if (selectedTable && !currentRelation(selectedTable)) selectedTable = '';
-      add({ status: 'ok', message: `dropped_database(${m[1]})` });
+    } else if ((m = /^DROP DATABASE(?:\s+(IF\s+EXISTS))? `?([\w$]+)`?$/i.exec(s))) {
+      const dropped = dropSandboxDatabase(m[2]);
+      if (dropped || m[1]) add({ status: 'ok', message: `dropped_database(${dropped || m[2]})` });
+      else add({ status: 'error', message: `database not found: ${m[2]}` });
     } else if ((m = /^CREATE VIEW(?: IF NOT EXISTS)? `?([\w$]+)`? AS ([\s\S]+)$/i.exec(s))) {
       const dbName = requireDb();
       if (dbName) {

@@ -1166,6 +1166,9 @@ queue_import_statements(ImportId, [Codes|Statements]) :-
 flush_import_statements(ImportId, Force, StopOnError, Statements0, Errors0,
                         Statements, Errors, LastStatus, LastMessage, Stop) :-
     aggregate_all(count, asadb_import_pending(ImportId, _), PendingCount),
+    aggregate_all(sum(Bytes),
+                  ( asadb_import_pending(ImportId, Codes), length(Codes, Bytes) ),
+                  PendingBytes),
     import_statement_batch_size(BatchSize),
     ( PendingCount =:= 0 ->
         Statements = Statements0,
@@ -1173,10 +1176,14 @@ flush_import_statements(ImportId, Force, StopOnError, Statements0, Errors0,
         LastStatus = none,
         LastMessage = '',
         Stop = false
-    ; ( Force == true ; PendingCount >= BatchSize ) ->
+    ; ( Force == true
+      ; PendingCount >= BatchSize
+      ; import_statement_batch_bytes(MaxBatchBytes),
+        PendingBytes >= MaxBatchBytes
+      ) ->
         findall(Codes, retract(asadb_import_pending(ImportId, Codes)), CodeGroups),
         statement_groups_sql(CodeGroups, SQLCodes),
-        asadb_exec_sql(SQLCodes, Result),
+        import_execute_sql_batch(StopOnError, SQLCodes, Result),
         length(CodeGroups, ExecutedCount),
         Statements is Statements0 + ExecutedCount,
         result_error_count(Result, BatchErrors),
@@ -1190,6 +1197,16 @@ flush_import_statements(ImportId, Force, StopOnError, Statements0, Errors0,
         LastMessage = '',
         Stop = false
     ).
+
+% Statement count alone is not a memory bound: generated dumps often contain
+% 50-100 KiB multi-row INSERT statements.  Cap the source text handed to one
+% parser run while preserving the higher count limit for tiny statements.
+import_statement_batch_bytes(524288).
+
+import_execute_sql_batch(true, SQLCodes, Result) :- !,
+    asadb_exec_sql_stop_on_error(SQLCodes, Result).
+import_execute_sql_batch(_, SQLCodes, Result) :-
+    asadb_exec_sql(SQLCodes, Result).
 
 release_import_batch_memory :-
     flag(asadb_import_batches, Batch0, Batch0 + 1),
@@ -1334,13 +1351,21 @@ result_status_message(table(_, Rows), table, Message) :- !,
     length(Rows, Count),
     format(atom(Message), '~w row(s)', [Count]).
 result_status_message(multi(Results), Status, Message) :- !,
-    last_result_status_message(Results, Status, Message).
+    ( first_result_error_status_message(Results, Status, Message) -> true
+    ; last_result_status_message(Results, Status, Message)
+    ).
 result_status_message(Result, ok, Atom) :-
     term_to_atom(Result, Atom).
 
 last_result_status_message([], none, '').
 last_result_status_message([Result], Status, Message) :- !, result_status_message(Result, Status, Message).
 last_result_status_message([_|Rest], Status, Message) :- last_result_status_message(Rest, Status, Message).
+
+first_result_error_status_message([Result|_], Status, Message) :-
+    result_has_error(Result), !,
+    result_status_message(Result, Status, Message).
+first_result_error_status_message([_|Results], Status, Message) :-
+    first_result_error_status_message(Results, Status, Message).
 
 trim_sql_codes(Codes, Trimmed) :-
     drop_sql_ws(Codes, Left),
