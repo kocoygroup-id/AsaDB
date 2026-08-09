@@ -207,7 +207,11 @@ append_rows(File, Rows, Rids) :-
                       ExistingRecords, Rids, FinalNo, FinalPage),
     asadb_pager_write_page(File, FinalNo, FinalPage).
 
-record_append_chunk_size(8192).
+% Keep encoding/page construction below the small stack envelopes used by
+% supervised workers on every supported SWI-Prolog build.  The stream stays
+% open per chunk, so 1k rows remains large enough to amortize file setup while
+% avoiding recursion proportional to an entire bulk INSERT run.
+record_append_chunk_size(1024).
 
 % Once a batch spans more than a handful of pages, writing each completed page
 % through the small random-access buffer pool adds avoidable eviction/flush

@@ -1684,6 +1684,26 @@ function visibleDbNames() {
 function currentDbName() {
   return sandbox.currentDb && !isSystemDb(sandbox.currentDb) ? sandbox.currentDb : '';
 }
+function sandboxDatabaseName(name) {
+  var expected = String(name || '').toLowerCase();
+  var names = visibleDbNames();
+  for (var index = 0; index < names.length; index += 1) {
+    if (String(names[index]).toLowerCase() === expected) return names[index];
+  }
+  return '';
+}
+function dropSandboxDatabase(name) {
+  var databaseName = sandboxDatabaseName(name);
+  if (!databaseName) return '';
+  delete sandbox.dbs[databaseName];
+  if (sandbox.views) delete sandbox.views[databaseName];
+  if (String(sandbox.currentDb || '').toLowerCase() === databaseName.toLowerCase()) {
+    var remaining = visibleDbNames();
+    sandbox.currentDb = remaining[0] || '';
+  }
+  if (selectedTable && !currentRelation(selectedTable)) selectedTable = '';
+  return databaseName;
+}
 function ensureCurrentDb() {
   var action = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : 'melakukan aksi ini';
   var current = currentDbName();
@@ -4934,14 +4954,14 @@ function sandboxExec(sql) {
             status: 'ok',
             message: `using_database(${m[1]})`
           });
-        } else if (m = /^DROP DATABASE(?: IF EXISTS)? `?([\w$]+)`?$/i.exec(s)) {
-          delete sandbox.dbs[m[1]];
-          if (sandbox.views) delete sandbox.views[m[1]];
-          if (sandbox.currentDb === m[1]) sandbox.currentDb = '';
-          if (selectedTable && !currentRelation(selectedTable)) selectedTable = '';
-          add({
+        } else if (m = /^DROP DATABASE(?:\s+(IF\s+EXISTS))? `?([\w$]+)`?$/i.exec(s)) {
+          var dropped = dropSandboxDatabase(m[2]);
+          if (dropped || m[1]) add({
             status: 'ok',
-            message: `dropped_database(${m[1]})`
+            message: `dropped_database(${dropped || m[2]})`
+          });else add({
+            status: 'error',
+            message: `database not found: ${m[2]}`
           });
         } else if (m = /^CREATE VIEW(?: IF NOT EXISTS)? `?([\w$]+)`? AS ([\s\S]+)$/i.exec(s)) {
           var _dbName2 = requireDb();

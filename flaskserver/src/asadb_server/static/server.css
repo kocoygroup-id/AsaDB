@@ -135,7 +135,11 @@ button { cursor: pointer; }
 .asadb-server-bar > span { color: var(--muted); }
 .asadb-server-bar b { color: var(--text); }
 .asadb-server-bar nav { display: flex; flex-wrap: wrap; gap: .5rem; margin-left: auto; }
-.asadb-server-bar nav a + a::before { margin-right: .5rem; color: var(--line-strong); content: "·"; }
+/* Keep one visual divider for the Admin-to-workspace transition.  Logout is
+ * already a distinct final action, so a second divider only adds noise. */
+.asadb-server-bar nav a[href="/admin"] + a[href="/mode"]::before {
+  margin-right: .5rem; color: var(--line-strong); content: "·";
+}
 @media (max-width: 800px) {
   .asadb-server-bar { align-items: flex-start; margin-bottom: 12px; }
   .asadb-server-bar nav { width: 100%; margin-left: 0; }

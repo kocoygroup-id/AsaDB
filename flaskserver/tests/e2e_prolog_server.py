@@ -31,6 +31,22 @@ def require(response, expected: int, label: str) -> None:
         )
 
 
+def wait_for_panel_reservoir(client, job_id: str) -> dict:
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        response = client.get(f"/api/reservoir/job?id={job_id}")
+        require(response, 200, "panel Reservoir poll")
+        job = response.get_json()
+        if job.get("result_available"):
+            result = client.get(f"/api/reservoir/result?id={job_id}")
+            require(result, 200, "panel Reservoir result")
+            return result.get_json()
+        if job.get("status") in {"failed", "cancelled", "interrupted"}:
+            raise AssertionError(f"panel Reservoir import failed: {job}")
+        time.sleep(0.05)
+    raise AssertionError("panel Reservoir import timed out")
+
+
 def main() -> None:
     repo = Path(os.environ["ASADB_REPO_ROOT"]).resolve()
     with tempfile.TemporaryDirectory(prefix="asadb-flask-e2e-") as root:
@@ -80,7 +96,92 @@ def main() -> None:
                     "default browser panel did not render Server Workspace"
                 )
             require(client.post("/mode", data={"mode": "local"}), 302, "Local Workspace")
+            local_query = client.post("/api/query", data={"sql": "SHOW DATABASES;"})
+            require(local_query, 200, "Local Workspace query")
+            local_payload = local_query.get_json()
+            local_results = local_payload.get("results", []) if local_payload else []
+            if not local_results or local_results[-1].get("status") != "table":
+                raise AssertionError(
+                    "Local Workspace did not reach the Prolog backend: "
+                    f"{local_query.get_data(as_text=True)}"
+                )
             require(client.post("/mode", data={"mode": "server"}), 302, "Server Workspace")
+
+            # Exercise the exact authenticated browser proxy used by the
+            # AsAPanel Import menu.  Dialect metadata must survive Flask so
+            # the Prolog backend converts CSV/XLSX instead of parsing bytes as
+            # raw SQL.
+            csv_payload = b"id,name\n1,Ayu\n2,Asa\n"
+            panel_import = client.post(
+                "/api/reservoir/jobs",
+                data=csv_payload,
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": str(len(csv_payload)),
+                    "X-AsaDB-Job-Label": "panel.csv",
+                    "X-AsaDB-Idempotency-Key": "panel-csv-e2e",
+                    "X-AsaDB-Stop-On-Error": "true",
+                    "X-AsaDB-Import-Format": "csv",
+                    "X-AsaDB-Import-Name": "panel.csv",
+                    "X-AsaDB-Import-Table": "panel_csv",
+                    "X-AsaDB-Import-Mode": "replace",
+                },
+            )
+            require(panel_import, 202, "panel CSV admission")
+            admission = panel_import.get_json()
+            wait_for_panel_reservoir(client, admission["job_id"])
+            imported = client.post(
+                "/api/query",
+                data={
+                    "sql": (
+                        "USE main; SELECT id, name FROM panel_csv ORDER BY id;"
+                    )
+                },
+            )
+            require(imported, 200, "panel imported CSV query")
+            if b"Ayu" not in imported.data or b"Asa" not in imported.data:
+                raise AssertionError(
+                    f"panel CSV rows missing: {imported.get_data(as_text=True)}"
+                )
+
+            panel_export = client.post(
+                "/api/export",
+                data={
+                    "database": "main",
+                    "format": "csv",
+                    "output": "save",
+                    "tables": "panel_csv",
+                    "data_tables": "panel_csv",
+                    "include_schema": "true",
+                    "include_data": "true",
+                },
+            )
+            require(panel_export, 200, "panel CSV export")
+            if b"id,name" not in panel_export.data or b"Ayu" not in panel_export.data:
+                raise AssertionError("panel export omitted backend rows")
+
+            panel_drop = client.post(
+                "/api/query",
+                data={
+                    "sql": (
+                        "CREATE DATABASE panel_drop; USE panel_drop; "
+                        "CREATE TABLE disposable (id INT); "
+                        "INSERT INTO disposable VALUES (1); "
+                        "DROP DATABASE panel_drop;"
+                    )
+                },
+            )
+            require(panel_drop, 200, "panel CREATE/DROP DATABASE")
+            databases_after_drop = client.post(
+                "/api/query", data={"sql": "SHOW DATABASES;"}
+            )
+            require(databases_after_drop, 200, "panel databases after DROP")
+            if b"panel_drop" in databases_after_drop.data:
+                raise AssertionError(
+                    "panel DROP DATABASE left a catalog entry: "
+                    f"drop={panel_drop.get_data(as_text=True)}; "
+                    f"databases={databases_after_drop.get_data(as_text=True)}"
+                )
 
             setup = client.post(
                 "/api/v1/databases/main/query",

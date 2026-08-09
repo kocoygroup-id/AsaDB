@@ -22,6 +22,8 @@ run_reservoir_tests :-
     asadb_config_reset,
     reservoir_init('tests/reservoir-test.asa', user:reservoir_test_executor),
     test_submit_result_and_paging(JobId),
+    test_worker_stack_capacity,
+    test_rollback_failure_detail,
     test_idempotent_retry(JobId),
     test_queued_cancellation,
     test_receiving_cancellation,
@@ -31,6 +33,27 @@ run_reservoir_tests :-
     test_backpressure,
     test_underreported_stream_capacity,
     test_restart_recovery(JobId).
+
+test_worker_stack_capacity :-
+    submit_text('stack_limit', 'worker stack capacity', 'stack-capacity-a',
+                JobId, _),
+    reservoir_wait(JobId, 5, result(table([stack_limit], [[StackLimit]]))),
+    ( StackLimit >= 67108864 -> true
+    ; throw(error(assertion_failed(reservoir_worker_stack_capacity,
+                                   expected(at_least(67108864)),
+                                   got(StackLimit)), _))
+    ).
+
+test_rollback_failure_detail :-
+    Result = table(
+        [status,path,statements,errors,last_status,last_message,size_bytes],
+        [[rolled_back,'import.sql',7,1,error,'duplicate primary key',1024]]
+    ),
+    asadb_reservoir:reservoir_result_failed(Result, Message),
+    ( sub_atom(Message, _, _, _, 'duplicate primary key') -> true
+    ; throw(error(assertion_failed(reservoir_rollback_failure_detail,
+                                   expected(original_error), got(Message)), _))
+    ).
 
 test_submit_result_and_paging(JobId) :-
     submit_text('rows', 'result test', 'result-key', JobId, Admission),
@@ -259,6 +282,12 @@ reservoir_test_executor(JobId, SpoolPath, _, Result) :-
     ; Text == "rows" ->
         reservoir_update_progress(JobId, 4, 1, 0, completed, 'rows complete', true),
         Result = table([n], [[1],[2],[3]])
+    ; Text == "stack_limit" ->
+        current_prolog_flag(stack_limit, StackLimit),
+        string_length(Text, TextBytes),
+        reservoir_update_progress(JobId, TextBytes, 1, 0, completed,
+                                  'stack capacity checked', true),
+        Result = table([stack_limit], [[StackLimit]])
     ; Result = error(unexpected_test_payload, Text)
     ).
 

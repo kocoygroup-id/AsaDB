@@ -21,6 +21,8 @@ main :-
     run_auto_increment_assertions,
     run_schema_integrity_assertions,
     run_incremental_insert_assertions,
+    run_stop_on_error_assertions,
+    run_bounded_insert_batch_assertions,
     run_order_by_duplicate_assertions,
     run_order_by_wildcard_assertions,
     run_order_by_filtered_projection_assertions,
@@ -41,6 +43,83 @@ main :-
     run_mysql55_manifest_assertions,
     cleanup,
     halt(0).
+
+run_stop_on_error_assertions :-
+    cleanup,
+    asadb_boot('tests/testdata.asa'),
+    asadb_exec_sql('CREATE DATABASE stop_assert; USE stop_assert; CREATE TABLE t (id INT PRIMARY KEY); BEGIN;', Setup),
+    ( result_has_error(Setup) ->
+        asadb_format_result(Setup),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ; true
+    ),
+    asadb_exec_sql_stop_on_error(
+        'INSERT INTO t VALUES (1); INSERT INTO missing VALUES (2); INSERT INTO t VALUES (3);',
+        Result),
+    ( Result = multi([ok(inserted(t,1)), error(_,_)]) -> true
+    ; format('ASSERTION FAILED: stop-on-error executed past failure: ~q.~n',
+             [Result]),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    expect_sql('SELECT COUNT(*) AS total FROM t;', table([total], [[1]])),
+    expect_sql('ROLLBACK;', ok(rolled_back)),
+    expect_sql('SELECT COUNT(*) AS total FROM t;', table([total], [[0]])),
+    asadb_shutdown,
+    cleanup.
+
+% A dump commonly emits hundreds of consecutive INSERT statements for the
+% same table.  Execution may combine them for speed, but the combined run must
+% stay bounded so a Reservoir worker never receives one dump-sized row list.
+run_bounded_insert_batch_assertions :-
+    cleanup,
+    asadb_boot('tests/testdata.asa'),
+    bounded_insert_fixture(10, 512, SQL, ExpectedRows),
+    asadb_exec_sql(SQL, Result),
+    ( Result = multi([ok(created_database(batch_assert)),
+                      ok(using_database(batch_assert)),
+                      ok(created_table(batch_rows)),
+                      ok(inserted(batch_rows, FirstRun)),
+                      ok(inserted(batch_rows, SecondRun))]),
+      FirstRun =< 4096,
+      SecondRun > 0,
+      Total is FirstRun + SecondRun,
+      Total =:= ExpectedRows ->
+        true
+    ; format('ASSERTION FAILED: consecutive INSERT run was not bounded: ~q.~n',
+             [Result]),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    expect_sql('SELECT COUNT(*) AS total FROM batch_rows;',
+               table([total], [[ExpectedRows]])),
+    asadb_shutdown,
+    cleanup.
+
+bounded_insert_fixture(StatementCount, RowsPerStatement, SQL, ExpectedRows) :-
+    findall(Statement,
+            ( between(1, StatementCount, StatementNo),
+              First is (StatementNo - 1) * RowsPerStatement + 1,
+              Last is StatementNo * RowsPerStatement,
+              findall(Row,
+                      ( between(First, Last, Id),
+                        format(atom(Row), '(~w, ''row-~w'')', [Id, Id])
+                      ),
+                      Rows),
+              atomic_list_concat(Rows, ', ', Values),
+              format(atom(Statement),
+                     'INSERT INTO batch_rows (id, label) VALUES ~w', [Values])
+            ),
+            Inserts),
+    atomic_list_concat(Inserts, '; ', InsertSQL),
+    format(atom(SQL),
+           'CREATE DATABASE batch_assert; USE batch_assert; CREATE TABLE batch_rows (id INT PRIMARY KEY, label VARCHAR(32)); ~w;',
+           [InsertSQL]),
+    ExpectedRows is StatementCount * RowsPerStatement.
 
 run_sql_file(File) :-
     cleanup,

@@ -48,9 +48,17 @@ reservoir_init(DatabaseFile, Executor) :-
     reservoir_recover_jobs,
     message_queue_create(Queue),
     assertz(reservoir_queue(Queue)),
-    thread_create(reservoir_worker_loop(Queue), Worker, []),
+    reservoir_worker_stack_limit(StackLimit),
+    thread_create(reservoir_worker_loop(Queue), Worker,
+                  [stack_limit(StackLimit)]),
     assertz(reservoir_worker(Worker)),
     reservoir_requeue_recovered_jobs.
+
+% A worker may parse multi-row SQL, validate constraints, and build bounded
+% storage pages.  Some SWI-Prolog/platform combinations otherwise start a
+% detached worker with only a 1 MiB combined stack.  This is a ceiling, not an
+% eager allocation; normal jobs continue to use only the memory they need.
+reservoir_worker_stack_limit(67108864).
 
 reservoir_shutdown :-
     ( retract(reservoir_queue(Queue)) ->
@@ -353,7 +361,19 @@ reservoir_result_failed(error(Code, Detail), Message) :- !,
 reservoir_result_failed(multi(Results), Message) :- !,
     member(Result, Results),
     reservoir_result_failed(Result, Message), !.
-reservoir_result_failed(table(_, [[rolled_back|_]|_]), 'The transaction was rolled back.') :- !.
+reservoir_result_failed(
+    table([status,path,statements,errors,last_status,last_message,size_bytes],
+          [[rolled_back,_,_,_,_,Detail,_]|_]),
+    Message) :- !,
+    reservoir_rollback_message(Detail, Message).
+reservoir_result_failed(table(_, [[rolled_back|_]|_]),
+                        'The transaction was rolled back.') :- !.
+
+reservoir_rollback_message('', 'The transaction was rolled back.') :- !.
+reservoir_rollback_message(Detail, Message) :-
+    reservoir_error_message(Detail, DetailMessage),
+    format(atom(Message), 'The transaction was rolled back: ~w',
+           [DetailMessage]).
 
 reservoir_worker_error(JobId, Error) :-
     reservoir_error_message(Error, Message),

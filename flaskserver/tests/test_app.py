@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import inspect
 
 import pytest
 
@@ -13,6 +14,7 @@ from asadb_server.auth import AuthManager
 from asadb_server.cli import first_run
 from asadb_server.config import Settings
 from asadb_server.registry import DatabaseRegistry
+from asadb_server import panel as panel_module
 
 
 def test_health_and_password_login(monkeypatch, tmp_path: Path):
@@ -94,7 +96,18 @@ def test_health_and_password_login(monkeypatch, tmp_path: Path):
         b'<a href="/logout">Logout</a></nav>'
     ) in panel.data
     assert b"Admin</a> \xc2\xb7" not in panel.data
-    assert b"position: fixed" not in client.get("/static/server.css").data
+    server_css = client.get("/static/server.css").data
+    assert b"position: fixed" not in server_css
+    assert b'a[href="/admin"] + a[href="/mode"]::before' in server_css
+    assert b"nav a + a::before" not in server_css
+    panel_proxy_source = inspect.getsource(panel_module.panel_api_proxy)
+    for import_header in (
+        "X-AsaDB-Import-Format",
+        "X-AsaDB-Import-Name",
+        "X-AsaDB-Import-Table",
+        "X-AsaDB-Import-Mode",
+    ):
+        assert import_header in panel_proxy_source
     assert client.get("/panel-assets/style.css").status_code == 200
     assert client.get("/panel-assets/app.js").status_code == 404
 

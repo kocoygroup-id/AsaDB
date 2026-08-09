@@ -305,6 +305,10 @@ for (const bundle of [app, legacyApp]) {
     'small DROP DATABASE commands must use the direct, verifiable backend path');
   assert.doesNotMatch(plan, /containsWrite/,
     'small interactive DDL must not be forced through Reservoir');
+  assert.match(bundle, /function dropSandboxDatabase\(/,
+    'sandbox DROP DATABASE must use its explicit shared state transition');
+  assert.match(bundle, /database not found:/,
+    'sandbox DROP DATABASE must not report a missing database as deleted');
 }
 assert.match(app, /if \(!rows\.length\) \{\s*sandbox = normalizeSandbox\(\{ currentDb: '', dbs: \{\}, views: \{\} \}\)/, 'empty backend catalogs must clear stale browser objects');
 

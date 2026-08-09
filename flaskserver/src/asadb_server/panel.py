@@ -10,6 +10,7 @@ from flask import (
     Blueprint,
     Response,
     current_app,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -192,6 +193,11 @@ USE_RE = re.compile(
     r"(?:^|;)\s*USE\s+(?:`([^`]+)`|([A-Za-z0-9_.-]+))\s*;",
     re.IGNORECASE,
 )
+DROP_DATABASE_RE = re.compile(
+    r"(?:^|;)\s*DROP\s+DATABASE(?:\s+IF\s+EXISTS)?\s+"
+    r"(?:`([^`]+)`|([A-Za-z0-9_.-]+))\s*;",
+    re.IGNORECASE,
+)
 
 
 def update_logical_database_from_sql(sql: str) -> str | None:
@@ -202,6 +208,24 @@ def update_logical_database_from_sql(sql: str) -> str | None:
         return selected
     value = session.get("asadb_logical_database")
     return str(value) if isinstance(value, str) and value else None
+
+
+def clear_dropped_logical_database(sql: str, result: dict) -> None:
+    results = result.get("results") if isinstance(result, dict) else None
+    if not isinstance(results, list) or any(
+        isinstance(item, dict) and item.get("status") == "error"
+        for item in results
+    ):
+        return
+    selected = session.get("asadb_logical_database")
+    if not isinstance(selected, str):
+        return
+    dropped = {
+        (quoted or plain).casefold()
+        for quoted, plain in DROP_DATABASE_RE.findall(sql or "")
+    }
+    if selected.casefold() in dropped:
+        session.pop("asadb_logical_database", None)
 
 
 def selected_database_id() -> str:
@@ -348,13 +372,47 @@ def panel_api_proxy(api_path: str):
         "X-AsaDB-Job-Label",
         "X-AsaDB-Idempotency-Key",
         "X-AsaDB-Stop-On-Error",
-        "Content-Length",
+        "X-AsaDB-Import-Format",
+        "X-AsaDB-Import-Name",
+        "X-AsaDB-Import-Table",
+        "X-AsaDB-Import-Mode",
     ):
         if request.headers.get(name):
             forwarded_headers[name] = request.headers[name]
+    # Requests must calculate the length for buffered/form bodies.  Reusing
+    # the browser's original Content-Length after Flask has parsed a form can
+    # desynchronize the persistent backend connection.  Only the exact-size
+    # streaming wrapper preserves and requires the original length.
+    if is_streaming_request:
+        forwarded_headers["Content-Length"] = str(request.content_length)
+        # The Prolog HTTP layer consumes uploads through a bounded range
+        # stream.  End this one internal connection after the streamed body;
+        # reusing it through two proxy layers can make residual framing bytes
+        # look like the next request URI on some SWI-Prolog builds.
+        forwarded_headers["Connection"] = "close"
 
+    explicit_database_selection = bool(USE_RE.search(sql or ""))
     logical_database = update_logical_database_from_sql(sql)
     backend = ext("asadb_backends").get(database_id)
+    # Query forms are already parsed for RBAC and workspace selection.  Send
+    # them through the typed backend method instead of replaying their raw
+    # URL-encoded body across a second persistent HTTP hop.  This also lets
+    # Requests calculate a fresh body envelope and prevents SWI-Prolog from
+    # rejecting a valid follow-up request as illegal_uri_query after a stream.
+    if api_path == "query" and request.method == "POST":
+        try:
+            offset = max(0, int(request.form.get("offset", "0")))
+        except ValueError:
+            offset = 0
+        # An explicit USE belongs to this SQL batch.  Prepending a separate
+        # USE would fail for the common CREATE DATABASE ...; USE ...; panel
+        # command because the database does not exist until the batch runs.
+        if logical_database and not explicit_database_selection:
+            result = backend.query_in_database(logical_database, sql, offset=offset)
+        else:
+            result = backend.query(sql, offset=offset)
+        clear_dropped_logical_database(sql, result)
+        return jsonify(result)
     request_kwargs = {
         "data": request_body,
         "params": request.args,
