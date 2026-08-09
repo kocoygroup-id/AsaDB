@@ -23,8 +23,8 @@ ENV ASADB_REPO_ROOT=/opt/asadb \
     ASADB_STATE_DIR=/var/lib/asadb/server-state \
     ASADB_TEMP_DIR=/var/lib/asadb/tmp \
     ASADB_HOST=0.0.0.0 \
-    ASADB_PORT=7879
+    ASADB_PORT=2026
 
-EXPOSE 7879
+EXPOSE 2026
 VOLUME ["/var/lib/asadb"]
-CMD ["/opt/asadb/flaskserver/.venv/bin/asadb", "server", "--host", "0.0.0.0", "--port", "7879", "--threads", "8"]
+CMD ["/opt/asadb/flaskserver/.venv/bin/asadb", "server", "--host", "0.0.0.0", "--port", "2026", "--threads", "8"]

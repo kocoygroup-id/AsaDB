@@ -25,6 +25,14 @@ it is not a retroactive claim about the 1.5.0 release archives.
 - **Regression coverage.** The core suite verifies multi-page scan results and
   accelerator observability. The TVCC suite recreates interrupted staging and
   published-generation residue before a restart.
+- **Portal default.** New local/server launcher configuration uses
+  `http://127.0.0.1:2026`; the authenticated workspace navigation now renders
+  one CSS separator per link boundary.
+- **Destructive DDL reliability.** Small interactive `DROP DATABASE` commands
+  now use the same direct, verified backend path as the Delete Database
+  control. Database catalog creation/removal publishes a checkpoint and TVCC
+  generation immediately; regression coverage verifies the cleared selection,
+  empty WAL, restart durability, and clean recreation of a dropped database.
 
 ## Release order
 

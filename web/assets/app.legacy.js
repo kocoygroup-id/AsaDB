@@ -2571,10 +2571,13 @@ function _executeBackendSqlPage() {
 function createSqlExecutionPlan(sql) {
   var _statements$length;
   var text = String(sql || '');
-  var containsWrite = /\b(?:create|drop|alter|truncate|insert|update|delete|replace|grant|revoke)\b/i.test(text);
-  var statements = containsWrite ? null : splitStatementsDetailed(text);
+  // Reservoir is for a genuinely large payload.  Small interactive DDL must
+  // use the direct endpoint so a destructive command has one immediate,
+  // verifiable backend result—the same path used by the Delete DB control.
+  var oversized = text.length > 250000;
+  var statements = oversized ? null : splitStatementsDetailed(text);
   return {
-    mode: containsWrite || text.length > 250000 ? 'reservoir' : 'direct',
+    mode: oversized ? 'reservoir' : 'direct',
     statements,
     statementCount: (_statements$length = statements === null || statements === void 0 ? void 0 : statements.length) !== null && _statements$length !== void 0 ? _statements$length : null
   };

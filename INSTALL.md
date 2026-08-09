@@ -41,7 +41,7 @@ wheelhouse with network access disabled. For normal browser use, run only:
 swipl asadb
 ```
 
-Open `http://127.0.0.1:7879/login`. After login, choose Local Workspace
+Open `http://127.0.0.1:2026/login`. After login, choose Local Workspace
 (loopback-only when allowed) or Server Workspace in the same AsAPanel. There
 is no unauthenticated browser path. Direct terminal work is still available
 through `swipl asadb local --database "$HOME/AsaDB-data/data.asa"`. Server
@@ -78,7 +78,7 @@ SWI-Prolog or a prebuilt executable.
 Buka browser setelah membuat admin pada first run:
 
 ```text
-http://127.0.0.1:7879/login
+http://127.0.0.1:2026/login
 ```
 
 ## Linux/macOS
@@ -133,7 +133,7 @@ swipl pack install .
 swipl asadb
 ```
 
-Open `http://127.0.0.1:7879/login` manually. The launchers do not depend on
+Open `http://127.0.0.1:2026/login` manually. The launchers do not depend on
 `systemd`, `xdg-open`, PowerShell, drive letters, backslash paths, or Bash-only
 syntax. Database files and all matching sidecars must be on a writable
 filesystem.

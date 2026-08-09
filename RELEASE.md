@@ -73,7 +73,7 @@ swipl pack install .
 swipl asadb
 ```
 
-Open `http://127.0.0.1:7879/login`. The panel is localhost-oriented; do not
+Open `http://127.0.0.1:2026/login`. The panel is localhost-oriented; do not
 expose it directly to an untrusted network.
 
 ## Production boundaries

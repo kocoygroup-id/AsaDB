@@ -4,5 +4,5 @@ from asadb_server.client import AsaDBClient
 
 
 def test_client_normalizes_base_url():
-    client = AsaDBClient("http://localhost:7879/")
-    assert client.base_url == "http://localhost:7879"
+    client = AsaDBClient("http://localhost:2026/")
+    assert client.base_url == "http://localhost:2026"

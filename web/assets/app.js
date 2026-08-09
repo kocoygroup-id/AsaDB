@@ -2511,10 +2511,13 @@ async function executeBackendSqlPage(sql, offset = 0) {
 
 function createSqlExecutionPlan(sql) {
   const text = String(sql || '');
-  const containsWrite = /\b(?:create|drop|alter|truncate|insert|update|delete|replace|grant|revoke)\b/i.test(text);
-  const statements = containsWrite ? null : splitStatementsDetailed(text);
+  // Reservoir is for a genuinely large payload.  Small interactive DDL must
+  // use the direct endpoint so a destructive command has one immediate,
+  // verifiable backend result—the same path used by the Delete DB control.
+  const oversized = text.length > 250000;
+  const statements = oversized ? null : splitStatementsDetailed(text);
   return {
-    mode: containsWrite || text.length > 250000 ? 'reservoir' : 'direct',
+    mode: oversized ? 'reservoir' : 'direct',
     statements,
     statementCount: statements?.length ?? null,
   };

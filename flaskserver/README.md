@@ -149,7 +149,7 @@ AsaDB SWI-Prolog core
 ### Server workspace
 
 ```bash
-swipl asadb start --database data.asa --host 127.0.0.1 --port 7879 --threads 8
+swipl asadb start --database data.asa --host 127.0.0.1 --port 2026 --threads 8
 ```
 
 Data flow:
@@ -257,19 +257,19 @@ password hash, not plaintext.
 Start an initialized service without the one-command wizard:
 
 ```bash
-swipl asadb server --host 127.0.0.1 --port 7879 --threads 8
+swipl asadb server --host 127.0.0.1 --port 2026 --threads 8
 ```
 
 The equivalent command before installing the console script is:
 
 ```bash
-python -m asadb_server server --host 127.0.0.1 --port 7879 --threads 8
+python -m asadb_server server --host 127.0.0.1 --port 2026 --threads 8
 ```
 
 Open:
 
 ```text
-http://127.0.0.1:7879/login
+http://127.0.0.1:2026/login
 ```
 
 After login, Server Workspace opens by default and uses the supervised Prolog
@@ -606,7 +606,7 @@ the current SQL planner automatically distributes one query across files.
 Keep Flask bound to localhost and terminate TLS at Nginx:
 
 ```bash
-swipl asadb server --host 127.0.0.1 --port 7879 --threads 8
+swipl asadb server --host 127.0.0.1 --port 2026 --threads 8
 ```
 
 Use the included:

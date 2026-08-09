@@ -299,6 +299,13 @@ assert.ok(
 );
 const dropDatabaseSource = app.slice(app.indexOf('async function dropCurrentDatabase'), app.indexOf('function focusSqlCommand'));
 assert.match(dropDatabaseSource, /backendListContains\('SHOW DATABASES;'/, 'DROP DATABASE must verify backend deletion');
+for (const bundle of [app, legacyApp]) {
+  const plan = bundle.slice(bundle.indexOf('function createSqlExecutionPlan'), bundle.indexOf('function executeBackendSqlStreamed'));
+  assert.match(plan, /mode:\s*oversized\s*\?\s*'reservoir'\s*:\s*'direct'/,
+    'small DROP DATABASE commands must use the direct, verifiable backend path');
+  assert.doesNotMatch(plan, /containsWrite/,
+    'small interactive DDL must not be forced through Reservoir');
+}
 assert.match(app, /if \(!rows\.length\) \{\s*sandbox = normalizeSandbox\(\{ currentDb: '', dbs: \{\}, views: \{\} \}\)/, 'empty backend catalogs must clear stale browser objects');
 
 assert.doesNotMatch(webBackend, /'Stress Test'/, 'Linux backend must not depend on a Windows-only directory case');

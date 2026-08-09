@@ -365,7 +365,7 @@ def remote_group():
 
 
 @remote_group.command("login")
-@click.option("--url", prompt="Server URL", default="http://127.0.0.1:7879")
+@click.option("--url", prompt="Server URL", default="http://127.0.0.1:2026")
 @click.option("--username", prompt=True)
 @click.option("--password", prompt=True, hide_input=True)
 @click.option("--profile", default="default", show_default=True)
