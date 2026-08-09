@@ -1,6 +1,6 @@
 from asadb_server.client import AsaDBClient
 
-client = AsaDBClient("http://127.0.0.1:7879")
+client = AsaDBClient("http://127.0.0.1:2026")
 client.login("admin", "replace-this-password")
 
 result = client.query(

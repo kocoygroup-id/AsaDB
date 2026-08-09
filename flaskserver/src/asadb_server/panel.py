@@ -244,7 +244,7 @@ def panel_root():
     html = index_path.read_text(encoding="utf-8")
     mode_name = "Local Workspace" if workspace_mode == "local" else "Server Workspace"
     admin_link = (
-        '<a href="/admin">Admin</a> · '
+        '<a href="/admin">Admin</a>'
         if has_permission(user, "server.admin")
         else ""
     )

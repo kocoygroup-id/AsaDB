@@ -122,8 +122,8 @@ def ensure_layout(paths: dict[str, Path]) -> None:
                 "schemaVersion": 1,
                 "createdAt": int(time.time()),
                 "host": "127.0.0.1",
-                "port": 7879,
-                "publicUrl": "http://127.0.0.1:7879",
+                "port": 2026,
+                "publicUrl": "http://127.0.0.1:2026",
                 "dataDirectory": str(paths["data"]),
                 # The primary portal still requires login.  This setting only
                 # controls whether a loopback user can select Local Workspace
@@ -161,8 +161,8 @@ def child_environment(paths: dict[str, Path]) -> dict[str, str]:
             "ASADB_STATE_DIR": str(paths["state"]),
             "ASADB_TEMP_DIR": str(paths["temp"]),
             "ASADB_HOST": str(config.get("host", "127.0.0.1")),
-            "ASADB_PORT": str(config.get("port", 7879)),
-            "ASADB_PUBLIC_URL": str(config.get("publicUrl", "http://127.0.0.1:7879")),
+            "ASADB_PORT": str(config.get("port", 2026)),
+            "ASADB_PUBLIC_URL": str(config.get("publicUrl", "http://127.0.0.1:2026")),
             "ASADB_SECRET_KEY": str(secret_values["secretKey"]),
             "ASADB_CLUSTER_KEY": str(secret_values["clusterKey"]),
             "ASADB_ALLOW_LOCAL_ONLY": (

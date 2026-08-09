@@ -89,6 +89,11 @@ def test_health_and_password_login(monkeypatch, tmp_path: Path):
     assert panel.status_code == 200
     assert b"Local Workspace" in panel.data
     assert b'<main class="main">\n    <aside id="asadb-server-bar"' in panel.data
+    assert (
+        b'<nav><a href="/admin">Admin</a><a href="/mode">Switch workspace</a>'
+        b'<a href="/logout">Logout</a></nav>'
+    ) in panel.data
+    assert b"Admin</a> \xc2\xb7" not in panel.data
     assert b"position: fixed" not in client.get("/static/server.css").data
     assert client.get("/panel-assets/style.css").status_code == 200
     assert client.get("/panel-assets/app.js").status_code == 404

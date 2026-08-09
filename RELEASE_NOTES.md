@@ -25,6 +25,9 @@ it is not a retroactive claim about the 1.5.0 release archives.
 - **Regression coverage.** The core suite verifies multi-page scan results and
   accelerator observability. The TVCC suite recreates interrupted staging and
   published-generation residue before a restart.
+- **Portal default.** New local/server launcher configuration uses
+  `http://127.0.0.1:2026`; the authenticated workspace navigation now renders
+  one CSS separator per link boundary.
 
 ## Release order
 

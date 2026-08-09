@@ -60,7 +60,7 @@ swipl asadb
 
 The first run builds the bundled offline Python gateway in a per-user location,
 asks for the first administrator once, registers `data.asa`, then opens
-`http://127.0.0.1:7879/login`. Login always comes before selecting Local
+`http://127.0.0.1:2026/login`. Login always comes before selecting Local
 Workspace (loopback only) or Server Workspace. Flask only hosts and protects
 the web/API boundary: the SWI-Prolog backend remains the sole SQL parser,
 executor, transaction manager, and `.asa` storage engine. No `pip install` or
@@ -89,14 +89,14 @@ swipl asadb
 ```
 
 On first use it asks for an administrator and opens
-`http://127.0.0.1:7879/login`. Sign in, choose **Local Workspace** or
+`http://127.0.0.1:2026/login`. Sign in, choose **Local Workspace** or
 **Server Workspace**, then use **Admin** for users, database registration,
 jobs, health, and safe mutable settings. Useful operational commands are:
 
 ```sh
 swipl asadb doctor --json
-swipl asadb start --host 127.0.0.1 --port 7879
-swipl asadb server --host 127.0.0.1 --port 7879
+swipl asadb start --host 127.0.0.1 --port 2026
+swipl asadb server --host 127.0.0.1 --port 2026
 ```
 
 `start` performs first-run setup when necessary; `server` is for an already
@@ -346,7 +346,7 @@ swipl asadb
 ```
 
 On first run the command asks for administrator credentials, then opens the
-login page at `http://127.0.0.1:7879/login`. After login, Server Workspace
+login page at `http://127.0.0.1:2026/login`. After login, Server Workspace
 uses the supervised Prolog backend by default; Local Workspace remains an
 explicit authenticated switch. The `.tar.Z` file is
 gzip-compressed. `swipl` is a separate runtime dependency.
