@@ -7,6 +7,25 @@ Status: **Stable** for the documented Linux/PCLinuxOS backend and source-package
 Publication summary: [RELEASE.md](RELEASE.md)  
 Compatibility matrix: [COMPATIBILITY.md](COMPATIBILITY.md)
 
+## Unreleased maintenance (next patch)
+
+This section describes merged-source maintenance after the 1.5.0 publication;
+it is not a retroactive claim about the 1.5.0 release archives.
+
+- **TVCC restart recovery.** Startup removes only managed transient
+  `generation-*` TVCC snapshots left by an interrupted process, then rebuilds
+  a reader image from the already recovered catalog, WAL, and record store.
+  This prevents a stale `generation-000001.tmp` from blocking the Prolog
+  backend at launch.
+- **Native storage scan batching.** `src/kocoy.pl` batches cold sequential
+  page reads through SWI-Prolog's native binary stream implementation while
+  retaining the existing page format, buffer-pool precedence, checksum paths,
+  and SQL semantics. It is an I/O-bound scan optimization, not a claim of a
+  Rust engine or native-code SQL compiler.
+- **Regression coverage.** The core suite verifies multi-page scan results and
+  accelerator observability. The TVCC suite recreates interrupted staging and
+  published-generation residue before a restart.
+
 ## Release order
 
 | Version | Prepared/released | Status | Release focus |

@@ -19,10 +19,53 @@ main :-
     halt(0).
 
 run_tvcc_regressions :-
+    run_interrupted_boot_recovery_regression,
+    asadb_shutdown,
+    cleanup,
     run_database_context_regression,
     asadb_shutdown,
     cleanup,
     run_tvcc_regression.
+
+% TVCC generations are transient process-local reader images.  Simulate the
+% exact residue left by a forced stop after a generation was published but
+% before staging cleanup.  A later process must recover from the durable
+% catalog/store, not fail while trying to rename generation-000001.tmp over
+% generation-000001.
+run_interrupted_boot_recovery_regression :-
+    asadb_boot('tests/tvcc testdata.asa'),
+    expect_sql('CREATE DATABASE restart_tvcc; USE restart_tvcc; CREATE TABLE durable_rows (id INT PRIMARY KEY, label TEXT); INSERT INTO durable_rows VALUES (1, ''survives'');'),
+    asadb_shutdown,
+    make_tvcc_boot_residue('tests/tvcc testdata.asa'),
+    asadb_boot('tests/tvcc testdata.asa'),
+    expect_sql('USE restart_tvcc;'),
+    expect_sql_result('SELECT label FROM durable_rows;', table([label], [[survives]])),
+    tvcc_root('tests/tvcc testdata.asa', Root),
+    directory_file_path(Root, 'generation-000001.tmp', Temporary),
+    ( exists_directory(Temporary) ->
+        throw(error(assertion_failed(tvcc_boot_left_staging_directory), _))
+    ; true
+    ).
+
+make_tvcc_boot_residue(File) :-
+    tvcc_root(File, Root),
+    directory_file_path(Root, 'generation-000001', Published),
+    directory_file_path(Root, 'generation-000001.tmp', Temporary),
+    directory_file_path(Published, 'store', PublishedStore),
+    directory_file_path(Temporary, 'store', TemporaryStore),
+    make_directory_path(PublishedStore),
+    make_directory_path(TemporaryStore),
+    directory_file_path(Published, 'catalog.asa', PublishedCatalog),
+    directory_file_path(Temporary, 'catalog.asa', TemporaryCatalog),
+    write_fixture_file(PublishedCatalog, published),
+    write_fixture_file(TemporaryCatalog, staging).
+
+tvcc_root(File, Root) :- atom_concat(File, '.tvcc', Root).
+
+write_fixture_file(File, Term) :-
+    setup_call_cleanup(open(File, write, Stream, [encoding(utf8)]),
+                       ( write_canonical(Stream, Term), write(Stream, '.\n') ),
+                       close(Stream)).
 
 run_database_context_regression :-
     asadb_boot('tests/tvcc testdata.asa'),

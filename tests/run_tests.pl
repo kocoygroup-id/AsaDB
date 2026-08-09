@@ -2,6 +2,7 @@
 % SPDX-License-Identifier: GPL-3.0-only
 :- use_module('../src/asadb_core.pl').
 :- use_module('../src/asadb_mysql55_compat.pl').
+:- use_module('../src/kocoy.pl').
 :- use_module(library(filesex)).
 :- if(exists_source(library(time))).
 :- use_module(library(time)).
@@ -30,6 +31,7 @@ main :-
     run_read_only_no_autosave_assertions,
     run_limited_result_assertions,
     run_storage_engine_assertions,
+    run_native_storage_accelerator_assertions,
     run_logic_jit_assertions,
     run_drop_table_cleanup_assertions,
     run_catalog_multitable_assertions,
@@ -654,6 +656,59 @@ run_storage_engine_assertions :-
     ),
     asadb_shutdown,
     cleanup.
+
+% The native storage accelerator must remain observable and preserve ordinary
+% table-scan results.  Use enough rows to span several 4 KiB heap pages; a
+% one-page fixture would not exercise batched stream reads.
+run_native_storage_accelerator_assertions :-
+    cleanup,
+    asadb_boot('tests/testdata.asa'),
+    native_storage_fixture(1024, Setup),
+    asadb_exec_sql(Setup, SetupResult),
+    ( result_has_error(SetupResult) ->
+        asadb_format_result(SetupResult),
+        asadb_shutdown,
+        cleanup,
+        halt(1)
+    ; true
+    ),
+    asadb_kocoy_reset,
+    asadb_exec_sql_limited('SELECT label FROM native_scan_rows;', 2048,
+                           QueryResult),
+    ( QueryResult = multi([table([label], Rows)]), length(Rows, 1024) -> true
+    ; format('ASSERTION FAILED: native storage scan changed query result: ~w.~n',
+             [QueryResult]),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    asadb_storage_stats(Stats),
+    get_dict(native_storage, Stats, Native),
+    get_dict(implementation, Native, 'swi_prolog_native_stream_batches'),
+    get_dict(scan_batches, Native, Batches),
+    get_dict(scanned_pages, Native, Pages),
+    ( Batches >= 1, Pages >= 2 -> true
+    ; format('ASSERTION FAILED: native storage accelerator was not exercised: ~w.~n',
+             [Native]),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    asadb_shutdown,
+    cleanup.
+
+native_storage_fixture(RowCount, SQL) :-
+    findall(Row,
+            ( between(1, RowCount, Id),
+              format(atom(Row),
+                     '(~d, ''native-page-~d-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'')',
+                     [Id, Id])
+            ),
+            Rows),
+    atomic_list_concat(Rows, ', ', Values),
+    format(atom(SQL),
+           'CREATE DATABASE native_storage_assert; USE native_storage_assert; CREATE TABLE native_scan_rows (id INT PRIMARY KEY, label TEXT); INSERT INTO native_scan_rows VALUES ~w;',
+           [Values]).
 
 run_logic_jit_assertions :-
     cleanup,

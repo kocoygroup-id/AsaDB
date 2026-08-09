@@ -71,6 +71,7 @@
 :- use_module('asadb_metadata.pl').
 :- use_module('asadb_mysql55_compat.pl').
 :- use_module('asadb_prolog_jit.pl').
+:- use_module('kocoy.pl').
 :- use_module('asadb_schema.pl').
 :- use_module('asadb_sql_frontend.pl', [asadb_parse_statement/2]).
 :- use_module('asadb_tvcc.pl').
@@ -386,6 +387,7 @@ asadb_boot(InputFile) :-
     normalize_storage_path(InputFile, File),
     load_storage_config(File),
     asadb_buffer_pool_reset,
+    asadb_kocoy_reset,
     asadb_record_store_open(File),
     recover_checkpoint_file(File),
     retractall(asadb_file(_)),
@@ -598,9 +600,10 @@ asadb_backup_restore_catalog_objects_locked(Database, Views, Functions, Procedur
     assertz(asadb_state(State)),
     asadb_save_locked.
 
-asadb_storage_stats(storage{config:Config,pager:PagerStats,btree_cache:btree_cache{entries:CacheEntries},planner:Planner,jit:Jit,tvcc:Tvcc}) :-
+asadb_storage_stats(storage{config:Config,pager:PagerStats,native_storage:NativeStorage,btree_cache:btree_cache{entries:CacheEntries},planner:Planner,jit:Jit,tvcc:Tvcc}) :-
     asadb_config_snapshot(Config),
     asadb_pager_stats(PagerStats),
+    asadb_kocoy_stats(NativeStorage),
     aggregate_all(count, asadb_btree_cache(_, _, _, _), CacheEntries),
     planner_stats_dict(Planner),
     logic_jit_stats(Jit),

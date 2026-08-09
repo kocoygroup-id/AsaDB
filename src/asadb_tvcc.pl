@@ -48,13 +48,57 @@ asadb_tvcc_boot(File, State, Database) :-
 asadb_tvcc_boot_locked(File, State, Database) :-
     asadb_tvcc_shutdown_locked,
     tvcc_root_for_file(File, Root),
-    make_directory_path(Root),
+    tvcc_prepare_root_for_boot(Root),
     assertz(tvcc_root(Root)),
     assertz(tvcc_next_generation(1)),
     tvcc_reserve_generation_locked(Generation, Root, none),
     tvcc_build_generation(File, [all], Generation, Root, none, Temporary),
     tvcc_publish_reserved_generation_locked(Temporary, Generation, State,
                                             Database, Root).
+
+% TVCC generations are process-local, derived reader snapshots.  They are
+% never the durable source of truth: the catalog, WAL, and record store have
+% already completed their normal recovery before this predicate is reached.
+%
+% A forced stop can leave both a published generation and its staging
+% directory behind.  Generation numbering starts at one on every new process,
+% so trying to publish over that residue makes rename_file/2 fail and prevents
+% the whole backend from starting.  Clear only directories/files whose names
+% are valid managed generation names; unrelated forensic material in the root
+% is deliberately left alone.
+tvcc_prepare_root_for_boot(Root) :-
+    ( exists_directory(Root) ->
+        directory_files(Root, Entries),
+        forall(member(Name, Entries),
+               tvcc_remove_boot_residue(Root, Name))
+    ; true
+    ),
+    make_directory_path(Root).
+
+tvcc_remove_boot_residue(_, '.') :- !.
+tvcc_remove_boot_residue(_, '..') :- !.
+tvcc_remove_boot_residue(Root, Name) :-
+    tvcc_generation_residue_name(Name), !,
+    directory_file_path(Root, Name, Path),
+    ( tvcc_symbolic_link(Path) -> delete_file(Path)
+    ; exists_directory(Path) -> delete_directory_and_contents(Path)
+    ; exists_file(Path) -> delete_file(Path)
+    ; true
+    ).
+tvcc_remove_boot_residue(_, _).
+
+% A malformed local tree must not turn cleanup of a derived generation name
+% into recursive deletion through a symlink. Deleting the link itself is safe;
+% the linked target remains untouched.
+tvcc_symbolic_link(Path) :-
+    catch(read_link(Path, _, _), _, fail).
+
+tvcc_generation_residue_name(Name) :-
+    atom_concat('generation-', Suffix0, Name),
+    ( atom_concat(Digits, '.tmp', Suffix0) -> true ; Digits = Suffix0 ),
+    atom_number(Digits, Generation),
+    integer(Generation),
+    Generation > 0.
 
 asadb_tvcc_shutdown :-
     with_mutex(asadb_tvcc, asadb_tvcc_shutdown_locked).
