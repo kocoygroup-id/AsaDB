@@ -58,6 +58,9 @@
 
 :- use_module(library(lists)).
 :- use_module(library(assoc)).
+:- use_module(library(ordsets)).
+:- use_module(library(rbtrees)).
+:- use_module(library(nb_rbtrees)).
 :- use_module(library(readutil)).
 :- use_module(library(solution_sequences)).
 :- use_module('asadb_buffer_pool.pl').
@@ -84,6 +87,9 @@
 :- dynamic asadb_hot_filter/2.
 :- dynamic asadb_hot_filter_cache/5.
 :- dynamic asadb_hot_filter_tick/1.
+:- dynamic asadb_filter_hotness/3.
+:- dynamic asadb_filter_hotness_count/1.
+:- dynamic asadb_insert_key_cache/4.
 :- dynamic asadb_checkpoint_dirty/0.
 :- thread_local asadb_query_batch_depth/1.
 :- thread_local asadb_tvcc_read_state/1.
@@ -390,6 +396,7 @@ asadb_boot(InputFile) :-
     retractall(asadb_current_user(_)),
     retractall(asadb_btree_cache(_, _, _, _)),
     retractall(asadb_index_probe_count(_, _, _, _)),
+    clear_insert_key_cache,
     retractall(asadb_plan_stat(_, _)),
     reset_logic_jit,
     retractall(asadb_checkpoint_dirty),
@@ -453,6 +460,7 @@ asadb_shutdown :-
     retractall(asadb_current_user(_)),
     retractall(asadb_btree_cache(_, _, _, _)),
     retractall(asadb_index_probe_count(_, _, _, _)),
+    clear_insert_key_cache,
     retractall(asadb_plan_stat(_, _)),
     reset_logic_jit,
     retractall(asadb_checkpoint_dirty),
@@ -711,12 +719,18 @@ bool_value(_, false).
 planner_stats_dict(planner{index_scans:IndexScans,index_order_scans:IndexOrderScans,
                            sequential_scans:SequentialScans,index_builds:IndexBuilds,
                            metadata_count_scans:MetadataCountScans,
+                           insert_validation_scans:InsertValidationScans,
+                           insert_index_probes:InsertIndexProbes,
+                           index_invalidations:IndexInvalidations,
                            indexed_joins:IndexedJoins,nested_loop_joins:NestedLoopJoins}) :-
     plan_stat(index_scan, IndexScans),
     plan_stat(index_order_scan, IndexOrderScans),
     plan_stat(sequential_scan, SequentialScans),
     plan_stat(index_build, IndexBuilds),
     plan_stat(metadata_count_scan, MetadataCountScans),
+    plan_stat(insert_validation_scan, InsertValidationScans),
+    plan_stat(insert_index_probe, InsertIndexProbes),
+    plan_stat(index_invalidation, IndexInvalidations),
     plan_stat(indexed_join, IndexedJoins),
     plan_stat(nested_loop_join, NestedLoopJoins).
 
@@ -726,6 +740,12 @@ plan_stat(_, 0).
 note_plan(Name) :-
     ( retract(asadb_plan_stat(Name, Current)) -> true ; Current = 0 ),
     Next is Current + 1,
+    assertz(asadb_plan_stat(Name, Next)).
+
+note_plan_n(_, 0) :- !.
+note_plan_n(Name, Added) :-
+    ( retract(asadb_plan_stat(Name, Current)) -> true ; Current = 0 ),
+    Next is Current + Added,
     assertz(asadb_plan_stat(Name, Next)).
 
 asadb_current_database(Name) :-
@@ -1026,7 +1046,8 @@ end_query_batch(true) :-
     ; asadb_tx_snapshot(_) -> true
     ; asadb_checkpoint_dirty -> asadb_save
     ; true
-    ).
+    ),
+    ( asadb_tx_snapshot(_) -> true ; clear_insert_key_cache ).
 
 % Execution stays in the stateful core.  The SQL frontend only produces ASTs;
 % batching consecutive INSERT statements here retains the previous atomic
@@ -1105,44 +1126,122 @@ asadb_analyze_sql(SQL, Diagnostics) :-
    ------------------------------------------------------------------------- */
 
 hot_filter_cache_max_entries(128).
+hot_filter_hotness_max_entries(256).
+hot_filter_hotness_threshold(3).
 
 reset_logic_jit :-
     with_mutex(asadb_logic_jit,
-        ( retractall(asadb_hot_filter(_, _)),
-          retractall(asadb_hot_filter_cache(_, _, _, _, _)),
+        ( retractall(asadb_hot_filter_cache(_, _, _, _, _)),
+          retractall(asadb_hot_filter(_, _)),
           retractall(asadb_hot_filter_tick(_)),
+          retractall(asadb_filter_hotness(_, _, _)),
+          retractall(asadb_filter_hotness_count(_)),
           assertz(asadb_hot_filter_tick(0)),
+          assertz(asadb_filter_hotness_count(0)),
           flag(asadb_jit_filter_hits, _, 0),
-          flag(asadb_jit_filter_misses, _, 0)
+          flag(asadb_jit_filter_misses, _, 0),
+          flag(asadb_jit_filter_specializations, _, 0)
         )),
     asadb_jit_reset.
 
 prepare_row_filter(true, always) :- !.
-prepare_row_filter(Expression, compiled(PlanId)) :-
+prepare_row_filter(Expression, Filter) :-
     ground(Expression),
-    asadb_jit_filter_body(Expression, Row, Body), !,
     term_hash(Expression, Hash),
     with_mutex(asadb_logic_jit,
-        cached_or_compile_filter(Hash, Expression, Row, Body, PlanId)).
+        prepare_filter_cache_state(Hash, Expression, State)),
+    resolve_filter_cache_state(State, Hash, Expression, Filter), !.
 prepare_row_filter(Expression, interpreted(Expression)).
 
-cached_or_compile_filter(Hash, Expression, _, _, PlanId) :-
-    % Refresh the LRU position on each hit.  The expression check deliberately
-    % precedes the cut: two distinct expressions may share term_hash/2.
-    asadb_hot_filter_cache(Hash, CachedExpression, PlanId, ClauseRef, OldTick),
-    Expression == CachedExpression, !,
-    retract(asadb_hot_filter_cache(Hash, CachedExpression, PlanId, ClauseRef,
-                                   OldTick)),
-    next_hot_filter_tick(NewTick),
-    assertz(asadb_hot_filter_cache(Hash, CachedExpression, PlanId, ClauseRef,
-                                   NewTick)),
+prepare_filter_cache_state(Hash, Expression, compiled(PlanId)) :-
+    cached_filter_plan(Hash, Expression, PlanId), !,
     increment_logic_jit_flag(asadb_jit_filter_hits).
-cached_or_compile_filter(Hash, Expression, Row, Body, PlanId) :-
+prepare_filter_cache_state(Hash, Expression, State) :-
     increment_logic_jit_flag(asadb_jit_filter_misses),
+    note_filter_hotness(Hash, Expression, State).
+
+% Cache hits are read-only.  The previous exact-LRU implementation retracted
+% and reasserted a dynamic fact on every row-filter preparation, turning a hot
+% Server Mode workload into a global write lock.  FIFO/second-chance-by-
+% hotness is deterministic and bounded, while one-off filters never enter the
+% compiled cache at all.  Hotness-gated FIFO avoids write amplification on
+% cache hits while keeping deterministic memory bounds.
+cached_filter_plan(Hash, Expression, PlanId) :-
+    asadb_hot_filter_cache(Hash, CachedExpression, PlanId, _, _),
+    Expression == CachedExpression, !.
+
+note_filter_hotness(Hash, Expression, unsupported) :-
+    asadb_filter_hotness(Hash, CachedExpression, unsupported),
+    Expression == CachedExpression, !.
+note_filter_hotness(Hash, Expression, State) :-
+    asadb_filter_hotness(Hash, CachedExpression, Count0),
+    Expression == CachedExpression, !,
+    retract(asadb_filter_hotness(Hash, CachedExpression, Count0)),
+    Count is Count0 + 1,
+    hot_filter_hotness_threshold(Threshold),
+    ( Count >= Threshold ->
+        decrement_filter_hotness_count,
+        State = hot
+    ; assertz(asadb_filter_hotness(Hash, CachedExpression, Count)),
+      State = cold
+    ).
+note_filter_hotness(Hash, Expression, cold) :-
+    ensure_filter_hotness_capacity,
+    assertz(asadb_filter_hotness(Hash, Expression, 1)),
+    increment_filter_hotness_count.
+
+ensure_filter_hotness_capacity :-
+    asadb_filter_hotness_count(Count),
+    hot_filter_hotness_max_entries(Max),
+    Count < Max, !.
+ensure_filter_hotness_capacity :-
+    retractall(asadb_filter_hotness(_, _, _)),
+    retractall(asadb_filter_hotness_count(_)),
+    assertz(asadb_filter_hotness_count(0)).
+
+increment_filter_hotness_count :-
+    retract(asadb_filter_hotness_count(Count0)), !,
+    Count is Count0 + 1,
+    assertz(asadb_filter_hotness_count(Count)).
+increment_filter_hotness_count :-
+    assertz(asadb_filter_hotness_count(1)).
+
+decrement_filter_hotness_count :-
+    retract(asadb_filter_hotness_count(Count0)), !,
+    Count is max(0, Count0 - 1),
+    assertz(asadb_filter_hotness_count(Count)).
+decrement_filter_hotness_count.
+
+resolve_filter_cache_state(compiled(PlanId), _, Expression,
+                           compiled(PlanId, Expression)).
+resolve_filter_cache_state(cold, _, Expression, interpreted(Expression)).
+resolve_filter_cache_state(unsupported, _, Expression, interpreted(Expression)).
+resolve_filter_cache_state(hot, Hash, Expression, Filter) :-
+    increment_logic_jit_flag(asadb_jit_filter_specializations),
+    ( asadb_jit_filter_body(Expression, Row, Body) ->
+        with_mutex(asadb_logic_jit,
+            install_compiled_filter(Hash, Expression, Row, Body, PlanId)),
+        Filter = compiled(PlanId, Expression)
+    ; with_mutex(asadb_logic_jit,
+          mark_filter_unsupported(Hash, Expression)),
+      Filter = interpreted(Expression)
+    ).
+
+install_compiled_filter(Hash, Expression, _, _, PlanId) :-
+    cached_filter_plan(Hash, Expression, PlanId), !.
+install_compiled_filter(Hash, Expression, Row, Body, PlanId) :-
     next_hot_filter_tick(PlanId),
     assertz((asadb_hot_filter(PlanId, Row) :- Body), ClauseRef),
     assertz(asadb_hot_filter_cache(Hash, Expression, PlanId, ClauseRef, PlanId)),
     trim_hot_filter_cache.
+
+mark_filter_unsupported(Hash, Expression) :-
+    ( asadb_filter_hotness(Hash, CachedExpression, _) ,
+      Expression == CachedExpression -> true
+    ; ensure_filter_hotness_capacity,
+      assertz(asadb_filter_hotness(Hash, Expression, unsupported)),
+      increment_filter_hotness_count
+    ).
 
 next_hot_filter_tick(Tick) :-
     ( retract(asadb_hot_filter_tick(Tick0)) -> true ; Tick0 = 0 ),
@@ -1158,9 +1257,9 @@ trim_hot_filter_cache :-
               Entries),
       keysort(Entries,
               [_-entry(OldHash, OldExpression, OldPlanId, OldClauseRef)|_]),
-      catch(erase(OldClauseRef), _, true),
       retractall(asadb_hot_filter_cache(OldHash, OldExpression, OldPlanId,
-                                        OldClauseRef, _))
+                                        OldClauseRef, _)),
+      catch(erase(OldClauseRef), _, true)
     ).
 
 row_filter_matches(always, _).
@@ -1169,6 +1268,11 @@ row_filter_matches(compiled(PlanId), Row) :-
     % Some compatible truth predicates have more than one Prolog proof (for
     % example numeric 1), so never let proof multiplicity duplicate SQL rows.
     asadb_hot_filter(PlanId, Row), !.
+row_filter_matches(compiled(PlanId, Expression), Row) :-
+    ( asadb_hot_filter(PlanId, Row) -> true
+    ; asadb_hot_filter_cache(_, _, PlanId, _, _) -> fail
+    ; row_matches(Row, Expression)
+    ), !.
 row_filter_matches(interpreted(Expression), Row) :-
     row_matches(Row, Expression).
 
@@ -1188,11 +1292,21 @@ logic_filter_jit_stats(ParseStats, Jit) :-
     hot_filter_cache_max_entries(FilterLimit),
     flag(asadb_jit_filter_hits, FilterHits, FilterHits),
     flag(asadb_jit_filter_misses, FilterMisses, FilterMisses),
+    flag(asadb_jit_filter_specializations, Specializations, Specializations),
+    ( asadb_filter_hotness_count(HotnessEntries) -> true
+    ; HotnessEntries = 0
+    ),
+    hot_filter_hotness_threshold(HotnessThreshold),
+    hot_filter_hotness_max_entries(HotnessLimit),
     put_dict(_{
         filter_cache_entries:FilterEntries,
         filter_cache_limit:FilterLimit,
         filter_hits:FilterHits,
         filter_misses:FilterMisses,
+        filter_specializations:Specializations,
+        filter_hotness_entries:HotnessEntries,
+        filter_hotness_limit:HotnessLimit,
+        filter_hotness_threshold:HotnessThreshold,
         backend:'SWI-Prolog VM + JITI',
         native_code:false
     }, ParseStats, Jit).
@@ -2123,7 +2237,8 @@ commit_transaction_snapshot_locked :-
     asadb_tx_snapshot(_), !,
     retractall(asadb_tx_snapshot(_)),
     asadb_save_locked,
-    asadb_record_tx_commit.
+    asadb_record_tx_commit,
+    clear_insert_key_cache.
 commit_transaction_snapshot_locked.
 
 rollback_transaction_snapshot :-
@@ -2132,6 +2247,7 @@ rollback_transaction_snapshot :-
 rollback_transaction_snapshot_locked :-
     retract(asadb_tx_snapshot(State)), !,
     asadb_record_tx_rollback,
+    clear_insert_key_cache,
     retractall(asadb_state(_)),
     assertz(asadb_state(State)).
 rollback_transaction_snapshot_locked.
@@ -2340,6 +2456,7 @@ apply_db_action(ensure_table(Table), db(DB, Tables, V, F, P, T), db(DB, NewTable
     ( table_member(Name, Tables, _) -> NewTables = Tables ; NewTables = [Table|Tables] ).
 apply_db_action(create_table_in_db(Name, Columns, Indexes), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     asadb_record_store_id(DB, Name, StoreId),
+    clear_insert_key_cache(StoreId),
     asadb_record_create(StoreId),
     init_auto_counters(Columns, [], Counters),
     New = table(Name, Columns, paged_rows(StoreId, 0, Counters), Indexes),
@@ -2357,14 +2474,13 @@ apply_db_action(truncate_table_in_db(Name), db(DB, Tables, V, F, P, T), db(DB, N
 apply_db_action(insert_rows_in_db(Name, Columns, ValueRows), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Name, Tables, table(Name, TableColumns, paged_rows(StoreId, Count0, Counters0), Indexes), OtherTables), !,
     build_rows_(TableColumns, Columns, ValueRows, Counters0, Counters, NewRows),
-    findall(ExistingRow, asadb_record_scan(StoreId, _, ExistingRow), ExistingRows),
-    asadb_schema_validate_insert_rows(TableColumns, Indexes, ExistingRows, NewRows),
-    append(ExistingRows, NewRows, CandidateRows),
-    validate_table_integrity(Name, TableColumns, Indexes, CandidateRows, OtherTables),
+    validate_paged_insert_integrity(Name, StoreId, Count0, TableColumns,
+                                    Indexes, NewRows, OtherTables),
     asadb_record_insert_batch(StoreId, NewRows),
-    asadb_record_invalidate_indexes(StoreId),
     length(NewRows, Added),
     Count is Count0 + Added,
+    extend_insert_key_caches(StoreId, Count0, Count, NewRows),
+    maybe_invalidate_insert_indexes(StoreId, Indexes),
     NewTables = [table(Name, TableColumns, paged_rows(StoreId, Count, Counters), Indexes)|OtherTables].
 apply_db_action(insert_rows_in_db(Name, Columns, ValueRows), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Name, Tables, table(Name, TableColumns, Rows, Indexes), OtherTables),
@@ -2384,6 +2500,7 @@ apply_db_action(update_rows_in_db(Name, Assignments, Where, Count), db(DB, Table
     ; asadb_record_rewrite(StoreId, paged_update_transform(Assignments, Where), NewCount, Count, _)
     ),
     maybe_invalidate_update_indexes(StoreId, Indexes, Assignments),
+    clear_insert_key_cache(StoreId),
     NewTables = [table(Name, Columns, paged_rows(StoreId, NewCount, Counters), Indexes)|OtherTables].
 apply_db_action(update_rows_in_db(Name, Assignments, Where, Count), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Name, Tables, table(Name, Columns, Rows, Indexes), OtherTables),
@@ -2404,6 +2521,7 @@ apply_db_action(delete_rows_in_db(Name, Where, Count), db(DB, Tables, V, F, P, T
       KeepIndexes = false
     ),
     ( KeepIndexes == true -> true ; asadb_record_invalidate_indexes(StoreId) ),
+    clear_insert_key_cache(StoreId),
     NewTables = [table(Name, Columns, paged_rows(StoreId, NewCount, Counters), Indexes)|OtherTables].
 apply_db_action(delete_rows_in_db(Name, Where, Count), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Name, Tables, table(Name, Columns, Rows, Indexes), OtherTables),
@@ -2412,10 +2530,12 @@ apply_db_action(delete_rows_in_db(Name, Where, Count), db(DB, Tables, V, F, P, T
     NewTables = [table(Name, Columns, Kept, Indexes)|OtherTables].
 apply_db_action(create_index_in_db(Table, Name, Columns, Unique), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Table, Tables, table(Table, TableColumns, Rows, Indexes), OtherTables),
+    invalidate_row_storage_indexes(Rows),
     remove_index(Name, Indexes, Without),
     NewTables = [table(Table, TableColumns, Rows, [index(Name, Columns, Unique)|Without])|OtherTables].
 apply_db_action(drop_index_in_db(Table, Name), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
     select_table(Table, Tables, table(Table, Columns, Rows, Indexes), OtherTables),
+    invalidate_row_storage_indexes(Rows),
     remove_index(Name, Indexes, NewIndexes),
     NewTables = [table(Table, Columns, Rows, NewIndexes)|OtherTables].
 apply_db_action(alter_table_in_db(Table, Operations), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
@@ -2423,6 +2543,7 @@ apply_db_action(alter_table_in_db(Table, Operations), db(DB, Tables, V, F, P, T)
     apply_alter_operations(Operations, Columns, [], Indexes, NewColumns, [], NewIndexes),
     asadb_record_rewrite(StoreId, paged_alter_transform(Operations, Columns, Indexes), Count, _, _),
     asadb_record_invalidate_indexes(StoreId),
+    clear_insert_key_cache(StoreId),
     paged_auto_counters(NewColumns, StoreId, NewCounters),
     NewTables = [table(Table, NewColumns, paged_rows(StoreId, Count, NewCounters), NewIndexes)|OtherTables].
 apply_db_action(alter_table_in_db(Table, Operations), db(DB, Tables, V, F, P, T), db(DB, NewTables, V, F, P, T)) :-
@@ -2462,6 +2583,285 @@ validate_table_integrity(Table, Columns, Indexes, Rows, OtherTables) :-
     validate_column_check_constraints(Table, Columns, Rows),
     validate_check_constraints(Indexes, Rows),
     validate_foreign_key_rows(Table, Indexes, Rows, OtherTables).
+
+% Page-backed INSERT validation is incremental.  The old path decoded every
+% existing row, appended it to the new batch, and then revalidated the whole
+% candidate table.  Row types, NOT NULL, CHECK, and duplicates inside a batch
+% depend only on NewRows.  Existing UNIQUE/FK state is probed through a valid
+% persistent index when one already exists, with a single projected-column
+% scan as the correctness fallback.  No record-store mutation happens until
+% every check below succeeds.
+validate_paged_insert_integrity(Table, StoreId, ExistingCount, Columns,
+                                Indexes, NewRows, OtherTables) :-
+    asadb_schema_validate_insert_rows(Columns, Indexes, [], NewRows),
+    validate_paged_unique_existing(StoreId, ExistingCount, Indexes, NewRows),
+    validate_column_check_constraints(Table, Columns, NewRows),
+    validate_check_constraints(Indexes, NewRows),
+    validate_paged_foreign_key_rows(Table, StoreId, ExistingCount, Indexes,
+                                    NewRows, OtherTables).
+
+validate_paged_unique_existing(_, 0, _, _) :- !.
+validate_paged_unique_existing(_, _, [], _).
+validate_paged_unique_existing(StoreId, ExistingCount,
+                               [index(Name, KeyColumns, unique)|Indexes],
+                               NewRows) :- !,
+    constraint_key_pairs(Name, KeyColumns, NewRows, KeyPairs),
+    validate_unique_keys_against_store(Name, StoreId, ExistingCount,
+                                       KeyColumns, KeyPairs),
+    validate_paged_unique_existing(StoreId, ExistingCount, Indexes, NewRows).
+validate_paged_unique_existing(StoreId, ExistingCount, [_|Indexes], NewRows) :-
+    validate_paged_unique_existing(StoreId, ExistingCount, Indexes, NewRows).
+
+validate_unique_keys_against_store(_, _, _, _, []) :- !.
+validate_unique_keys_against_store(Name, StoreId, ExistingCount, Columns,
+                                   KeyPairs) :-
+    paged_missing_key_pairs(StoreId, ExistingCount, Columns, KeyPairs,
+                            Missing),
+    key_pairs_keys(KeyPairs, AllKeys),
+    key_pairs_keys(Missing, MissingKeys),
+    ord_subtract(AllKeys, MissingKeys, CollisionKeys),
+    ( CollisionKeys = [] -> true
+    ; CollisionKeys = [Duplicate|_],
+      throw(error(permission_error(insert, unique_key(Name), Duplicate), _))
+    ).
+
+constraint_key_pairs(Name, Columns, Rows, Pairs) :-
+    findall(Key-Raw,
+            ( member(Row, Rows),
+              row_key_values(Columns, Row, Raw),
+              constraint_key_participates(Name, Raw),
+              canonical_constraint_values(Raw, Key)
+            ),
+            RawPairs),
+    sort_constraint_key_pairs(RawPairs, Pairs).
+
+constraint_key_participates('PRIMARY', Raw) :- !,
+    \+ memberchk(null, Raw).
+constraint_key_participates(_, Raw) :-
+    \+ memberchk(null, Raw).
+
+canonical_constraint_values([], []).
+canonical_constraint_values([Value|Values], [Key|Keys]) :-
+    canonical_constraint_value(Value, Key),
+    canonical_constraint_values(Values, Keys).
+
+canonical_constraint_value(null, null) :- !.
+canonical_constraint_value(Value, number(Number)) :- number(Value), !,
+    Number is rationalize(Value).
+canonical_constraint_value(Value, term(Value)).
+
+sort_constraint_key_pairs(Pairs0, Pairs) :-
+    keysort(Pairs0, Sorted),
+    dedupe_constraint_key_pairs(Sorted, Pairs).
+
+dedupe_constraint_key_pairs([], []).
+dedupe_constraint_key_pairs([Key-Raw|Pairs], [Key-Raw|Unique]) :-
+    skip_constraint_key(Key, Pairs, Rest),
+    dedupe_constraint_key_pairs(Rest, Unique).
+
+skip_constraint_key(Key, [Next-_|Pairs], Rest) :- Next == Key, !,
+    skip_constraint_key(Key, Pairs, Rest).
+skip_constraint_key(_, Pairs, Pairs).
+
+paged_missing_key_pairs(_, _, _, [], []) :- !.
+paged_missing_key_pairs(StoreId, _, Columns, KeyPairs, Missing) :-
+    Columns = [ProbeColumn|_],
+    valid_persistent_index(StoreId, ProbeColumn), !,
+    identifier_cache_key(ProbeColumn, CacheColumn),
+    asadb_record_index_file(StoreId, CacheColumn, File),
+    include(index_key_pair_missing(File, StoreId, Columns), KeyPairs, Missing),
+    length(KeyPairs, ProbeCount),
+    note_plan_n(insert_index_probe, ProbeCount).
+paged_missing_key_pairs(StoreId, ExistingCount, Columns, KeyPairs, Missing) :-
+    insert_key_cache_max_rows(MaxRows),
+    ExistingCount =< MaxRows,
+    ensure_insert_key_cache(StoreId, ExistingCount, Columns),
+    include(insert_key_pair_missing(StoreId, Columns), KeyPairs, Missing), !.
+paged_missing_key_pairs(StoreId, _, Columns, KeyPairs, Missing) :-
+    key_pairs_tree(KeyPairs, NeededTree),
+    findall(Key,
+            ( asadb_record_scan_columns(StoreId, Columns, _, Row),
+              canonical_row_constraint_key(Columns, Row, Key),
+              rb_lookup(Key, _, NeededTree)
+            ),
+            Found0),
+    sort(Found0, Found),
+    key_pairs_without_keys(KeyPairs, Found, Missing),
+    note_plan(insert_validation_scan).
+
+key_pairs_tree(KeyPairs, Tree) :-
+    rb_empty(Tree),
+    forall(member(Key-_, KeyPairs), nb_rb_insert(Tree, Key, true)).
+
+insert_key_cache_max_rows(250000).
+
+ensure_insert_key_cache(StoreId, ExistingCount, Columns) :-
+    asadb_insert_key_cache(StoreId, CachedColumns, ExistingCount, Global),
+    Columns == CachedColumns,
+    nb_current(Global, _), !.
+ensure_insert_key_cache(StoreId, ExistingCount, Columns) :-
+    clear_insert_key_cache(StoreId, Columns),
+    rb_empty(Tree),
+    forall(asadb_record_scan_columns(StoreId, Columns, _, Row),
+           ( canonical_row_constraint_key(Columns, Row, Key),
+             nb_rb_insert(Tree, Key, true)
+           )),
+    flag(asadb_insert_cache_serial, Serial0, Serial0 + 1),
+    format(atom(Global), '$asadb_insert_key_cache_~d', [Serial0]),
+    nb_linkval(Global, Tree),
+    assertz(asadb_insert_key_cache(StoreId, Columns, ExistingCount, Global)),
+    note_plan(insert_validation_scan).
+
+insert_key_pair_missing(StoreId, Columns, Key-_) :-
+    asadb_insert_key_cache(StoreId, CachedColumns, _, Global),
+    Columns == CachedColumns,
+    nb_getval(Global, Tree),
+    \+ rb_lookup(Key, _, Tree).
+
+index_key_pair_missing(File, StoreId, Columns, Key-Raw) :-
+    Raw = [ProbeValue|_],
+    \+ once((
+        asadb_btree_file_candidate(File, '=', ProbeValue, Rid),
+        asadb_record_read(StoreId, Rid, Row),
+        canonical_row_constraint_key(Columns, Row, ExistingKey),
+        ExistingKey == Key
+    )).
+
+canonical_row_constraint_key(Columns, Row, Key) :-
+    row_key_values(Columns, Row, Raw),
+    canonical_constraint_values(Raw, Key).
+
+key_pairs_keys([], []).
+key_pairs_keys([Key-_|Pairs], [Key|Keys]) :-
+    key_pairs_keys(Pairs, Keys).
+
+key_pairs_without_keys([], _, []).
+key_pairs_without_keys(Pairs, [], Pairs) :- !.
+key_pairs_without_keys([Key-Raw|Pairs], [Found|FoundKeys], Missing) :-
+    compare(Order, Key, Found),
+    key_pairs_without_keys_order(Order, Key-Raw, Pairs, Found, FoundKeys,
+                                 Missing).
+
+key_pairs_without_keys_order(=, _, Pairs, _, FoundKeys, Missing) :- !,
+    key_pairs_without_keys(Pairs, FoundKeys, Missing).
+key_pairs_without_keys_order(<, Pair, Pairs, Found, FoundKeys,
+                             [Pair|Missing]) :- !,
+    key_pairs_without_keys(Pairs, [Found|FoundKeys], Missing).
+key_pairs_without_keys_order(>, Pair, Pairs, _, FoundKeys, Missing) :-
+    key_pairs_without_keys([Pair|Pairs], FoundKeys, Missing).
+
+validate_paged_foreign_key_rows(_, _, _, [], _, _).
+validate_paged_foreign_key_rows(Table, StoreId, ExistingCount,
+                                [foreign_key(Name, LocalColumns, RefTable,
+                                             RefColumns, restrict, restrict)|Indexes],
+                                NewRows, OtherTables) :- !,
+    constraint_key_pairs(foreign_key, LocalColumns, NewRows, Required0),
+    foreign_key_missing_pairs(Table, StoreId, ExistingCount, RefTable, RefColumns,
+                              NewRows, OtherTables, Required0, Missing),
+    ( Missing = [] -> true
+    ; Missing = [_-Raw|_],
+      throw(error(existence_error(foreign_key(Name, RefTable), Raw), _))
+    ),
+    validate_paged_foreign_key_rows(Table, StoreId, ExistingCount, Indexes,
+                                    NewRows, OtherTables).
+validate_paged_foreign_key_rows(Table, StoreId, ExistingCount, [_|Indexes],
+                                NewRows, OtherTables) :-
+    validate_paged_foreign_key_rows(Table, StoreId, ExistingCount, Indexes,
+                                    NewRows, OtherTables).
+
+foreign_key_missing_pairs(Table, StoreId, ExistingCount, RefTable, RefColumns,
+                          NewRows, _, Required0, Missing) :-
+    same_identifier(Table, RefTable), !,
+    constraint_key_pairs(foreign_key, RefColumns, NewRows, NewParentPairs),
+    key_pairs_keys(NewParentPairs, NewParentKeys),
+    key_pairs_without_keys(Required0, NewParentKeys, ExistingRequired),
+    paged_missing_key_pairs(StoreId, ExistingCount, RefColumns,
+                            ExistingRequired, Missing).
+foreign_key_missing_pairs(_, _, _, RefTable, RefColumns, _, OtherTables,
+                          Required, Missing) :-
+    table_member(RefTable, OtherTables, ParentTable),
+    table_parts(ParentTable, _, _, ParentStorage, _),
+    foreign_key_storage_missing(ParentStorage, RefColumns, Required, Missing).
+
+foreign_key_storage_missing(_, _, [], []) :- !.
+foreign_key_storage_missing(paged_rows(StoreId, Count, _), Columns, Required,
+                            Missing) :- !,
+    paged_missing_key_pairs(StoreId, Count, Columns, Required, Missing).
+foreign_key_storage_missing(Rows, Columns, Required, Missing) :-
+    findall(Key,
+            ( member(Row, Rows),
+              canonical_row_constraint_key(Columns, Row, Key)
+            ),
+            ParentKeys0),
+    sort(ParentKeys0, ParentKeys),
+    key_pairs_without_keys(Required, ParentKeys, Missing).
+
+maybe_invalidate_insert_indexes(StoreId, Indexes) :-
+    persistent_index_file_exists(StoreId, Indexes), !,
+    asadb_record_invalidate_indexes(StoreId),
+    note_plan(index_invalidation).
+maybe_invalidate_insert_indexes(_, _).
+
+persistent_index_file_exists(StoreId, Indexes) :-
+    member(index(_, [Column|_], _), Indexes),
+    identifier_cache_key(Column, CacheColumn),
+    asadb_record_index_file(StoreId, CacheColumn, File),
+    exists_file(File), !.
+
+invalidate_row_storage_indexes(paged_rows(StoreId, _, _)) :- !,
+    asadb_record_invalidate_indexes(StoreId),
+    note_plan(index_invalidation).
+invalidate_row_storage_indexes(_).
+
+% During an explicit bulk transaction, projected constraint keys are retained
+% only for the current row count.  A later batch therefore performs logarithmic
+% lookups in a mutable red-black tree instead of rescanning prior heap pages.
+% Its 250k-row admission bound prevents an unexpectedly large transaction from
+% turning validation into unbounded process memory.  The cache is
+% extended only after the record batch succeeds, and is discarded on commit,
+% rollback, non-INSERT mutation, boot, and shutdown.
+extend_insert_key_caches(StoreId, _, Count, _) :-
+    insert_key_cache_max_rows(MaxRows),
+    Count > MaxRows, !,
+    clear_insert_key_cache(StoreId).
+extend_insert_key_caches(StoreId, Count0, Count, NewRows) :-
+    findall(Columns-Global,
+            asadb_insert_key_cache(StoreId, Columns, Count0, Global),
+            Caches),
+    forall(member(Columns-Global, Caches),
+           extend_insert_key_cache(StoreId, Columns, Global, Count0, Count,
+                                   NewRows)).
+
+extend_insert_key_cache(StoreId, Columns, Global, Count0, Count, NewRows) :-
+    constraint_key_pairs(cache, Columns, NewRows, NewPairs),
+    nb_getval(Global, Tree),
+    forall(member(Key-_, NewPairs),
+           nb_rb_insert(Tree, Key, true)),
+    retractall(asadb_insert_key_cache(StoreId, Columns, Count0, Global)),
+    assertz(asadb_insert_key_cache(StoreId, Columns, Count, Global)).
+
+clear_insert_key_cache :-
+    findall(Global, asadb_insert_key_cache(_, _, _, Global), Globals),
+    maplist(delete_insert_key_global, Globals),
+    retractall(asadb_insert_key_cache(_, _, _, _)).
+
+clear_insert_key_cache(StoreId) :-
+    findall(Global, asadb_insert_key_cache(StoreId, _, _, Global), Globals),
+    maplist(delete_insert_key_global, Globals),
+    retractall(asadb_insert_key_cache(StoreId, _, _, _)).
+
+clear_insert_key_cache(StoreId, Columns) :-
+    findall(Global,
+            ( asadb_insert_key_cache(StoreId, CachedColumns, _, Global),
+              Columns == CachedColumns
+            ),
+            Globals),
+    maplist(delete_insert_key_global, Globals),
+    forall(member(Global, Globals),
+           retractall(asadb_insert_key_cache(StoreId, _, _, Global))).
+
+delete_insert_key_global(Global) :-
+    ( nb_current(Global, _) -> nb_delete(Global) ; true ).
 
 validate_column_check_constraints(_, [], _).
 validate_column_check_constraints(Table, [col(Column, _, Options)|Columns], Rows) :-
@@ -2686,7 +3086,9 @@ paged_auto_counters_([col(Name, _, Options)|Columns], StoreId, Counters) :-
 paged_auto_counters_([_|Columns], StoreId, Counters) :-
     paged_auto_counters_(Columns, StoreId, Counters).
 
-drop_row_storage(paged_rows(StoreId, _, _)) :- !, asadb_record_drop(StoreId).
+drop_row_storage(paged_rows(StoreId, _, _)) :- !,
+    clear_insert_key_cache(StoreId),
+    asadb_record_drop(StoreId).
 drop_row_storage(_).
 
 % View operations
@@ -2733,6 +3135,7 @@ map_truncate_table(Name, [T|Ts], [NewT|Ts]) :-
     same_identifier(Name, ActualName), !,
     asadb_record_truncate(StoreId),
     asadb_record_invalidate_indexes(StoreId),
+    clear_insert_key_cache(StoreId),
     init_auto_counters(Cols, [], Counters),
     NewT = table(ActualName, Cols, paged_rows(StoreId, 0, Counters), Indexes).
 map_truncate_table(Name, [T|Ts], [NewT|Ts]) :-
@@ -3974,8 +4377,9 @@ like_atom(Value, Pattern) :-
 like_atom(Value, Pattern) :- Value == Pattern.
 
 lookup_value(Name, Pairs, V) :-
-    lookup_pair_value(Name, Pairs, V), !.
-lookup_value(_, [], null).
+    ( pair_value_same_identifier(Name, Pairs, Found) -> V = Found
+    ; V = null
+    ), !.
 
 % Generic lookup_value/3 returns null for a missing key.  JOIN aliases need to
 % distinguish "missing" from "present with NULL" so the dotted-name fallback

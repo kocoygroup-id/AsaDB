@@ -144,13 +144,15 @@ cleanup_stress(SqlFile, DbFile) :-
     atom_concat(Metadata, '.tmp', MetadataTemp),
     atom_concat(Metadata, '.bak', MetadataBackup),
     atom_concat(DbFile, '.store', StoreDir),
+    atom_concat(DbFile, '.tvcc', TvccDir),
     delete_if_exists(Journal),
     delete_if_exists(CurrentDb),
     delete_if_exists(Wal),
     delete_if_exists(Metadata),
     delete_if_exists(MetadataTemp),
     delete_if_exists(MetadataBackup),
-    ( exists_directory(StoreDir) -> delete_directory_and_contents(StoreDir) ; true ).
+    ( exists_directory(StoreDir) -> delete_directory_and_contents(StoreDir) ; true ),
+    ( exists_directory(TvccDir) -> delete_directory_and_contents(TvccDir) ; true ).
 
 delete_if_exists(File) :-
     ( exists_file(File) -> delete_file(File) ; true ).
