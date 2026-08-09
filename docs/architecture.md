@@ -15,6 +15,7 @@ SQL text / SQL, CSV, or XLSX upload
   -> planner and executor
   -> record manager / persistent B+Tree
   -> buffer pool
+  -> native storage scan batching (cold sequential reads)
   -> 4 KB page manager and disk files
 ```
 
@@ -100,6 +101,16 @@ large first-query index-build pause while preserving fast recurring workloads.
 `src/asadb_buffer_pool.pl` owns the bounded page cache. It tracks pin count,
 dirty state, reference state, logical byte count, hits/misses, and flushing.
 Clock-style replacement skips pinned pages.
+
+### Native storage scan accelerator
+
+`src/kocoy.pl` owns the cold sequential page-read path. It reads a bounded
+batch of fixed-size pages with SWI-Prolog's native binary stream primitive and
+returns the existing byte representation one page at a time. Cached or dirty
+buffer-pool pages still take precedence, and all page validation and row
+decoding remain in the normal pager/record-manager path. The module changes no
+file format and is intentionally not described as a replacement SQL engine or
+a native-code compiler.
 
 ### Pager and page layout
 

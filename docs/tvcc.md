@@ -62,6 +62,17 @@ The publisher reserves its generation metadata briefly, then performs file
 copying outside the reader-coordination mutex. New readers continue acquiring
 the current committed generation while the next image is built.
 
+## Restart recovery
+
+TVCC images are transient, process-local reader material; they are not the
+durable database. Before rebuilding generation one at process startup, AsaDB
+removes only managed `generation-<positive integer>` and
+`generation-<positive integer>.tmp` entries under the derived `.asa.tvcc`
+directory. The normal catalog/WAL/record-store recovery has already completed,
+so the new image is rebuilt from durable state. This prevents an interrupted
+previous process from leaving a published generation and staging directory that
+would otherwise collide with the next atomic rename.
+
 ## Scope and boundaries
 
 TVCC is intentionally local to one AsaDB process and localhost AsAPanel. It
@@ -78,6 +89,7 @@ reader remains readable, and retention returns to three generations after the
 reader releases. It also covers read-your-writes transactions, snapshot API
 rejection of mutations, two readers on one generation, selected-database
 binding, joins, subqueries, aggregates, indexed predicates, ordering, error
-cleanup, and a database path containing spaces. The test runs through the
+cleanup, a database path containing spaces, and interrupted-generation startup
+recovery. The test runs through the
 standard `make test` target; CI also executes the core and TVCC suites on
 Windows.

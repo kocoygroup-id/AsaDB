@@ -415,6 +415,7 @@ src/
   asadb_interchange.pl  Backend MySQL/PostgreSQL/CSV/XLSX import and export
   asadb_page_manager.pl  4 KB slotted-page format
   asadb_pager.pl     Disk page I/O
+  kocoy.pl           Native stream-batched cold page scans
   asadb_buffer_pool.pl  Bounded page cache
   asadb_record_manager.pl  Heap records and mutation recovery
   asadb_tvcc.pl       Local immutable reader-generation coordinator

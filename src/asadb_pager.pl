@@ -18,6 +18,7 @@
 :- use_module(library(readutil)).
 :- use_module('asadb_buffer_pool.pl').
 :- use_module('asadb_config.pl').
+:- use_module('kocoy.pl').
 
 asadb_pager_page_size(Size) :- asadb_config_get(page_size, Size).
 
@@ -29,32 +30,13 @@ asadb_pager_read_page(File, PageNo, Bytes) :-
     ).
 
 asadb_pager_scan_page(File, PageNo, Bytes) :-
-    exists_file(File),
     % A streaming restore validates rows before COMMIT.  Newly appended pages
     % can still be dirty in the buffer pool, so disk size alone would scan
     % only a prefix of the database and make an intact backup look truncated.
     asadb_pager_page_count(File, PageCount),
     PageCount > 0,
-    LastPage is PageCount - 1,
-    setup_call_cleanup(
-        open(File, read, Stream, [type(binary)]),
-        scan_open_stream_page(Stream, File, LastPage, PageNo, Bytes),
-        close(Stream)
-    ).
-
-scan_open_stream_page(Stream, File, LastPage, PageNo, Bytes) :-
-    between(0, LastPage, PageNo),
-    ( asadb_buffer_pool_get(File, PageNo, Bytes) -> true
-    ; asadb_pager_page_size(PageSize),
-      Offset is PageNo * PageSize,
-      seek(Stream, Offset, bof, _),
-      % A sequential scan visits a page once.  Caching every cold page here
-      % needlessly converts it to a dynamic buffer-pool term and repeatedly
-      % evicts a tiny cache; that dominated large unindexed ORDER BY scans.
-      % Existing cached/dirty pages still win above, preserving read-your-own-
-      % write behaviour during a transaction.
-      read_page_bytes(Stream, PageSize, Bytes)
-    ).
+    asadb_pager_page_size(PageSize),
+    asadb_kocoy_scan_pages(File, PageCount, PageSize, PageNo, Bytes).
 
 asadb_pager_write_page(File, PageNo, Bytes0) :-
     must_be(nonneg, PageNo),
