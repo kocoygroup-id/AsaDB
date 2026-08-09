@@ -9,6 +9,13 @@
   rollback_failed for explicit recovery.
 - Added CI-gated offline wheelhouse, SWI-Prolog pack, and real Server Mode E2E
   coverage on Linux and Windows runners.
+- `swipl asadb` now opens the authenticated panel in Server Workspace by
+  default, so registered databases use the supervised Prolog backend instead
+  of silently starting in the browser sandbox. Local Workspace remains an
+  explicit authenticated switch.
+- Server Workspace now fails closed when the Prolog health check or a backend
+  request is unavailable: SQL, table creation, and browser imports report the
+  backend error instead of mutating the browser sandbox.
 
 ## 1.5.0
 

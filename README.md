@@ -346,7 +346,9 @@ swipl asadb
 ```
 
 On first run the command asks for administrator credentials, then opens the
-login page at `http://127.0.0.1:7879/login`. The `.tar.Z` file is
+login page at `http://127.0.0.1:7879/login`. After login, Server Workspace
+uses the supervised Prolog backend by default; Local Workspace remains an
+explicit authenticated switch. The `.tar.Z` file is
 gzip-compressed. `swipl` is a separate runtime dependency.
 
 ## Running The Portable Windows Release

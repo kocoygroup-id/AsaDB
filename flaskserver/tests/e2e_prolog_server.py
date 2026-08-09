@@ -63,14 +63,22 @@ def main() -> None:
                 200,
                 "API login",
             )
-            require(
-                client.post(
-                    "/login",
-                    data={"username": "admin", "password": "very-secure-password"},
-                ),
-                302,
-                "browser login",
+            browser_login = client.post(
+                "/login",
+                data={"username": "admin", "password": "very-secure-password"},
             )
+            require(browser_login, 302, "browser login")
+            if browser_login.headers.get("Location") != "/":
+                raise AssertionError(
+                    "browser login did not enter Server Workspace by default: "
+                    f"{browser_login.headers.get('Location')}"
+                )
+            default_panel = client.get("/")
+            require(default_panel, 200, "default Server Workspace")
+            if b"Server Workspace" not in default_panel.data:
+                raise AssertionError(
+                    "default browser panel did not render Server Workspace"
+                )
             require(client.post("/mode", data={"mode": "local"}), 302, "Local Workspace")
             require(client.post("/mode", data={"mode": "server"}), 302, "Server Workspace")
 

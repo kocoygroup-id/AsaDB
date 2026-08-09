@@ -17,8 +17,10 @@ control-plane state.
 ## Daily use
 
 1. Open the local login page shown by the launcher.
-2. Sign in as an authorized user.
-3. Select Local Workspace (loopback only) or Server Workspace.
+2. Sign in as an authorized user; Server Workspace opens by default and uses
+   the supervised Prolog backend.
+3. Use **Switch workspace** when an authenticated loopback user deliberately
+   needs Local Workspace.
 4. Use **Admin** for server configuration, registered physical `.asa` files,
    user roles, jobs, and audit records.
 5. Use the workspace bar to return to the mode picker or log out.

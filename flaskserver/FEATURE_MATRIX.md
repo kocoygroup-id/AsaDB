@@ -19,7 +19,7 @@
 | AsAPanel server mode | Implemented | Existing panel and APIs hosted/proxied after Flask login |
 | AsAPanel admin/config | Implemented | Shared AsAPanel theme, workspace bar, `/admin`, and `/mode` |
 | Original CLI | Preserved | `swipl asadb local` remains available for terminal-only work |
-| Login-first portal | Implemented | `swipl asadb` / `run_panel` initializes once, opens `/login`, then selects a workspace |
+| Login-first portal | Implemented | `swipl asadb` / `run_panel` initializes once, opens `/login`, then enters Server Workspace with the Prolog backend by default |
 | Local/server workspace choice | Implemented | One authenticated panel; loopback-only Local Workspace is gated by `ASADB_ALLOW_LOCAL_ONLY` |
 | One-pack runtime | Implemented | Offline wheelhouse plus per-user Python bootstrap outside the pack directory |
 | Health/readiness/metrics | Implemented | Public process/readiness probes and administrator operational snapshot |

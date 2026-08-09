@@ -104,9 +104,9 @@ ASADB_REPO_ROOT="$(cd .. && pwd)" ASADB_RUN_REAL_TESTS=1 pytest -q
 
 For browser use, start one AsaDB portal. On the first run it creates the
 offline Python runtime, securely prompts for the first administrator, registers
-the database file, then opens `/login`. After authentication the browser picks
-its workspace; the same AsAPanel, API proxy, and official SWI-Prolog backend
-remain in use.
+the database file, then opens `/login`. After authentication the browser enters
+Server Workspace by default, using the supervised official SWI-Prolog backend;
+the same AsAPanel and API proxy remain in use.
 
 ```bash
 swipl asadb
@@ -272,11 +272,17 @@ Open:
 http://127.0.0.1:7879/login
 ```
 
-After login and workspace selection:
+After login, Server Workspace opens by default and uses the supervised Prolog
+backend. Use **Switch workspace** for an authenticated loopback Local
+Workspace session:
 
 - `/` is the existing AsAPanel in server mode.
 - `/admin` is the Flask server administration page.
 - `/api/v1/*` is the authenticated server API.
+
+If the Prolog backend is unavailable, Server Workspace reports the failure and
+does not fall back to browser-local SQL or import writes. This prevents a
+browser cache from being mistaken for production database state.
 
 ## Remote CLI
 

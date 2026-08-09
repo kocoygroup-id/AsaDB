@@ -142,6 +142,12 @@ assert.match(css, /overscroll-behavior:\s*contain/, 'SQL editor must contain ove
 assert.match(css, /scrollbar-gutter:\s*stable/, 'SQL editor must reserve stable scrollbar space');
 assert.match(css, /\.sql-highlight,\s*#sqlInput\s*\{[\s\S]*box-sizing:\s*border-box[\s\S]*font-variant-ligatures:\s*none/,
   'syntax layer and textarea must share exact box and glyph metrics');
+assert.match(css, /\.sql-highlight span\s*\{[\s\S]*font:\s*inherit[\s\S]*letter-spacing:\s*inherit/,
+  'syntax tokens must preserve native caret glyph advances');
+assert.doesNotMatch(css, /\.sql-keyword\s*\{[^}]*font-weight|\.sql-type\s*\{[^}]*font-weight|\.sql-function\s*\{[^}]*font-weight|\.sql-comment\s*\{[^}]*font-style/,
+  'syntax token styling must not change visible glyph widths relative to the caret');
+assert.match(css, /\.db-action-button\s*\{[\s\S]*place-items:\s*center/,
+  'database action icons must be centered inside their circular buttons');
 assert.match(css, /\.language-button\.active/, 'active language styling is missing');
 assert.match(css, /@font-face[\s\S]*font-family:\s*"AsaDB Noto Sans JP"/, 'bundled Japanese web font is missing');
 assert.match(css, /html:lang\(ja\)[\s\S]*--font-main:\s*"AsaDB Noto Sans JP"/, 'Japanese UI must select its bundled font');
