@@ -81,12 +81,10 @@ run_bounded_insert_batch_assertions :-
     asadb_exec_sql(SQL, Result),
     ( Result = multi([ok(created_database(batch_assert)),
                       ok(using_database(batch_assert)),
-                      ok(created_table(batch_rows)),
-                      ok(inserted(batch_rows, FirstRun)),
-                      ok(inserted(batch_rows, SecondRun))]),
-      FirstRun =< 4096,
-      SecondRun > 0,
-      Total is FirstRun + SecondRun,
+                      ok(created_table(batch_rows))|InsertResults]),
+      InsertResults \= [],
+      maplist(bounded_insert_result, InsertResults, InsertCounts),
+      sum_list(InsertCounts, Total),
       Total =:= ExpectedRows ->
         true
     ; format('ASSERTION FAILED: consecutive INSERT run was not bounded: ~q.~n',
@@ -99,6 +97,9 @@ run_bounded_insert_batch_assertions :-
                table([total], [[ExpectedRows]])),
     asadb_shutdown,
     cleanup.
+
+bounded_insert_result(ok(inserted(batch_rows, Count)), Count) :-
+    Count =< 512.
 
 bounded_insert_fixture(StatementCount, RowsPerStatement, SQL, ExpectedRows) :-
     findall(Statement,
@@ -1024,6 +1025,22 @@ run_drop_database_assertions :-
         halt(1)
     ; true
     ),
+    % USE is selection only.  A typo or a stale Flask/session affinity must
+    % never recreate a database that DROP DATABASE removed (or any other DB).
+    asadb_exec_sql('USE missing_after_drop;', MissingUse),
+    ( MissingUse = multi([error(existence_error(database, missing_after_drop), _)]) -> true
+    ; format('ASSERTION FAILED: USE created or accepted a missing database: ~w~n', [MissingUse]),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    ( asadb_current_database(doomed_db) -> true
+    ; format('ASSERTION FAILED: failed USE changed the selected database.~n', []),
+      asadb_shutdown,
+      cleanup,
+      halt(1)
+    ),
+    expect_sql('SHOW DATABASES;', table([database], [[doomed_db],[retained_db]])),
     expect_sql('DROP DATABASE doomed_db;', ok(dropped_database(doomed_db))),
     ( asadb_current_database(none) -> true
     ; format('ASSERTION FAILED: DROP DATABASE left the removed database selected.~n', []),
@@ -1031,6 +1048,9 @@ run_drop_database_assertions :-
       cleanup,
       halt(1)
     ),
+    expect_sql('SHOW DATABASES;', table([database], [[retained_db]])),
+    % Separate executions model a new HTTP request.  The catalog may not use
+    % a stale in-memory selection to recreate the just-dropped database.
     expect_sql('SHOW DATABASES;', table([database], [[retained_db]])),
     size_file('tests/testdata.asa.wal', WalSize),
     ( WalSize =:= 0 -> true

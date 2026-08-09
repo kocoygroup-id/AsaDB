@@ -38,7 +38,7 @@ for required in \
   src/asadb_core.pl src/asadb_schema.pl src/asadb_sql_frontend.pl src/asadb_prolog_jit.pl src/asadb_backup.pl src/asadb_interchange.pl src/asadb_pager.pl src/bridge/karyawan.pl src/bridge/reservoir.pl src/bridge/horsemen/contract/war/here/yoru_the_wardevil.pl web/index.html web/assets/app.js \
   web/assets/app.legacy.js web/assets/app-loader.js \
   web/assets/fonts/noto-sans-jp-japanese-400-normal.woff2 web/assets/fonts/noto-sans-jp-japanese-400-normal.woff \
-  tests/run_tests.pl tests/join_15000_regression.pl tests/production_backup_regression.pl tests/schema_integrity_backup_regression.pl tests/production_backup_http_regression.sh tests/interchange_regression.pl tests/interchange_http_regression.sh tests/interchange_stress.pl tests/prolog_module_audit.sh tests/guardian_regression.sh tests/windows_source_package_regression.sh tests/ui_regression.js \
+  tests/run_tests.pl tests/reservoir_large_sql_regression.sh tests/join_15000_regression.pl tests/production_backup_regression.pl tests/schema_integrity_backup_regression.pl tests/production_backup_http_regression.sh tests/interchange_regression.pl tests/interchange_http_regression.sh tests/interchange_stress.pl tests/prolog_module_audit.sh tests/guardian_regression.sh tests/windows_source_package_regression.sh tests/ui_regression.js \
   tests/launcher_regression.sh tests/release_package_regression.sh tests/pack_regression.sh tests/server_e2e_regression.sh tests/server_e2e_regression.ps1 tools/asadb_pack.pl tools/asadb_launcher.pl \
   flaskserver/pyproject.toml flaskserver/requirements-bundled.txt flaskserver/scripts/bootstrap_python.py \
   flaskserver/src/asadb_server/app.py flaskserver/src/asadb_server/backend.py flaskserver/src/asadb_server/panel.py \

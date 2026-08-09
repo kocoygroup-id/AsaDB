@@ -1101,16 +1101,22 @@ import_sql_stream(In, StopOnError, File, Size, ImportId, Bytes0, Statements0, Er
       append(Utf8Carry0, RawBytes, Utf8Bytes),
       phrase(utf8_codes(BlockCodes), Utf8Bytes, Utf8Carry),
       Bytes1 is Bytes0 + BlockBytes,
-      scan_sql_line(BlockCodes, Mode0, RevAcc0, [], Mode, RevAcc, StatementCodes),
-      queue_import_statements(ImportId, StatementCodes),
+      scan_sql_line(BlockCodes, Mode0, RevAcc0, [], Mode, RevAcc0Out, StatementCodes0),
+      drain_import_partial_insert(Mode, RevAcc0Out, StatementCodes0,
+                                  RevAcc, StatementCodes),
+      % The parser cap is a hard admission boundary, not a later flush hint.
+      % A complete 256 KiB read block may hold several statements, so enqueue
+      % them one-by-one and flush *before* one would cross the byte budget.
+      enqueue_import_statements_bounded(ImportId, StatementCodes, StopOnError,
+                                        Statements0, Errors0,
+                                        Statements1, Errors1,
+                                        LastStatus, LastMessage, Stop),
       % Publish the read position before a large bounded batch is executed.
       % Generated stress files can contain thousands of rows in one batch;
       % reporting only after execution made a live panel look frozen.
       maybe_set_import_progress(ImportId, File, Size, Bytes0, Bytes1,
                                 Statements0, Errors0, none,
                                 'buffered; executing batch'),
-      flush_import_statements(ImportId, false, StopOnError, Statements0, Errors0,
-                              Statements1, Errors1, LastStatus, LastMessage, Stop),
       merge_import_last(LastStatus0, LastMessage0, LastStatus, LastMessage, LastStatus1, LastMessage1),
       maybe_set_import_progress(ImportId, File, Size, Bytes0, Bytes1,
                                 Statements1, Errors1, LastStatus, LastMessage1),
@@ -1137,9 +1143,16 @@ import_read_block(In, Size, BytesRead, BlockString) :-
 import_flush_pending(RevAcc, StopOnError, File, Size, ImportId, BytesRead, Statements0, Errors0, LastStatus0, LastMessage0, Stats) :-
     reverse(RevAcc, Codes),
     trim_sql_codes(Codes, Trimmed),
-    queue_import_statements(ImportId, [Trimmed]),
-    flush_import_statements(ImportId, true, StopOnError, Statements0, Errors0,
-                            Statements, Errors, LastStatus, LastMessage, _),
+    enqueue_import_statements_bounded(ImportId, [Trimmed], StopOnError,
+                                      Statements0, Errors0,
+                                      QueuedStatements, QueuedErrors,
+                                      QueuedStatus, QueuedMessage, _),
+    flush_import_statements(ImportId, true, StopOnError,
+                            QueuedStatements, QueuedErrors,
+                            Statements, Errors, FlushedStatus, FlushedMessage, _),
+    merge_import_last(QueuedStatus, QueuedMessage,
+                      FlushedStatus, FlushedMessage,
+                      LastStatus, LastMessage),
     merge_import_last(LastStatus0, LastMessage0, LastStatus, LastMessage, FinalStatus, FinalMessage),
     set_import_progress(ImportId, File, Size, BytesRead, Statements, Errors, running, FinalMessage, false),
     Stats = import_stats(Statements, Errors, FinalStatus, FinalMessage, BytesRead).
@@ -1158,17 +1171,113 @@ maybe_set_import_progress(_, _, _, _, _, _, _, _, _).
 import_statement_batch_size(BatchSize) :-
     asadb_config_get(import_batch_size, BatchSize).
 
-queue_import_statements(_, []).
-queue_import_statements(ImportId, [Codes|Statements]) :-
-    ( Codes == [] -> true ; assertz(asadb_import_pending(ImportId, Codes)) ),
-    queue_import_statements(ImportId, Statements).
+% Queue each complete statement under the exact source-size budget passed to
+% the SQL frontend.  The previous implementation queued an entire read block
+% then noticed it was too large; that made 512 KiB a soft limit and could hand
+% approximately 733 KiB to scan/2 in a 64 MiB Reservoir worker.
+enqueue_import_statements_bounded(_, [], _, Statements, Errors,
+                                  Statements, Errors, none, '', false).
+enqueue_import_statements_bounded(ImportId, [Codes|Rest], StopOnError,
+                                  Statements0, Errors0,
+                                  Statements, Errors, LastStatus, LastMessage, Stop) :-
+    ( Codes == [] ->
+        enqueue_import_statements_bounded(ImportId, Rest, StopOnError,
+                                          Statements0, Errors0,
+                                          Statements, Errors,
+                                          LastStatus, LastMessage, Stop)
+    ; import_statement_chunks(Codes, Chunks),
+      enqueue_import_chunks_bounded(ImportId, Chunks, StopOnError,
+                                    Statements0, Errors0,
+                                    Statements1, Errors1,
+                                    ChunkStatus, ChunkMessage, ChunkStop),
+      ( ChunkStop == true ->
+          Statements = Statements1,
+          Errors = Errors1,
+          LastStatus = ChunkStatus,
+          LastMessage = ChunkMessage,
+          Stop = true
+      ; enqueue_import_statements_bounded(ImportId, Rest, StopOnError,
+                                          Statements1, Errors1,
+                                          Statements, Errors,
+                                          RestStatus, RestMessage, Stop),
+        merge_import_last(ChunkStatus, ChunkMessage,
+                          RestStatus, RestMessage,
+                          LastStatus, LastMessage)
+      )
+    ).
+
+enqueue_import_chunks_bounded(_, [], _, Statements, Errors,
+                              Statements, Errors, none, '', false).
+enqueue_import_chunks_bounded(ImportId, [Codes|Rest], StopOnError,
+                              Statements0, Errors0,
+                              Statements, Errors, LastStatus, LastMessage, Stop) :-
+    import_statement_sql_bytes(Codes, StatementBytes),
+    flush_before_import_enqueue(ImportId, StatementBytes, StopOnError,
+                                Statements0, Errors0,
+                                BeforeStatements, BeforeErrors,
+                                BeforeStatus, BeforeMessage, BeforeStop),
+    ( BeforeStop == true ->
+        Statements = BeforeStatements,
+        Errors = BeforeErrors,
+        LastStatus = BeforeStatus,
+        LastMessage = BeforeMessage,
+        Stop = true
+    ; assertz(asadb_import_pending(ImportId, Codes)),
+      flush_import_statements(ImportId, false, StopOnError,
+                              BeforeStatements, BeforeErrors,
+                              AfterStatements, AfterErrors,
+                              AfterStatus, AfterMessage, AfterStop),
+      ( AfterStop == true ->
+          Statements = AfterStatements,
+          Errors = AfterErrors,
+          LastStatus = AfterStatus,
+          LastMessage = AfterMessage,
+          Stop = true
+      ; enqueue_import_chunks_bounded(ImportId, Rest, StopOnError,
+                                      AfterStatements, AfterErrors,
+                                      Statements, Errors,
+                                      RestStatus, RestMessage, Stop),
+        merge_import_last(BeforeStatus, BeforeMessage,
+                          AfterStatus, AfterMessage,
+                          InterimStatus, InterimMessage),
+        merge_import_last(InterimStatus, InterimMessage,
+                          RestStatus, RestMessage,
+                          LastStatus, LastMessage)
+      )
+    ).
+
+flush_before_import_enqueue(ImportId, StatementBytes, StopOnError,
+                            Statements0, Errors0,
+                            Statements, Errors, LastStatus, LastMessage, Stop) :-
+    pending_import_metrics(ImportId, PendingCount, PendingBytes),
+    import_statement_batch_size(BatchSize),
+    import_execution_batch_bytes(MaxBatchBytes),
+    ( PendingCount > 0,
+      ( PendingCount >= BatchSize
+      ; PendingBytes + StatementBytes > MaxBatchBytes
+      ) ->
+        flush_import_statements(ImportId, true, StopOnError,
+                                Statements0, Errors0,
+                                Statements, Errors,
+                                LastStatus, LastMessage, Stop)
+    ; Statements = Statements0,
+      Errors = Errors0,
+      LastStatus = none,
+      LastMessage = '',
+      Stop = false
+    ).
+
+pending_import_metrics(ImportId, PendingCount, PendingBytes) :-
+    aggregate_all(count, asadb_import_pending(ImportId, _), PendingCount),
+    aggregate_all(sum(Bytes),
+                  ( asadb_import_pending(ImportId, Codes),
+                    import_statement_sql_bytes(Codes, Bytes)
+                  ),
+                  PendingBytes).
 
 flush_import_statements(ImportId, Force, StopOnError, Statements0, Errors0,
                         Statements, Errors, LastStatus, LastMessage, Stop) :-
-    aggregate_all(count, asadb_import_pending(ImportId, _), PendingCount),
-    aggregate_all(sum(Bytes),
-                  ( asadb_import_pending(ImportId, Codes), length(Codes, Bytes) ),
-                  PendingBytes),
+    pending_import_metrics(ImportId, PendingCount, PendingBytes),
     import_statement_batch_size(BatchSize),
     ( PendingCount =:= 0 ->
         Statements = Statements0,
@@ -1178,7 +1287,7 @@ flush_import_statements(ImportId, Force, StopOnError, Statements0, Errors0,
         Stop = false
     ; ( Force == true
       ; PendingCount >= BatchSize
-      ; import_statement_batch_bytes(MaxBatchBytes),
+      ; import_execution_batch_bytes(MaxBatchBytes),
         PendingBytes >= MaxBatchBytes
       ) ->
         findall(Codes, retract(asadb_import_pending(ImportId, Codes)), CodeGroups),
@@ -1202,6 +1311,361 @@ flush_import_statements(ImportId, Force, StopOnError, Statements0, Errors0,
 % 50-100 KiB multi-row INSERT statements.  Cap the source text handed to one
 % parser run while preserving the higher count limit for tiny statements.
 import_statement_batch_bytes(524288).
+
+% 512 KiB remains the documented parser ceiling.  A Reservoir worker also
+% keeps a deliberately smaller execution envelope: parsing several narrow
+% 512-row INSERTs together can expand into thousands of row terms before the
+% storage writer runs.  This is a stricter cap, never a relaxation of the
+% configured parser maximum.
+import_execution_batch_bytes(Bytes) :-
+    import_statement_batch_bytes(ParserBytes),
+    import_worker_execution_bytes(WorkerBytes),
+    Bytes is min(ParserBytes, WorkerBytes).
+
+import_worker_execution_bytes(65536).
+
+% Keep an unterminated multi-row INSERT bounded while reading it.  The normal
+% statement scanner cannot emit anything before ';', so one 4.9 MiB INSERT
+% used to accumulate across read blocks and exhaust the worker before the
+% post-statement splitter ever had a chance to run.
+% Deliberately below import_read_block_size/1.  A complete 256 KiB block is
+% still read efficiently, while the retained reverse-code list and its
+% temporary split copies stay well under a 64 MiB worker stack.
+import_partial_buffer_bytes(65536).
+
+drain_import_partial_insert(_, RevAcc0, Statements0, RevAcc, Statements) :-
+    length(RevAcc0, BufferedBytes),
+    import_partial_buffer_bytes(BufferLimit),
+    BufferedBytes >= BufferLimit, !,
+    reverse(RevAcc0, Codes),
+    ( import_insert_values_header(Codes, Header, ValueCodes),
+      import_values_rows_partial(ValueCodes, CompleteRows, Continuation,
+                                 Delimited),
+      CompleteRows \= [] ->
+        import_partial_rows_to_emit(CompleteRows, Continuation, Delimited,
+                                    RowsToEmit, RemainingValues),
+        ( RowsToEmit == [] ->
+            throw(error(resource_error(import_values_row_bytes(BufferedBytes)),
+                        context(asadb_web:drain_import_partial_insert/5,
+                                'One VALUES row exceeds the bounded import buffer.')))
+        ; import_statement_batch_bytes(MaxBytes),
+          import_chunk_insert_rows(Header, RowsToEmit, MaxBytes, Chunks),
+          append(Header, RemainingValues, RemainingCodes),
+          % A read block can end inside a quoted value.  Recompute scanner
+          % state from the bounded retained tail, otherwise the next block
+          % could treat that value's closing quote as a fresh opener.
+          scan_sql_line(RemainingCodes, none, [], [], _RemainingMode,
+                        RevAcc, []),
+          append(Statements0, Chunks, Statements)
+        )
+    ; throw(error(resource_error(import_statement_bytes(BufferedBytes)),
+                  context(asadb_web:drain_import_partial_insert/5,
+                          'Unterminated oversized SQL must be INSERT ... VALUES rows.')))
+    ).
+drain_import_partial_insert(_, RevAcc, Statements, RevAcc, Statements).
+
+% Parse as many complete top-level VALUES tuples as are available in the
+% current read buffer.  `Continuation` is an unfinished tuple; `Delimited`
+% records that a separator was consumed at the end of the buffer.
+import_values_rows_partial(Codes, Rows, Continuation, Delimited) :-
+    import_skip_sql_space(Codes, First),
+    import_values_rows_partial(First, [], Rows, Continuation, Delimited).
+
+import_values_rows_partial([], RevRows, Rows, [], false) :- !,
+    reverse(RevRows, Rows).
+import_values_rows_partial(Codes, RevRows, Rows, Codes, false) :-
+    Codes \= [40|_], !,
+    reverse(RevRows, Rows).
+import_values_rows_partial(Codes, RevRows, Rows, Continuation, Delimited) :-
+    ( import_take_values_tuple(Codes, Tuple, Rest0) ->
+        import_skip_sql_space(Rest0, Rest),
+        ( Rest = [] ->
+            reverse([Tuple|RevRows], Rows),
+            Continuation = [],
+            Delimited = false
+        ; Rest = [44|AfterComma] ->
+            import_skip_sql_space(AfterComma, Next),
+            ( Next = [] ->
+                reverse([Tuple|RevRows], Rows),
+                Continuation = [],
+                Delimited = true
+            ; import_values_rows_partial(Next, [Tuple|RevRows], Rows,
+                                         Continuation, Delimited)
+            )
+        ; reverse([Tuple|RevRows], Rows),
+          Continuation = Rest,
+          Delimited = false
+        )
+    ; reverse(RevRows, Rows),
+      Continuation = Codes,
+      Delimited = false
+    ).
+
+import_partial_rows_to_emit(Rows, [], Delimited, EmitRows, RemainingValues) :- !,
+    append(EmitRows, [LastRow], Rows),
+    ( Delimited == true -> append(LastRow, [44], RemainingValues)
+    ; RemainingValues = LastRow
+    ).
+import_partial_rows_to_emit(Rows, Continuation, _, Rows, Continuation).
+
+% statement_groups_sql/2 appends a semicolon and newline to every queued
+% group.  Count those bytes as part of the cap so the parser never receives a
+% payload larger than import_statement_batch_bytes/1.
+import_statement_sql_bytes(Codes, Bytes) :-
+    length(Codes, Length),
+    Bytes is Length + 2.
+
+% A generated MySQL dump can legally put thousands of VALUES tuples in one
+% INSERT.  Such a statement cannot be admitted wholesale just because it is
+% syntactically complete: parse it only after slicing at top-level row tuple
+% boundaries.  The splitter deliberately accepts only the lossless
+% INSERT ... VALUES (...), (...) form; another oversized statement fails with
+% a clear resource error instead of entering the SQL frontend unbounded.
+import_statement_chunks(Codes, [Codes]) :-
+    import_statement_sql_bytes(Codes, Bytes),
+    import_statement_batch_bytes(MaxBytes),
+    Bytes =< MaxBytes, !.
+import_statement_chunks(Codes, Chunks) :-
+    import_insert_values_header(Codes, Header, ValueCodes),
+    import_values_rows(ValueCodes, Rows),
+    import_statement_batch_bytes(MaxBytes),
+    import_chunk_insert_rows(Header, Rows, MaxBytes, Chunks), !.
+import_statement_chunks(Codes, _) :-
+    import_statement_sql_bytes(Codes, Bytes),
+    throw(error(resource_error(import_statement_batch_bytes(Bytes)),
+                context(asadb_web:import_statement_chunks/2,
+                        'Oversized SQL cannot be split safely; use INSERT ... VALUES rows.'))).
+
+import_insert_values_header(Codes, Header, ValueCodes) :-
+    import_find_values_keyword(Codes, none, 0, [], Header, ValueCodes),
+    import_sql_starts_with_keyword(Header, insert).
+
+import_sql_starts_with_keyword(Codes, Keyword) :-
+    import_skip_sql_space(Codes, Trimmed),
+    atom_codes(Keyword, KeywordCodes),
+    import_codes_ci_prefix(Trimmed, KeywordCodes, Rest),
+    import_word_boundary_after(Rest).
+
+import_codes_ci_prefix(Rest, [], Rest) :- !.
+import_codes_ci_prefix([Code|Codes], [Expected|ExpectedCodes], Rest) :-
+    import_ascii_lower(Code, Lower),
+    Lower =:= Expected,
+    import_codes_ci_prefix(Codes, ExpectedCodes, Rest).
+
+import_ascii_lower(Code, Lower) :-
+    Code >= 65, Code =< 90, !,
+    Lower is Code + 32.
+import_ascii_lower(Code, Code).
+
+import_find_values_keyword([V,A,L,U,E,S|Rest], none, 0, Rev,
+                           Header, ValueCodes) :-
+    import_codes_ci_word([V,A,L,U,E,S], values),
+    import_word_boundary_before(Rev),
+    import_word_boundary_after(Rest), !,
+    reverse([S,E,U,L,A,V|Rev], Header),
+    ValueCodes = Rest.
+import_find_values_keyword([45,45|Codes], none, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, line_comment, Depth, [45,45|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([35|Codes], none, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, line_comment, Depth, [35|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([47,42|Codes], none, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, block_comment, Depth, [42,47|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([39|Codes], none, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, single, Depth, [39|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([34|Codes], none, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, double, Depth, [34|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([96|Codes], none, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, backtick, Depth, [96|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([40|Codes], none, Depth0, Rev,
+                           Header, ValueCodes) :- !,
+    Depth is Depth0 + 1,
+    import_find_values_keyword(Codes, none, Depth, [40|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([41|Codes], none, Depth0, Rev,
+                           Header, ValueCodes) :-
+    Depth0 > 0, !,
+    Depth is Depth0 - 1,
+    import_find_values_keyword(Codes, none, Depth, [41|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([10|Codes], line_comment, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, none, Depth, [10|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([42,47|Codes], block_comment, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, none, Depth, [47,42|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([92,Code|Codes], single, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, single, Depth, [Code,92|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([92,Code|Codes], double, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, double, Depth, [Code,92|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([39|Codes], single, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, none, Depth, [39|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([34|Codes], double, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, none, Depth, [34|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([96|Codes], backtick, Depth, Rev,
+                           Header, ValueCodes) :- !,
+    import_find_values_keyword(Codes, none, Depth, [96|Rev],
+                               Header, ValueCodes).
+import_find_values_keyword([Code|Codes], Mode, Depth, Rev,
+                           Header, ValueCodes) :-
+    import_find_values_keyword(Codes, Mode, Depth, [Code|Rev],
+                               Header, ValueCodes).
+
+import_codes_ci_word(Codes, Word) :-
+    atom_codes(Word, Expected),
+    same_length(Codes, Expected),
+    import_codes_ci_prefix(Codes, Expected, []).
+
+import_word_boundary_before([]).
+import_word_boundary_before([Code|_]) :- \+ import_identifier_code(Code).
+import_word_boundary_after([]).
+import_word_boundary_after([Code|_]) :- \+ import_identifier_code(Code).
+import_identifier_code(Code) :-
+    ( Code >= 48, Code =< 57
+    ; Code >= 65, Code =< 90
+    ; Code >= 97, Code =< 122
+    ; Code =:= 95
+    ).
+
+import_skip_sql_space([Code|Codes], Rest) :-
+    memberchk(Code, [9,10,13,32]), !,
+    import_skip_sql_space(Codes, Rest).
+import_skip_sql_space(Codes, Codes).
+
+import_values_rows(Codes, Rows) :-
+    import_skip_sql_space(Codes, First),
+    import_values_rows(First, [], Rows).
+
+import_values_rows([], RevRows, Rows) :- !,
+    RevRows \= [],
+    reverse(RevRows, Rows).
+import_values_rows(Codes, RevRows, Rows) :-
+    Codes = [40|_], !,
+    import_take_values_tuple(Codes, Tuple, Rest0),
+    import_skip_sql_space(Rest0, Rest),
+    ( Rest = [] ->
+        reverse([Tuple|RevRows], Rows)
+    ; Rest = [44|AfterComma] ->
+        import_skip_sql_space(AfterComma, Next),
+        import_values_rows(Next, [Tuple|RevRows], Rows)
+    ).
+
+import_take_values_tuple([40|Codes], Tuple, Rest) :-
+    import_take_values_tuple(Codes, none, 1, [40], Tuple, Rest).
+
+import_take_values_tuple([41|Rest], none, 1, Rev, Tuple, Rest) :- !,
+    reverse([41|Rev], Tuple).
+import_take_values_tuple([45,45|Codes], none, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, line_comment, Depth, [45,45|Rev], Tuple, Rest).
+import_take_values_tuple([35|Codes], none, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, line_comment, Depth, [35|Rev], Tuple, Rest).
+import_take_values_tuple([47,42|Codes], none, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, block_comment, Depth, [42,47|Rev], Tuple, Rest).
+import_take_values_tuple([39|Codes], none, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, single, Depth, [39|Rev], Tuple, Rest).
+import_take_values_tuple([34|Codes], none, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, double, Depth, [34|Rev], Tuple, Rest).
+import_take_values_tuple([96|Codes], none, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, backtick, Depth, [96|Rev], Tuple, Rest).
+import_take_values_tuple([40|Codes], none, Depth0, Rev, Tuple, Rest) :- !,
+    Depth is Depth0 + 1,
+    import_take_values_tuple(Codes, none, Depth, [40|Rev], Tuple, Rest).
+import_take_values_tuple([41|Codes], none, Depth0, Rev, Tuple, Rest) :-
+    Depth0 > 1, !,
+    Depth is Depth0 - 1,
+    import_take_values_tuple(Codes, none, Depth, [41|Rev], Tuple, Rest).
+import_take_values_tuple([10|Codes], line_comment, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, none, Depth, [10|Rev], Tuple, Rest).
+import_take_values_tuple([42,47|Codes], block_comment, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, none, Depth, [47,42|Rev], Tuple, Rest).
+import_take_values_tuple([92,Code|Codes], single, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, single, Depth, [Code,92|Rev], Tuple, Rest).
+import_take_values_tuple([92,Code|Codes], double, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, double, Depth, [Code,92|Rev], Tuple, Rest).
+import_take_values_tuple([39|Codes], single, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, none, Depth, [39|Rev], Tuple, Rest).
+import_take_values_tuple([34|Codes], double, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, none, Depth, [34|Rev], Tuple, Rest).
+import_take_values_tuple([96|Codes], backtick, Depth, Rev, Tuple, Rest) :- !,
+    import_take_values_tuple(Codes, none, Depth, [96|Rev], Tuple, Rest).
+import_take_values_tuple([Code|Codes], Mode, Depth, Rev, Tuple, Rest) :-
+    import_take_values_tuple(Codes, Mode, Depth, [Code|Rev], Tuple, Rest).
+
+import_chunk_insert_rows(Header, Rows, MaxBytes, Chunks) :-
+    length(Header, HeaderBytes),
+    BaseBytes is HeaderBytes + 2,
+    import_chunk_insert_rows(Rows, Header, MaxBytes,
+                             [], 0, BaseBytes, [], Chunks).
+
+% Keep the parsed AST and the page/checksum writer within the same bounded
+% unit.  This is independent of the 512 KiB parser ceiling because narrow
+% tuples can pack thousands of rows into a much smaller SQL string.
+import_insert_execution_row_limit(512).
+
+import_chunk_insert_rows([], Header, _, RevRows, _, _, RevChunks, Chunks) :- !,
+    import_finish_insert_chunk(Header, RevRows, RevChunks, FinalRevChunks),
+    reverse(FinalRevChunks, Chunks).
+import_chunk_insert_rows([Row|Rows], Header, MaxBytes,
+                         [], _, BaseBytes, RevChunks, Chunks) :- !,
+    length(Row, RowBytes),
+    CandidateBytes is BaseBytes + RowBytes,
+    ( CandidateBytes =< MaxBytes ->
+        import_chunk_insert_rows(Rows, Header, MaxBytes,
+                                 [Row], 1, CandidateBytes, RevChunks, Chunks)
+    ; throw(error(resource_error(import_values_row_bytes(RowBytes)),
+                  context(asadb_web:import_chunk_insert_rows/5,
+                          'One VALUES row exceeds the parser batch limit.')))
+    ).
+import_chunk_insert_rows([Row|Rows], Header, MaxBytes,
+                         RevRows, CurrentRows, CurrentBytes, RevChunks, Chunks) :-
+    length(Row, RowBytes),
+    CandidateBytes is CurrentBytes + 1 + RowBytes,
+    import_insert_execution_row_limit(RowLimit),
+    ( CandidateBytes =< MaxBytes,
+      CurrentRows < RowLimit ->
+        NextRows is CurrentRows + 1,
+        import_chunk_insert_rows(Rows, Header, MaxBytes,
+                                 [Row|RevRows], NextRows, CandidateBytes,
+                                 RevChunks, Chunks)
+    ; import_finish_insert_chunk(Header, RevRows, RevChunks, NextRevChunks),
+      import_chunk_insert_rows([Row|Rows], Header, MaxBytes,
+                               [], 0, 0, NextRevChunks, Chunks)
+    ).
+
+import_finish_insert_chunk(Header, RevRows, RevChunks, [Statement|RevChunks]) :-
+    reverse(RevRows, Rows),
+    import_join_values_rows(Rows, ValueCodes),
+    append(Header, ValueCodes, Statement).
+
+import_join_values_rows(Rows, Codes) :-
+    import_values_row_parts(Rows, Parts),
+    append(Parts, Codes).
+
+import_values_row_parts([], []).
+import_values_row_parts([Row], [Row]) :- !.
+import_values_row_parts([Row|Rows], [Row,[44]|Parts]) :-
+    import_values_row_parts(Rows, Parts).
 
 import_execute_sql_batch(true, SQLCodes, Result) :- !,
     asadb_exec_sql_stop_on_error(SQLCodes, Result).

@@ -1482,7 +1482,7 @@ function createDefaultTable(name) {
   };
 }
 
-function normalizeSandbox(value) {
+function normalizeSandbox(value, options = {}) {
   if (!value || !value.dbs || typeof value.dbs !== 'object') return createInitialSandbox();
   if (!value.views || typeof value.views !== 'object') value.views = {};
   for (const key of Object.keys(value.dbs)) {
@@ -1492,7 +1492,8 @@ function normalizeSandbox(value) {
     if (!value.views[key] || typeof value.views[key] !== 'object') value.views[key] = {};
   }
   const names = visibleDbNames(value);
-  if (!value.currentDb || (!value.dbs[value.currentDb] && !value.views[value.currentDb]) || isSystemDb(value.currentDb)) value.currentDb = names[0] || '';
+  const preserveNoSelection = Boolean(options.preserveNoSelection);
+  if (!value.currentDb || (!value.dbs[value.currentDb] && !value.views[value.currentDb]) || isSystemDb(value.currentDb)) value.currentDb = preserveNoSelection ? '' : (names[0] || '');
   if (value.currentDb) {
     value.dbs[value.currentDb] ||= {};
     value.views[value.currentDb] ||= {};
@@ -3394,10 +3395,13 @@ function syncSandboxFromCatalogData(data) {
   }
 
   sandbox = normalizeSandbox({
-    currentDb: currentDb && currentDb !== 'none' ? currentDb : sandbox.currentDb,
+    // Catalog is authoritative in backend mode.  In particular, an empty
+    // current_db after DROP DATABASE is a real state, not permission to keep
+    // a stale browser selection or silently select the first remaining DB.
+    currentDb: currentDb && currentDb !== 'none' ? currentDb : '',
     dbs,
     views,
-  });
+  }, { preserveNoSelection: true });
   if (selectedTable && !currentRelation(selectedTable)) selectedTable = '';
   saveSandbox();
   renderTableBrowser();
@@ -3447,8 +3451,8 @@ function syncSandboxFromStateData(data) {
   if (!stateTerm) return;
   try {
     const next = prologTermToSandbox(parsePrologTerm(String(stateTerm)));
-    if (currentDb && (next.dbs[currentDb] || next.views?.[currentDb]) && !isSystemDb(currentDb)) next.currentDb = currentDb;
-    sandbox = normalizeSandbox(next);
+    next.currentDb = currentDb && (next.dbs[currentDb] || next.views?.[currentDb]) && !isSystemDb(currentDb) ? currentDb : '';
+    sandbox = normalizeSandbox(next, { preserveNoSelection: true });
     saveSandbox();
     if (selectedTable && !currentRelation(selectedTable)) selectedTable = '';
     renderTableBrowser();

@@ -200,23 +200,32 @@ DROP_DATABASE_RE = re.compile(
 )
 
 
-def update_logical_database_from_sql(sql: str) -> str | None:
+def logical_database_for_sql(sql: str) -> str | None:
+    """Select a candidate database without mutating the browser session.
+
+    A failed `USE missing_db` must leave the session pointed at its previous
+    database.  Persisting this before the backend replies was the Flask half
+    of the DROP DATABASE resurrection path.
+    """
     matches = USE_RE.findall(sql or "")
     if matches:
         selected = matches[-1][0] or matches[-1][1]
-        session["asadb_logical_database"] = selected
         return selected
     value = session.get("asadb_logical_database")
     return str(value) if isinstance(value, str) and value else None
 
 
-def clear_dropped_logical_database(sql: str, result: dict) -> None:
+def sync_logical_database_after_sql(sql: str, result: dict) -> None:
     results = result.get("results") if isinstance(result, dict) else None
     if not isinstance(results, list) or any(
         isinstance(item, dict) and item.get("status") == "error"
         for item in results
     ):
         return
+    matches = USE_RE.findall(sql or "")
+    if matches:
+        selected = matches[-1][0] or matches[-1][1]
+        session["asadb_logical_database"] = selected
     selected = session.get("asadb_logical_database")
     if not isinstance(selected, str):
         return
@@ -392,7 +401,7 @@ def panel_api_proxy(api_path: str):
         forwarded_headers["Connection"] = "close"
 
     explicit_database_selection = bool(USE_RE.search(sql or ""))
-    logical_database = update_logical_database_from_sql(sql)
+    logical_database = logical_database_for_sql(sql)
     backend = ext("asadb_backends").get(database_id)
     # Query forms are already parsed for RBAC and workspace selection.  Send
     # them through the typed backend method instead of replaying their raw
@@ -411,7 +420,7 @@ def panel_api_proxy(api_path: str):
             result = backend.query_in_database(logical_database, sql, offset=offset)
         else:
             result = backend.query(sql, offset=offset)
-        clear_dropped_logical_database(sql, result)
+        sync_logical_database_after_sql(sql, result)
         return jsonify(result)
     request_kwargs = {
         "data": request_body,

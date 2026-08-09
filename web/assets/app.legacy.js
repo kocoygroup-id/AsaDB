@@ -1350,6 +1350,7 @@ function createDefaultTable(name) {
   };
 }
 function normalizeSandbox(value) {
+  var options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
   if (!value || !value.dbs || typeof value.dbs !== 'object') return createInitialSandbox();
   if (!value.views || typeof value.views !== 'object') value.views = {};
   for (var _i2 = 0, _Object$keys = Object.keys(value.dbs); _i2 < _Object$keys.length; _i2++) {
@@ -1361,7 +1362,8 @@ function normalizeSandbox(value) {
     if (!value.views[_key] || typeof value.views[_key] !== 'object') value.views[_key] = {};
   }
   var names = visibleDbNames(value);
-  if (!value.currentDb || !value.dbs[value.currentDb] && !value.views[value.currentDb] || isSystemDb(value.currentDb)) value.currentDb = names[0] || '';
+  var preserveNoSelection = Boolean(options.preserveNoSelection);
+  if (!value.currentDb || !value.dbs[value.currentDb] && !value.views[value.currentDb] || isSystemDb(value.currentDb)) value.currentDb = preserveNoSelection ? '' : names[0] || '';
   if (value.currentDb) {
     var _value$dbs, _value$currentDb, _value$views, _value$currentDb2;
     (_value$dbs = value.dbs)[_value$currentDb = value.currentDb] || (_value$dbs[_value$currentDb] = {});
@@ -4198,9 +4200,13 @@ function syncSandboxFromCatalogData(data) {
     _iterator9.f();
   }
   sandbox = normalizeSandbox({
-    currentDb: currentDb && currentDb !== 'none' ? currentDb : sandbox.currentDb,
+    // Backend catalog state is authoritative.  A blank current_db after a
+    // DROP DATABASE must not revive a stale browser selection.
+    currentDb: currentDb && currentDb !== 'none' ? currentDb : '',
     dbs,
     views
+  }, {
+    preserveNoSelection: true
   });
   if (selectedTable && !currentRelation(selectedTable)) selectedTable = '';
   saveSandbox();
@@ -4271,8 +4277,10 @@ function syncSandboxFromStateData(data) {
   try {
     var _next$views;
     var next = prologTermToSandbox(parsePrologTerm(String(stateTerm)));
-    if (currentDb && (next.dbs[currentDb] || (_next$views = next.views) !== null && _next$views !== void 0 && _next$views[currentDb]) && !isSystemDb(currentDb)) next.currentDb = currentDb;
-    sandbox = normalizeSandbox(next);
+    next.currentDb = currentDb && (next.dbs[currentDb] || (_next$views = next.views) !== null && _next$views !== void 0 && _next$views[currentDb]) && !isSystemDb(currentDb) ? currentDb : '';
+    sandbox = normalizeSandbox(next, {
+      preserveNoSelection: true
+    });
     saveSandbox();
     if (selectedTable && !currentRelation(selectedTable)) selectedTable = '';
     renderTableBrowser();

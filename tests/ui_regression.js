@@ -299,6 +299,7 @@ assert.ok(
 );
 const dropDatabaseSource = app.slice(app.indexOf('async function dropCurrentDatabase'), app.indexOf('function focusSqlCommand'));
 assert.match(dropDatabaseSource, /backendListContains\('SHOW DATABASES;'/, 'DROP DATABASE must verify backend deletion');
+assert.match(dropDatabaseSource, /syncCatalogFromBackend\(\)/, 'trash-button DROP must refresh its catalog from the backend');
 for (const bundle of [app, legacyApp]) {
   const plan = bundle.slice(bundle.indexOf('function createSqlExecutionPlan'), bundle.indexOf('function executeBackendSqlStreamed'));
   assert.match(plan, /mode:\s*oversized\s*\?\s*'reservoir'\s*:\s*'direct'/,
@@ -309,8 +310,12 @@ for (const bundle of [app, legacyApp]) {
     'sandbox DROP DATABASE must use its explicit shared state transition');
   assert.match(bundle, /database not found:/,
     'sandbox DROP DATABASE must not report a missing database as deleted');
+  assert.match(bundle, /preserveNoSelection/,
+    'backend catalog synchronization must preserve an intentional empty current database');
 }
 assert.match(app, /if \(!rows\.length\) \{\s*sandbox = normalizeSandbox\(\{ currentDb: '', dbs: \{\}, views: \{\} \}\)/, 'empty backend catalogs must clear stale browser objects');
+assert.match(app, /currentDb: currentDb && currentDb !== 'none' \? currentDb : ''/,
+  'backend catalog sync must not fall back to a stale sandbox.currentDb');
 
 assert.doesNotMatch(webBackend, /'Stress Test'/, 'Linux backend must not depend on a Windows-only directory case');
 assert.doesNotMatch(webBackend, /atom_concat\('Test\//, 'legacy test paths must not resolve to a missing Test directory');
