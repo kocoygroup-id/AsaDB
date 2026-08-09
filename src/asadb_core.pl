@@ -91,7 +91,10 @@
 :- dynamic asadb_hot_filter_tick/1.
 :- dynamic asadb_filter_hotness/3.
 :- dynamic asadb_filter_hotness_count/1.
+% StoreId, key columns, entry count, non-backtrackable trie name.  The trie
+% contains compact term hashes only; canonical keys stay in the record store.
 :- dynamic asadb_insert_key_cache/4.
+:- dynamic asadb_insert_key_scan_only/2.
 :- dynamic asadb_checkpoint_dirty/0.
 :- thread_local asadb_query_batch_depth/1.
 :- thread_local asadb_tvcc_read_state/1.
@@ -2725,11 +2728,12 @@ paged_missing_key_pairs(StoreId, _, Columns, KeyPairs, Missing) :-
     length(KeyPairs, ProbeCount),
     note_plan_n(insert_index_probe, ProbeCount).
 paged_missing_key_pairs(StoreId, ExistingCount, Columns, KeyPairs, Missing) :-
-    insert_key_cache_max_rows(MaxRows),
-    ExistingCount =< MaxRows,
+    \+ asadb_insert_key_scan_only(StoreId, Columns),
     ensure_insert_key_cache(StoreId, ExistingCount, Columns),
-    include(insert_key_pair_missing(StoreId, Columns), KeyPairs, Missing), !.
+    insert_key_cache_missing(StoreId, Columns, KeyPairs, Missing), !.
 paged_missing_key_pairs(StoreId, _, Columns, KeyPairs, Missing) :-
+    % The cache is an optimization only.  This scan is the correctness
+    % fallback if an on-disk snapshot could not be prepared.
     key_pairs_tree(KeyPairs, NeededTree),
     findall(Key,
             ( asadb_record_scan_columns(StoreId, Columns, _, Row),
@@ -2745,30 +2749,99 @@ key_pairs_tree(KeyPairs, Tree) :-
     rb_empty(Tree),
     forall(member(Key-_, KeyPairs), nb_rb_insert(Tree, Key, true)).
 
-insert_key_cache_max_rows(250000).
+% A transaction can hold several UNIQUE constraints at once.  Bounding only
+% rows per table allowed two 50k-key RB trees to remain live in a 64 MiB
+% Reservoir worker.  This is a global *entry* budget across every constraint
+% cache.  The tries retain only compact term hashes, never a VARCHAR key's
+% full term; every hash hit is rechecked against storage before it can reject
+% a value, so collisions cannot weaken uniqueness correctness.
+% The trie implementation avoids allocating a Prolog RB node for every key,
+% which leaves headroom for SQL parsing and page construction
+% in the normal 64 MiB Reservoir worker even with two UNIQUE constraints.
+% The entry budget is global across every constraint in the transaction.  If
+% it is exhausted the engine falls back to bounded projected scans; it never
+% retains an unbounded transaction key set.
+insert_key_cache_entry_budget(150000).
 
-ensure_insert_key_cache(StoreId, ExistingCount, Columns) :-
-    asadb_insert_key_cache(StoreId, CachedColumns, ExistingCount, Global),
+ensure_insert_key_cache(StoreId, _, Columns) :-
+    asadb_insert_key_cache(StoreId, CachedColumns, _, Global),
     Columns == CachedColumns,
     nb_current(Global, _), !.
 ensure_insert_key_cache(StoreId, ExistingCount, Columns) :-
     clear_insert_key_cache(StoreId, Columns),
-    rb_empty(Tree),
-    forall(asadb_record_scan_columns(StoreId, Columns, _, Row),
-           ( canonical_row_constraint_key(Columns, Row, Key),
-             nb_rb_insert(Tree, Key, true)
-           )),
+    ( ExistingCount =:= 0 ->
+        new_insert_key_cache(StoreId, Columns, 0)
+    ; insert_key_cache_can_reserve(ExistingCount) ->
+        build_insert_key_delta(StoreId, Columns, Trie, Entries),
+        new_insert_key_cache_with_trie(StoreId, Columns, Entries, Trie),
+        note_plan(insert_validation_scan)
+    ; % A compact cache is an optimization, never an authority.  Once its
+      % fixed RAM budget is unavailable, perform projected record-store scans
+      % per batch instead of retaining an unbounded key set or building a
+      % memory-hungry tree in the Reservoir worker.
+      assertz(asadb_insert_key_scan_only(StoreId, Columns)),
+      fail
+    ).
+
+insert_key_cache_can_reserve(NewEntries) :-
+    insert_key_cache_entry_budget(Budget),
+    insert_key_cache_total_entries(Current),
+    Current + NewEntries =< Budget.
+
+insert_key_cache_total_entries(Total) :-
+    findall(Entries, asadb_insert_key_cache(_, _, Entries, _), Values),
+    sum_list(Values, Total).
+
+new_insert_key_cache(StoreId, Columns, Entries) :-
+    trie_new(Trie),
+    new_insert_key_cache_with_trie(StoreId, Columns, Entries, Trie).
+
+new_insert_key_cache_with_trie(StoreId, Columns, Entries, Trie) :-
     flag(asadb_insert_cache_serial, Serial0, Serial0 + 1),
     format(atom(Global), '$asadb_insert_key_cache_~d', [Serial0]),
-    nb_linkval(Global, Tree),
-    assertz(asadb_insert_key_cache(StoreId, Columns, ExistingCount, Global)),
-    note_plan(insert_validation_scan).
+    nb_linkval(Global, Trie),
+    assertz(asadb_insert_key_cache(StoreId, Columns, Entries, Global)).
 
-insert_key_pair_missing(StoreId, Columns, Key-_) :-
+build_insert_key_delta(StoreId, Columns, Trie, Entries) :-
+    trie_new(Trie),
+    flag(asadb_insert_cache_build_entries, _, 0),
+    forall(asadb_record_scan_columns(StoreId, Columns, _, Row),
+           ( cache_row_constraint_key(Columns, Row, Key) ->
+                 constraint_key_hash(Key, Hash),
+                 trie_insert(Trie, Hash, true),
+                 flag(asadb_insert_cache_build_entries, N, N + 1)
+           ; true
+           )),
+    flag(asadb_insert_cache_build_entries, Entries, Entries).
+
+cache_row_constraint_key(Columns, Row, Key) :-
+    row_key_values(Columns, Row, Raw),
+    \+ memberchk(null, Raw),
+    canonical_constraint_values(Raw, Key).
+
+insert_key_cache_missing(StoreId, Columns, KeyPairs, Missing) :-
     asadb_insert_key_cache(StoreId, CachedColumns, _, Global),
     Columns == CachedColumns,
-    nb_getval(Global, Tree),
-    \+ rb_lookup(Key, _, Tree).
+    nb_getval(Global, Trie),
+    include(insert_key_trie_missing(StoreId, Columns, Trie), KeyPairs,
+            Missing).
+
+constraint_key_hash(Key, Hash) :-
+    term_hash(Key, Hash).
+
+insert_key_trie_missing(StoreId, Columns, Trie, Key-_) :-
+    constraint_key_hash(Key, Hash),
+    ( \+ trie_lookup(Trie, Hash, _) -> true
+    ; % A hash hit is only a candidate.  Probe canonical values in the
+      % durable record store so hash collisions remain harmless.
+      \+ store_contains_constraint_key(StoreId, Columns, Key)
+    ).
+
+store_contains_constraint_key(StoreId, Columns, Key) :-
+    asadb_record_scan_columns(StoreId, Columns, _, Row),
+    canonical_row_constraint_key(Columns, Row, ExistingKey),
+    ExistingKey == Key,
+    !.
 
 index_key_pair_missing(File, StoreId, Columns, Key-Raw) :-
     Raw = [ProbeValue|_],
@@ -2865,55 +2938,79 @@ invalidate_row_storage_indexes(paged_rows(StoreId, _, _)) :- !,
     note_plan(index_invalidation).
 invalidate_row_storage_indexes(_).
 
-% During an explicit bulk transaction, projected constraint keys are retained
-% only for the current row count.  A later batch therefore performs logarithmic
-% lookups in a mutable red-black tree instead of rescanning prior heap pages.
-% Its 250k-row admission bound prevents an unexpectedly large transaction from
-% turning validation into unbounded process memory.  The cache is
-% extended only after the record batch succeeds, and is discarded on commit,
-% rollback, non-INSERT mutation, boot, and shutdown.
-extend_insert_key_caches(StoreId, _, Count, _) :-
-    insert_key_cache_max_rows(MaxRows),
-    Count > MaxRows, !,
-    clear_insert_key_cache(StoreId).
+% The delta is extended only after the record batch succeeds.  When the shared
+% entry budget would be crossed, this constraint switches to storage probes.
+% The trie is an optimization only and no correctness state lives solely in it.
 extend_insert_key_caches(StoreId, Count0, Count, NewRows) :-
-    findall(Columns-Global,
-            asadb_insert_key_cache(StoreId, Columns, Count0, Global),
+    findall(cache(Columns, Entries, Global),
+            asadb_insert_key_cache(StoreId, Columns, Entries, Global),
             Caches),
-    forall(member(Columns-Global, Caches),
-           extend_insert_key_cache(StoreId, Columns, Global, Count0, Count,
-                                   NewRows)).
+    ( Caches = [] -> true
+    ; cache_updates(Caches, NewRows, Updates, AddedEntries),
+      insert_key_cache_total_entries(CurrentEntries),
+      insert_key_cache_entry_budget(Budget),
+      ( CurrentEntries + AddedEntries =< Budget ->
+          apply_insert_key_cache_updates(StoreId, Count0, Count, Updates)
+      ; switch_insert_key_cache_to_scan_only(StoreId, Caches)
+      )
+    ).
 
-extend_insert_key_cache(StoreId, Columns, Global, Count0, Count, NewRows) :-
-    constraint_key_pairs(cache, Columns, NewRows, NewPairs),
-    nb_getval(Global, Tree),
-    forall(member(Key-_, NewPairs),
-           nb_rb_insert(Tree, Key, true)),
-    retractall(asadb_insert_key_cache(StoreId, Columns, Count0, Global)),
-    assertz(asadb_insert_key_cache(StoreId, Columns, Count, Global)).
+cache_updates([], _, [], 0).
+cache_updates([cache(Columns, _, _)|Caches], NewRows,
+              [Columns-Pairs|Updates], Total) :-
+    constraint_key_pairs(cache, Columns, NewRows, Pairs),
+    length(Pairs, Added),
+    cache_updates(Caches, NewRows, Updates, Rest),
+    Total is Added + Rest.
+
+apply_insert_key_cache_updates(_, _, _, []).
+apply_insert_key_cache_updates(StoreId, Count0, Count, [Columns-Pairs|Updates]) :-
+    asadb_insert_key_cache(StoreId, CachedColumns, Entries0, Global),
+    Columns == CachedColumns,
+    nb_getval(Global, Trie),
+    forall(member(Key-_, Pairs),
+           ( constraint_key_hash(Key, Hash), trie_insert(Trie, Hash, true) )),
+    length(Pairs, Added),
+    Entries is Entries0 + Added,
+    retract(asadb_insert_key_cache(StoreId, CachedColumns, Entries0, Global)),
+    assertz(asadb_insert_key_cache(StoreId, CachedColumns, Entries, Global)),
+    apply_insert_key_cache_updates(StoreId, Count0, Count, Updates).
+
+switch_insert_key_cache_to_scan_only(StoreId, Caches) :-
+    forall(member(cache(Columns, _, _), Caches),
+           ( clear_insert_key_cache(StoreId, Columns),
+             ( asadb_insert_key_scan_only(StoreId, Columns) -> true
+             ; assertz(asadb_insert_key_scan_only(StoreId, Columns))
+             )
+           )).
 
 clear_insert_key_cache :-
     findall(Global, asadb_insert_key_cache(_, _, _, Global), Globals),
     maplist(delete_insert_key_global, Globals),
-    retractall(asadb_insert_key_cache(_, _, _, _)).
+    retractall(asadb_insert_key_cache(_, _, _, _)),
+    retractall(asadb_insert_key_scan_only(_, _)).
 
 clear_insert_key_cache(StoreId) :-
     findall(Global, asadb_insert_key_cache(StoreId, _, _, Global), Globals),
     maplist(delete_insert_key_global, Globals),
-    retractall(asadb_insert_key_cache(StoreId, _, _, _)).
+    retractall(asadb_insert_key_cache(StoreId, _, _, _)),
+    retractall(asadb_insert_key_scan_only(StoreId, _)).
 
 clear_insert_key_cache(StoreId, Columns) :-
     findall(Global,
             ( asadb_insert_key_cache(StoreId, CachedColumns, _, Global),
               Columns == CachedColumns
             ),
-            Globals),
+    Globals),
     maplist(delete_insert_key_global, Globals),
     forall(member(Global, Globals),
-           retractall(asadb_insert_key_cache(StoreId, _, _, Global))).
+           retractall(asadb_insert_key_cache(StoreId, _, _, Global))),
+    retractall(asadb_insert_key_scan_only(StoreId, Columns)).
 
 delete_insert_key_global(Global) :-
-    ( nb_current(Global, _) -> nb_delete(Global) ; true ).
+    ( nb_current(Global, Trie) -> trie_destroy(Trie), nb_delete(Global)
+    ; true
+    ).
 
 validate_column_check_constraints(_, [], _).
 validate_column_check_constraints(Table, [col(Column, _, Options)|Columns], Rows) :-

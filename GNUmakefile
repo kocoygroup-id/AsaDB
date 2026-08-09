@@ -21,6 +21,9 @@ test:
 	./tests/reservoir_large_sql_regression.sh
 	swipl -q -s tests/tvcc_regression.pl
 
+test-reservoir-unique:
+	./tests/reservoir_unique_cache_regression.sh
+
 test-ui:
 	node tests/ui_regression.js
 
@@ -60,7 +63,7 @@ test-pack:
 test-server-e2e:
 	./tests/server_e2e_regression.sh
 
-test-all: test test-ui test-join test-backup test-interchange test-modules test-launchers test-guardian test-windows-source test-package test-pack test-server-e2e
+test-all: test test-reservoir-unique test-ui test-join test-backup test-interchange test-modules test-launchers test-guardian test-windows-source test-package test-pack test-server-e2e
 
 check-linux:
 	./scripts/check_linux_runtime.sh
