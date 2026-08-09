@@ -1105,7 +1105,7 @@ import_sql_stream(In, StopOnError, File, Size, ImportId, Bytes0, Statements0, Er
       drain_import_partial_insert(Mode, RevAcc0Out, StatementCodes0,
                                   RevAcc, StatementCodes),
       % The parser cap is a hard admission boundary, not a later flush hint.
-      % A complete 256 KiB read block may hold several statements, so enqueue
+      % A complete read block may hold several statements, so enqueue
       % them one-by-one and flush *before* one would cross the byte budget.
       enqueue_import_statements_bounded(ImportId, StatementCodes, StopOnError,
                                         Statements0, Errors0,
@@ -1126,7 +1126,11 @@ import_sql_stream(In, StopOnError, File, Size, ImportId, Bytes0, Statements0, Er
       )
     ).
 
-import_read_block_size(262144).
+% scan_sql_line/7 is deliberately simple and recursive.  Keep its source
+% slice below the worker-safe envelope: a 256 KiB slice can itself become a
+% high live-stack allocation before the later SQL batch admission check runs.
+% Large multi-row INSERTs continue through the row-boundary splitter below.
+import_read_block_size(32768).
 
 import_read_block(_, Size, BytesRead, "") :-
     Size > 0,
@@ -1328,9 +1332,9 @@ import_worker_execution_bytes(65536).
 % statement scanner cannot emit anything before ';', so one 4.9 MiB INSERT
 % used to accumulate across read blocks and exhaust the worker before the
 % post-statement splitter ever had a chance to run.
-% Deliberately below import_read_block_size/1.  A complete 256 KiB block is
-% still read efficiently, while the retained reverse-code list and its
-% temporary split copies stay well under a 64 MiB worker stack.
+% The retained reverse-code list is permitted to span a couple of bounded
+% scanner reads so a VALUES tuple can finish, while remaining below the worker
+% envelope.
 import_partial_buffer_bytes(65536).
 
 drain_import_partial_insert(_, RevAcc0, Statements0, RevAcc, Statements) :-
@@ -1674,7 +1678,13 @@ import_execute_sql_batch(_, SQLCodes, Result) :-
 
 release_import_batch_memory :-
     flag(asadb_import_batches, Batch0, Batch0 + 1),
-    ( Batch0 mod 8 =:= 7 -> garbage_collect, trim_stacks ; true ).
+    % A Reservoir worker is intentionally capped at 64 MiB.  The current
+    % SQL batch has been fully retracted before this point, so collect between
+    % execution units rather than allowing temporary lexer/AST/page terms to
+    % accumulate until a later emergency collection.  Constraint correctness
+    % never depends on this: its own cache has a separate fixed entry budget.
+    garbage_collect,
+    trim_stacks.
 
 statement_groups_sql([], []).
 statement_groups_sql([Codes|Groups], SQL) :-
