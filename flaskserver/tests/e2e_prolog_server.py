@@ -118,6 +118,19 @@ def main() -> None:
                 raise AssertionError("Local Workspace DROP DATABASE resurrected local_drop")
             require(client.post("/mode", data={"mode": "server"}), 302, "Server Workspace")
 
+            # Reservoir jobs run asynchronously.  Establish an explicit
+            # logical target so Flask can capture it in trusted job metadata
+            # instead of relying on the Prolog process-global current DB.
+            select_main = client.post(
+                "/api/query", data={"sql": "CREATE DATABASE main; USE main;"}
+            )
+            require(select_main, 200, "select main before panel import")
+            if b'"status":"error"' in select_main.data:
+                raise AssertionError(
+                    "main logical database was unavailable before import: "
+                    f"{select_main.get_data(as_text=True)}"
+                )
+
             # Exercise the exact authenticated browser proxy used by the
             # AsAPanel Import menu.  Dialect metadata must survive Flask so
             # the Prolog backend converts CSV/XLSX instead of parsing bytes as
@@ -153,6 +166,96 @@ def main() -> None:
             if b"Ayu" not in imported.data or b"Asa" not in imported.data:
                 raise AssertionError(
                     f"panel CSV rows missing: {imported.get_data(as_text=True)}"
+                )
+
+            # A queued import must remain pinned to the logical database that
+            # was selected at admission.  Status polling must also stay
+            # responsive while the Prolog execution mutex is busy.
+            affinity_setup = client.post(
+                "/api/query",
+                data={
+                    "sql": (
+                        "CREATE DATABASE affinity_a; "
+                        "CREATE DATABASE affinity_b; USE affinity_a;"
+                    )
+                },
+            )
+            require(affinity_setup, 200, "Reservoir affinity setup")
+            # Leave the process-global Prolog selection on B while the first
+            # browser session remains pinned to A.  The job must use A from
+            # trusted admission metadata, not inherit this other session's B.
+            other_client = app.test_client()
+            other_login = other_client.post(
+                "/login",
+                data={"username": "admin", "password": "very-secure-password"},
+            )
+            require(other_login, 302, "second browser login")
+            select_other = other_client.post(
+                "/api/query", data={"sql": "USE affinity_b;"}
+            )
+            require(select_other, 200, "competing logical database selection")
+            affinity_rows = 20000
+            affinity_payload = "id,name\n" + "".join(
+                f"{row},Student-{row:06d}\n"
+                for row in range(1, affinity_rows + 1)
+            )
+            affinity_bytes = affinity_payload.encode("utf-8")
+            affinity_import = client.post(
+                "/api/reservoir/jobs",
+                data=affinity_bytes,
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": str(len(affinity_bytes)),
+                    "X-AsaDB-Job-Label": "affinity.csv",
+                    "X-AsaDB-Idempotency-Key": "panel-affinity-e2e",
+                    "X-AsaDB-Stop-On-Error": "true",
+                    "X-AsaDB-Import-Format": "csv",
+                    "X-AsaDB-Import-Name": "affinity.csv",
+                    "X-AsaDB-Import-Table": "affinity_rows",
+                    "X-AsaDB-Import-Mode": "replace",
+                },
+            )
+            require(affinity_import, 202, "affinity CSV admission")
+            affinity_job = affinity_import.get_json()["job_id"]
+            poll_started = time.monotonic()
+            live_status = client.get(f"/api/reservoir/job?id={affinity_job}")
+            poll_elapsed = time.monotonic() - poll_started
+            require(live_status, 200, "Reservoir progress during import")
+            live_job = live_status.get_json()
+            if live_job.get("status") not in {"queued", "processing"}:
+                raise AssertionError(
+                    "Reservoir affinity fixture was not live during polling: "
+                    f"{live_job}"
+                )
+            if poll_elapsed >= 2.0:
+                raise AssertionError(
+                    "Reservoir progress was serialized behind the import: "
+                    f"{poll_elapsed:.3f}s"
+                )
+            wait_for_panel_reservoir(client, affinity_job)
+            affinity_a = client.post(
+                "/api/query",
+                data={
+                    "sql": (
+                        "USE affinity_a; SELECT COUNT(*) AS total "
+                        "FROM affinity_rows;"
+                    )
+                },
+            )
+            require(affinity_a, 200, "affinity target row count")
+            if str(affinity_rows).encode() not in affinity_a.data:
+                raise AssertionError(
+                    "Reservoir import missed its captured logical database: "
+                    f"{affinity_a.get_data(as_text=True)}"
+                )
+            affinity_b = client.post(
+                "/api/query", data={"sql": "USE affinity_b; SHOW TABLES;"}
+            )
+            require(affinity_b, 200, "affinity non-target catalog")
+            if b"affinity_rows" in affinity_b.data:
+                raise AssertionError(
+                    "Reservoir import leaked into another logical database: "
+                    f"{affinity_b.get_data(as_text=True)}"
                 )
 
             # The browser defaults the import selector to ``auto``.  Exercise

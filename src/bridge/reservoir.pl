@@ -983,12 +983,14 @@ reservoir_metadata(Metadata0, Metadata) :-
         reservoir_metadata_value(Metadata0, source_name, '', SourceName),
         reservoir_metadata_value(Metadata0, target_table, '', TargetTable),
         reservoir_metadata_value(Metadata0, mode, '', Mode),
+        reservoir_metadata_value(Metadata0, logical_database, '', LogicalDatabase),
         Metadata = _{
             kind:Kind,
             format:Format,
             source_name:SourceName,
             target_table:TargetTable,
-            mode:Mode
+            mode:Mode,
+            logical_database:LogicalDatabase
         }
     ; Metadata = _{}
     ).

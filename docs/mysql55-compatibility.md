@@ -26,6 +26,23 @@ AsaDB menargetkan sintaks MySQL 5.5 sebagai dialek SQL utama. Implementasi saat 
 | CREATE PROCEDURE | Metadata stub |
 | CREATE FUNCTION | Metadata stub |
 
+### Portable dump boundary
+
+Common `mysqldump` column spellings such as `INT(n) [UNSIGNED]` and
+`VARCHAR(n) CHARACTER SET ...` are canonicalized to AsaDB's
+strict integer/text contracts. Unsupported table/index semantics are
+fail-closed: prefix indexes, `KEY ... USING BTREE`, `FULLTEXT`, `SPATIAL`,
+generated columns, malformed constraints, and unsupported foreign-key actions
+or collations return an explicit unsupported-SQL error. Collation affects
+equality, UNIQUE, and ordering and is therefore never silently discarded.
+Unsupported definitions are never materialized as fake
+columns or silently treated as unconstrained types.
+
+This is a tested portable dump profile, not a claim of 100% MySQL
+compatibility. `ALTER TABLE ... ADD KEY/CONSTRAINT`, `INSERT IGNORE`, `ON
+DUPLICATE KEY UPDATE`, `REPLACE`, binary/bit literal families, routine bodies,
+and deferred/cyclic foreign-key dump ordering still require dedicated support.
+
 ## DML/DQL
 
 | Statement | Status |

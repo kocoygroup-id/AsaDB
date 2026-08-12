@@ -14,9 +14,7 @@ export ASADB_HOME="$TEMP_ROOT/home"
 export ASADB_REPO_ROOT="$ROOT"
 python3 "$ROOT/flaskserver/scripts/bootstrap_python.py" setup
 PYTHON="$ASADB_HOME/python-env/bin/python"
-PYTHONPATH="$ROOT/flaskserver/src" "$PYTHON" \
-  "$ROOT/flaskserver/tests/hardening_regression.py"
-PYTHONPATH="$ROOT/flaskserver/src" "$PYTHON" \
-  "$ROOT/flaskserver/tests/e2e_prolog_server.py"
+"$PYTHON" "$ROOT/flaskserver/tests/hardening_regression.py"
+"$PYTHON" "$ROOT/flaskserver/tests/e2e_prolog_server.py"
 python3 "$ROOT/flaskserver/scripts/bootstrap_python.py" doctor --json
 printf '%s\n' 'PASS: offline wheelhouse and real Flask-to-SWI-Prolog server E2E regression.'

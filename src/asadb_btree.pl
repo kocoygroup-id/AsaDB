@@ -7,6 +7,7 @@
     asadb_btree_stats/2,
     asadb_btree_file_build/3,
     asadb_btree_file_build_stream/4,
+    asadb_btree_file_build_stream_bounded/5,
     asadb_btree_file_candidate/4,
     asadb_btree_file_ordered_rid/3,
     asadb_btree_file_ordered_rids/3,
@@ -19,6 +20,7 @@
 :- use_module('asadb_page_manager.pl').
 
 :- meta_predicate asadb_btree_file_build_stream(+, ?, 0, -).
+:- meta_predicate asadb_btree_file_build_stream_bounded(+, ?, 0, +, -).
 
 leaf_capacity(64).
 branch_capacity(32).
@@ -218,12 +220,26 @@ asadb_btree_file_build(File, RawEntries, Stats) :-
    the bounded external merge path, seeded with one larger sorted run so the
    k-way merge does not degrade into hundreds of open run streams. */
 asadb_btree_file_build_stream(File, Pair, Goal, Stats) :-
+    btree_in_memory_entry_limit(Limit),
+    btree_run_chunk_size(RunSize),
+    btree_file_build_stream_limits(File, Pair, Goal, Limit, RunSize, Stats).
+
+% Reservoir transaction-validation snapshots use compact hash/RID pairs but
+% share a 64 MiB worker with the SQL parser and row pages.  Give that caller a
+% strict external-sort bound without slowing every normal persistent index
+% build down to tiny runs.
+asadb_btree_file_build_stream_bounded(File, Pair, Goal, Limit, Stats) :-
+    integer(Limit),
+    Limit > 0,
+    btree_file_build_stream_limits(File, Pair, Goal, Limit, Limit, Stats).
+
+btree_file_build_stream_limits(File, Pair, Goal, Limit, RunSize, Stats) :-
     btree_run_directory(File, RunDir),
     setup_call_cleanup(
         prepare_run_directory(RunDir),
         setup_call_cleanup(
             engine_create(Pair, Goal, Engine),
-            build_file_adaptive(Engine, File, RunDir, Stats),
+            build_file_adaptive(Engine, File, RunDir, Limit, RunSize, Stats),
             catch(engine_destroy(Engine), _, true)
         ),
         delete_directory_and_contents(RunDir)
@@ -232,13 +248,12 @@ asadb_btree_file_build_stream(File, Pair, Goal, Stats) :-
 btree_in_memory_entry_limit(65536).
 btree_run_chunk_size(32768).
 
-build_file_adaptive(Engine, File, RunDir, Stats) :-
-    btree_in_memory_entry_limit(Limit),
+build_file_adaptive(Engine, File, RunDir, Limit, RunSize, Stats) :-
     collect_engine_pairs(Engine, Limit, InitialPairs, Exhausted),
     ( Exhausted == true ->
         asadb_btree_file_build(File, InitialPairs, Stats)
     ; write_sorted_run(InitialPairs, RunDir, 0, FirstRun),
-      write_sorted_runs(Engine, RunDir, 1, RestRuns),
+      write_sorted_runs(Engine, RunDir, RunSize, 1, RestRuns),
       build_file_from_runs(File, [FirstRun|RestRuns], Stats)
     ).
 
@@ -248,8 +263,7 @@ prepare_run_directory(RunDir) :-
     ( exists_directory(RunDir) -> delete_directory_and_contents(RunDir) ; true ),
     make_directory_path(RunDir).
 
-write_sorted_runs(Engine, RunDir, RunNo, RunFiles) :-
-    btree_run_chunk_size(Size),
+write_sorted_runs(Engine, RunDir, Size, RunNo, RunFiles) :-
     collect_engine_pairs(Engine, Size, RawPairs, Exhausted),
     ( RawPairs == [] ->
         RunFiles = []
@@ -257,7 +271,7 @@ write_sorted_runs(Engine, RunDir, RunNo, RunFiles) :-
       RunFiles = [RunFile|Rest],
       ( Exhausted == true -> Rest = []
       ; Next is RunNo + 1,
-        write_sorted_runs(Engine, RunDir, Next, Rest)
+        write_sorted_runs(Engine, RunDir, Size, Next, Rest)
       )
     ).
 

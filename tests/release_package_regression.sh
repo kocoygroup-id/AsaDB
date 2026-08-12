@@ -35,10 +35,10 @@ for required in \
   bin/asadb scripts/run_asadb.sh scripts/run_panel.sh scripts/asadb_guardian.sh scripts/check_linux_runtime.sh scripts/build_legacy_frontend.sh scripts/build_windows_source_release.sh \
   scripts/build_windows_exe.ps1 scripts/check_realtime_release.sh scripts/check_realtime_release.ps1 \
   scripts/realtime_release_contract.txt \
-  src/asadb_core.pl src/asadb_schema.pl src/asadb_sql_frontend.pl src/asadb_prolog_jit.pl src/asadb_backup.pl src/asadb_interchange.pl src/asadb_pager.pl src/bridge/karyawan.pl src/bridge/reservoir.pl src/bridge/horsemen/contract/war/here/yoru_the_wardevil.pl web/index.html web/assets/app.js \
+  src/asadb_core.pl src/asadb_schema.pl src/asadb_sql_frontend.pl src/asadb_prolog_jit.pl src/asadb_backup.pl src/asadb_interchange.pl src/asadb_btree.pl src/asadb_pager.pl src/bridge/karyawan.pl src/bridge/reservoir.pl src/bridge/horsemen/contract/war/here/yoru_the_wardevil.pl web/index.html web/assets/app.js \
   web/assets/app.legacy.js web/assets/app-loader.js \
   web/assets/fonts/noto-sans-jp-japanese-400-normal.woff2 web/assets/fonts/noto-sans-jp-japanese-400-normal.woff \
-  tests/run_tests.pl tests/reservoir_large_sql_regression.sh tests/reservoir_unique_cache_regression.sh tests/join_15000_regression.pl tests/production_backup_regression.pl tests/schema_integrity_backup_regression.pl tests/production_backup_http_regression.sh tests/interchange_regression.pl tests/interchange_http_regression.sh tests/interchange_stress.pl tests/prolog_module_audit.sh tests/guardian_regression.sh tests/windows_source_package_regression.sh tests/ui_regression.js \
+  tests/run_tests.pl tests/mysql_ddl_fail_closed_regression.pl tests/reservoir_large_sql_regression.sh tests/reservoir_unique_cache_regression.sh tests/join_15000_regression.pl tests/production_backup_regression.pl tests/schema_integrity_backup_regression.pl tests/production_backup_http_regression.sh tests/interchange_regression.pl tests/interchange_http_regression.sh tests/interchange_stress.pl tests/prolog_module_audit.sh tests/guardian_regression.sh tests/windows_source_package_regression.sh tests/ui_regression.js \
   tests/launcher_regression.sh tests/release_package_regression.sh tests/pack_regression.sh tests/server_e2e_regression.sh tests/server_e2e_regression.ps1 tools/asadb_pack.pl tools/asadb_launcher.pl \
   flaskserver/pyproject.toml flaskserver/requirements-bundled.txt flaskserver/scripts/bootstrap_python.py \
   flaskserver/src/asadb_server/app.py flaskserver/src/asadb_server/backend.py flaskserver/src/asadb_server/panel.py \
@@ -75,8 +75,11 @@ grep -F "GNU GENERAL PUBLIC LICENSE" "$TMP_DIR/$NAME/LICENSE" >/dev/null
 # Byte-for-byte checks catch a stale archive assembled from an older frontend or
 # Reservoir backend even when the expected filenames still exist.
 for mirrored in \
-  src/asadb_web.pl src/bridge/reservoir.pl \
-  web/index.html web/assets/app.js web/assets/app.legacy.js web/assets/style.css
+  src/asadb_core.pl src/asadb_btree.pl src/asadb_interchange.pl \
+  src/asadb_sql_frontend.pl src/asadb_web.pl src/bridge/reservoir.pl \
+  web/index.html web/assets/app.js web/assets/app.legacy.js web/assets/style.css \
+  flaskserver/MANIFEST.sha256 flaskserver/src/asadb_server/panel.py \
+  flaskserver/tests/e2e_prolog_server.py
 do
   if ! cmp -s "$ROOT/$mirrored" "$TMP_DIR/$NAME/$mirrored"; then
     echo "Release does not contain the current source bytes: $mirrored" >&2

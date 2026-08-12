@@ -402,6 +402,19 @@ def panel_api_proxy(api_path: str):
 
     explicit_database_selection = bool(USE_RE.search(sql or ""))
     logical_database = logical_database_for_sql(sql)
+    reservoir_global_paths = {
+        "reservoir/jobs", "reservoir/file", "reservoir/job",
+        "reservoir/result", "reservoir/cancel", "reservoir/stats",
+    }
+    if api_path in {"reservoir/jobs", "reservoir/file"}:
+        # This is trusted server-side context, not a caller-controlled header.
+        # The Prolog worker validates and selects it under the import mutex.
+        # An explicit sentinel clears process-global selection for SQL files
+        # that create/use their own DB and makes a target-less CSV fail instead
+        # of inheriting another user's most recent database.
+        forwarded_headers["X-AsaDB-Logical-Database"] = (
+            logical_database or "__asadb_no_database__"
+        )
     backend = ext("asadb_backends").get(database_id)
     # Query forms are already parsed for RBAC and workspace selection.  Send
     # them through the typed backend method instead of replaying their raw
@@ -429,7 +442,7 @@ def panel_api_proxy(api_path: str):
         "stream": True,
         "timeout": max(ext("asadb_settings").query_timeout, 3600),
     }
-    if logical_database:
+    if logical_database and api_path not in reservoir_global_paths:
         backend_response = backend.request_in_database(
             logical_database,
             request.method,
