@@ -42,6 +42,7 @@ run_interchange_regression :-
     test_step(view_sql_export, test_view_sql_export),
     test_step(view_csv_export, test_view_csv_export),
     test_step(dialect_literal_safety, test_dialect_literal_safety),
+    test_step(mysql_tuple_fast_path, test_mysql_tuple_fast_path),
     test_step(constraint_sql_export, test_constraint_sql_export),
     test_step(xlsx_dtd_rejected, test_xlsx_dtd_rejected).
 
@@ -303,6 +304,39 @@ test_dialect_literal_safety :-
                 sub_string(SQL, _, _, _, '''public.keep SERIAL::text'''),
                 sub_string(SQL, _, _, _, '''x'''),
                 \+ sub_string(SQL, _, _, _, '''x''::text')
+              ),
+              asadb_interchange_cleanup(Prepared)
+          )
+        ),
+        asadb_interchange_cleanup(Source)
+    ).
+
+test_mysql_tuple_fast_path :-
+    tmp_file_stream(utf8, Source, Out),
+    setup_call_cleanup(
+        true,
+        format(Out,
+               'INSERT INTO `tuple_guard`~n  (`id`, `note`) VALUES~n  (1, ''public.keep SERIAL::text, comma, )''),~n  (2, ''backslash \\Z and -- literal'');~n(public.outside);~n',
+               []),
+        close(Out)
+    ),
+    setup_call_cleanup(
+        true,
+        ( asadb_interchange_prepare_import(
+              Source, 'tuple_guard.mysql', mysql, ignored, replace,
+              Prepared, Detection),
+          Detection.format == mysql,
+          setup_call_cleanup(
+              true,
+              ( read_file_to_string(Prepared, SQL, [encoding(utf8)]),
+                sub_string(SQL, _, _, _,
+                           "  (1, 'public.keep SERIAL::text, comma, )'),"),
+                sub_string(SQL, _, _, _,
+                           "  (2, 'backslash \\Z and -- literal');"),
+                % Once the VALUES terminator is seen, a parenthesized line is
+                % normalized normally instead of being mistaken for a tuple.
+                sub_string(SQL, _, _, _, '(outside);'),
+                \+ sub_string(SQL, _, _, _, '(public.outside);')
               ),
               asadb_interchange_cleanup(Prepared)
           )

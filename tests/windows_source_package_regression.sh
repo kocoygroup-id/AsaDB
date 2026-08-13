@@ -29,7 +29,7 @@ for required in \
   flaskserver/src/asadb_server/app.py flaskserver/src/asadb_server/backend.py flaskserver/src/asadb_server/panel.py \
   flaskserver/src/asadb_server/templates/login.html flaskserver/src/asadb_server/templates/mode.html flaskserver/src/asadb_server/templates/logout.html \
   flaskserver/src/asadb_server/static/server.css flaskserver/src/asadb_server/static/logout.js flaskserver/docs/MERGE_AUDIT.md \
-  src/asadb.pl src/asadb_web.pl src/asadb_backup.pl src/asadb_interchange.pl src/asadb_pager.pl src/asadb_sql_frontend.pl src/asadb_prolog_jit.pl src/bridge/reservoir.pl tests/reservoir_large_sql_regression.sh \
+  src/asadb.pl src/asadb_web.pl src/asadb_backup.pl src/asadb_interchange.pl src/asadb_btree.pl src/asadb_pager.pl src/asadb_sql_frontend.pl src/asadb_prolog_jit.pl src/bridge/reservoir.pl tests/mysql_ddl_fail_closed_regression.pl tests/reservoir_large_sql_regression.sh tests/reservoir_unique_cache_regression.sh \
   web/index.html web/assets/app.js
 do
   if ! grep -Fx "$NAME/$required" "$LIST" >/dev/null; then

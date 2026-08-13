@@ -54,8 +54,14 @@ jobs:
       - name: Run core and TVCC regressions on NTFS paths
         shell: pwsh
         run: |
+          swipl -q -s tests/mysql_ddl_fail_closed_regression.pl
           swipl -q -s tests/run_tests.pl
           swipl -q -s tests/tvcc_regression.pl
+      - name: Run the 64 MiB Reservoir import regressions on Windows
+        shell: bash
+        run: |
+          ./tests/reservoir_large_sql_regression.sh
+          ./tests/reservoir_unique_cache_regression.sh
       - name: Run pack, offline bootstrap, and real Server Mode E2E
         shell: pwsh
         run: .\tests\server_e2e_regression.ps1

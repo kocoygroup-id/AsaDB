@@ -117,11 +117,25 @@ asadb_init_reservoir(DbFile) :-
 
 reservoir_execute_job(JobId, SpoolPath, StopOnError, Result) :-
     with_mutex(asadb_execution,
-        reservoir_execute_spooled_sql(JobId, SpoolPath, StopOnError, Result)).
+        reservoir_execute_job_scoped(JobId, SpoolPath, StopOnError, Result)).
+
+reservoir_execute_job_scoped(JobId, SpoolPath, StopOnError, Result) :-
+    asadb_backup_capture_current_database(PreviousDatabase),
+    setup_call_cleanup(
+        true,
+        reservoir_execute_spooled_sql(JobId, SpoolPath, StopOnError, Result),
+        restore_import_database_safely(PreviousDatabase)
+    ).
 
 reservoir_execute_spooled_sql(JobId, SpoolPath, StopOnError, Result) :-
     reservoir_job_snapshot(JobId, Snapshot),
     get_dict(metadata, Snapshot, Metadata),
+    reservoir_select_logical_database(Metadata),
+    reservoir_execute_spooled_sql_metadata(Metadata, JobId, SpoolPath,
+                                            StopOnError, Result).
+
+reservoir_execute_spooled_sql_metadata(Metadata, JobId, SpoolPath,
+                                       StopOnError, Result) :-
     get_dict(kind, Metadata, interchange), !,
     reservoir_interchange_options(Metadata, Format, OriginalName, Target, Mode),
     asadb_interchange_prepare_import(SpoolPath, OriginalName, Format,
@@ -131,19 +145,8 @@ reservoir_execute_spooled_sql(JobId, SpoolPath, StopOnError, Result) :-
         reservoir_execute_prepared_sql(JobId, Prepared, StopOnError, Result),
         asadb_interchange_cleanup(Prepared)
     ).
-reservoir_execute_spooled_sql(JobId, SpoolPath, _, Result) :-
-    size_file(SpoolPath, Size),
-    Size =< 250000, !,
-    ensure_import_not_cancelled(JobId),
-    read_file_to_codes(SpoolPath, SQL, []),
-    web_query_fetch_size(FetchRows),
-    asadb_exec_sql_limited(SQL, FetchRows, Result0),
-    web_query_result(Result0, Result),
-    result_error_count(Result, Errors),
-    result_statement_count(Result, Statements),
-    reservoir_update_progress(JobId, Size, Statements, Errors, completed,
-                              'Backend completed the spooled SQL command.', true).
-reservoir_execute_spooled_sql(JobId, SpoolPath, StopOnError, Result) :-
+reservoir_execute_spooled_sql_metadata(_, JobId, SpoolPath, StopOnError,
+                                       Result) :-
     import_sql_file_backend(SpoolPath, StopOnError, JobId, Result).
 
 reservoir_execute_prepared_sql(JobId, Prepared, StopOnError, Result) :-
@@ -158,6 +161,21 @@ reservoir_interchange_options(Metadata, Format, OriginalName, Target, Mode) :-
 
 interchange_metadata_value(Dict, Key, Default, Value) :-
     ( get_dict(Key, Dict, Found) -> Value = Found ; Value = Default ).
+
+% Server-mode jobs are asynchronous.  Capture the browser's logical database
+% at admission and restore it while holding the same execution mutex as BEGIN
+% and the import itself.  A later request therefore cannot redirect a queued
+% CSV/XLSX/SQL job into another database.
+reservoir_select_logical_database(Metadata) :-
+    get_dict(logical_database, Metadata, Database),
+    memberchk(Database, [none, '__asadb_no_database__']), !,
+    asadb_backup_restore_current_database(none).
+reservoir_select_logical_database(Metadata) :-
+    get_dict(logical_database, Metadata, Database),
+    atom(Database),
+    Database \== '', !,
+    asadb_backup_restore_current_database(Database).
+reservoir_select_logical_database(_).
 
 result_statement_count(multi(Results), Count) :- !, length(Results, Count).
 result_statement_count(_, 1).
@@ -633,12 +651,14 @@ api_reservoir_file(Request) :-
                 ( import_stop_on_error(Data, StopOnError),
                   form_idempotency_key(Data, IdempotencyKey),
                   import_interchange_options(Data, Format, Target, Mode),
+                  request_reservoir_database(Request, Database),
                   Metadata = _{
                       kind:interchange,
                       format:Format,
                       source_name:File,
                       target_table:Target,
-                      mode:Mode
+                      mode:Mode,
+                      logical_database:Database
                   },
                   reservoir_submit_file(File, File, IdempotencyKey,
                                         StopOnError, JobId, Admission, Size,
@@ -1087,7 +1107,8 @@ import_rollback_safely :-
     catch(import_transaction_command('ROLLBACK;'), _, true).
 
 restore_import_database_safely(Database) :-
-    catch(asadb_backup_restore_current_database(Database), _, true).
+    catch(asadb_backup_restore_current_database(Database), _,
+          catch(asadb_backup_restore_current_database(none), _, true)).
 
 import_sql_stream(In, StopOnError, File, Size, ImportId, Bytes0, Statements0, Errors0, Mode0, RevAcc0, Utf8Carry0, LastStatus0, LastMessage0, Stats) :-
     ensure_import_not_cancelled(ImportId),
@@ -1105,7 +1126,7 @@ import_sql_stream(In, StopOnError, File, Size, ImportId, Bytes0, Statements0, Er
       drain_import_partial_insert(Mode, RevAcc0Out, StatementCodes0,
                                   RevAcc, StatementCodes),
       % The parser cap is a hard admission boundary, not a later flush hint.
-      % A complete 256 KiB read block may hold several statements, so enqueue
+      % A complete read block may hold several statements, so enqueue
       % them one-by-one and flush *before* one would cross the byte budget.
       enqueue_import_statements_bounded(ImportId, StatementCodes, StopOnError,
                                         Statements0, Errors0,
@@ -1126,7 +1147,11 @@ import_sql_stream(In, StopOnError, File, Size, ImportId, Bytes0, Statements0, Er
       )
     ).
 
-import_read_block_size(262144).
+% scan_sql_line/7 is deliberately simple and recursive.  Keep its source
+% slice below the worker-safe envelope: a 256 KiB slice can itself become a
+% high live-stack allocation before the later SQL batch admission check runs.
+% Large multi-row INSERTs continue through the row-boundary splitter below.
+import_read_block_size(32768).
 
 import_read_block(_, Size, BytesRead, "") :-
     Size > 0,
@@ -1175,11 +1200,14 @@ import_statement_batch_size(BatchSize) :-
 % the SQL frontend.  The previous implementation queued an entire read block
 % then noticed it was too large; that made 512 KiB a soft limit and could hand
 % approximately 733 KiB to scan/2 in a 64 MiB Reservoir worker.
+% The [] and [Head|Tail] clauses are disjoint, but SWI-Prolog 9.2 can retain a
+% choicepoint without these green cuts.  That choicepoint keeps every prior
+% SQL code list live across batches and defeats the explicit GC boundary.
 enqueue_import_statements_bounded(_, [], _, Statements, Errors,
-                                  Statements, Errors, none, '', false).
+                                  Statements, Errors, none, '', false) :- !.
 enqueue_import_statements_bounded(ImportId, [Codes|Rest], StopOnError,
                                   Statements0, Errors0,
-                                  Statements, Errors, LastStatus, LastMessage, Stop) :-
+                                  Statements, Errors, LastStatus, LastMessage, Stop) :- !,
     ( Codes == [] ->
         enqueue_import_statements_bounded(ImportId, Rest, StopOnError,
                                           Statements0, Errors0,
@@ -1207,10 +1235,10 @@ enqueue_import_statements_bounded(ImportId, [Codes|Rest], StopOnError,
     ).
 
 enqueue_import_chunks_bounded(_, [], _, Statements, Errors,
-                              Statements, Errors, none, '', false).
+                              Statements, Errors, none, '', false) :- !.
 enqueue_import_chunks_bounded(ImportId, [Codes|Rest], StopOnError,
                               Statements0, Errors0,
-                              Statements, Errors, LastStatus, LastMessage, Stop) :-
+                              Statements, Errors, LastStatus, LastMessage, Stop) :- !,
     import_statement_sql_bytes(Codes, StatementBytes),
     flush_before_import_enqueue(ImportId, StatementBytes, StopOnError,
                                 Statements0, Errors0,
@@ -1328,9 +1356,9 @@ import_worker_execution_bytes(65536).
 % statement scanner cannot emit anything before ';', so one 4.9 MiB INSERT
 % used to accumulate across read blocks and exhaust the worker before the
 % post-statement splitter ever had a chance to run.
-% Deliberately below import_read_block_size/1.  A complete 256 KiB block is
-% still read efficiently, while the retained reverse-code list and its
-% temporary split copies stay well under a 64 MiB worker stack.
+% The retained reverse-code list is permitted to span a couple of bounded
+% scanner reads so a VALUES tuple can finish, while remaining below the worker
+% envelope.
 import_partial_buffer_bytes(65536).
 
 drain_import_partial_insert(_, RevAcc0, Statements0, RevAcc, Statements) :-
@@ -1402,7 +1430,7 @@ import_values_rows_partial(Codes, RevRows, Rows, Continuation, Delimited) :-
     ).
 
 import_partial_rows_to_emit(Rows, [], Delimited, EmitRows, RemainingValues) :- !,
-    append(EmitRows, [LastRow], Rows),
+    once(append(EmitRows, [LastRow], Rows)),
     ( Delimited == true -> append(LastRow, [44], RemainingValues)
     ; RemainingValues = LastRow
     ).
@@ -1423,18 +1451,26 @@ import_statement_sql_bytes(Codes, Bytes) :-
 % a clear resource error instead of entering the SQL frontend unbounded.
 import_statement_chunks(Codes, [Codes]) :-
     import_statement_sql_bytes(Codes, Bytes),
-    import_statement_batch_bytes(MaxBytes),
-    Bytes =< MaxBytes, !.
+    import_execution_batch_bytes(MaxBytes),
+    Bytes =< MaxBytes,
+    \+ import_insert_exceeds_row_limit(Codes), !.
 import_statement_chunks(Codes, Chunks) :-
     import_insert_values_header(Codes, Header, ValueCodes),
     import_values_rows(ValueCodes, Rows),
-    import_statement_batch_bytes(MaxBytes),
+    import_execution_batch_bytes(MaxBytes),
     import_chunk_insert_rows(Header, Rows, MaxBytes, Chunks), !.
 import_statement_chunks(Codes, _) :-
     import_statement_sql_bytes(Codes, Bytes),
     throw(error(resource_error(import_statement_batch_bytes(Bytes)),
                 context(asadb_web:import_statement_chunks/2,
                         'Oversized SQL cannot be split safely; use INSERT ... VALUES rows.'))).
+
+import_insert_exceeds_row_limit(Codes) :-
+    import_insert_values_header(Codes, _, ValueCodes),
+    import_values_rows(ValueCodes, Rows),
+    import_insert_execution_row_limit(Limit),
+    length(Rows, Count),
+    Count > Limit.
 
 import_insert_values_header(Codes, Header, ValueCodes) :-
     import_find_values_keyword(Codes, none, 0, [], Header, ValueCodes),
@@ -1649,8 +1685,10 @@ import_chunk_insert_rows([Row|Rows], Header, MaxBytes,
                                  [Row|RevRows], NextRows, CandidateBytes,
                                  RevChunks, Chunks)
     ; import_finish_insert_chunk(Header, RevRows, RevChunks, NextRevChunks),
+      length(Header, HeaderBytes),
+      BaseBytes is HeaderBytes + 2,
       import_chunk_insert_rows([Row|Rows], Header, MaxBytes,
-                               [], 0, 0, NextRevChunks, Chunks)
+                               [], 0, BaseBytes, NextRevChunks, Chunks)
     ).
 
 import_finish_insert_chunk(Header, RevRows, RevChunks, [Statement|RevChunks]) :-
@@ -1667,14 +1705,18 @@ import_values_row_parts([Row], [Row]) :- !.
 import_values_row_parts([Row|Rows], [Row,[44]|Parts]) :-
     import_values_row_parts(Rows, Parts).
 
-import_execute_sql_batch(true, SQLCodes, Result) :- !,
-    asadb_exec_sql_stop_on_error(SQLCodes, Result).
-import_execute_sql_batch(_, SQLCodes, Result) :-
-    asadb_exec_sql(SQLCodes, Result).
+import_execute_sql_batch(StopOnError, SQLCodes, Result) :-
+    asadb_exec_sql_import_batch(SQLCodes, StopOnError, Result).
 
 release_import_batch_memory :-
     flag(asadb_import_batches, Batch0, Batch0 + 1),
-    ( Batch0 mod 8 =:= 7 -> garbage_collect, trim_stacks ; true ).
+    % A Reservoir worker is intentionally capped at 64 MiB.  The current
+    % SQL batch has been fully retracted before this point, so collect between
+    % execution units rather than allowing temporary lexer/AST/page terms to
+    % accumulate until a later emergency collection.  Constraint correctness
+    % never depends on this: its own cache has a separate fixed entry budget.
+    garbage_collect,
+    trim_stacks.
 
 statement_groups_sql([], []).
 statement_groups_sql([Codes|Groups], SQL) :-
@@ -1931,6 +1973,7 @@ request_job_label(Request, Label) :-
 request_job_label(_, 'SQL command').
 
 request_reservoir_metadata(Request, Metadata) :-
+    request_reservoir_database(Request, Database),
     request_header(x_asadb_import_format, Request, Format),
     atom(Format),
     Format \== '', !,
@@ -1943,9 +1986,18 @@ request_reservoir_metadata(Request, Metadata) :-
         format:Format,
         source_name:SourceName,
         target_table:Target,
-        mode:Mode
+        mode:Mode,
+        logical_database:Database
     }.
-request_reservoir_metadata(_, _{}).
+request_reservoir_metadata(Request, Metadata) :-
+    request_reservoir_database(Request, Database),
+    Metadata = _{logical_database:Database}.
+
+request_reservoir_database(Request, Database) :-
+    request_header_default(x_asadb_logical_database, Request, '', Header),
+    ( Header == '' -> asadb_current_database(Database)
+    ; Database = Header
+    ).
 
 request_header_default(Name, Request, Default, Value) :-
     ( request_header(Name, Request, Found), atom(Found), Found \== '' ->

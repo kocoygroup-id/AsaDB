@@ -30,7 +30,7 @@ try {
   if (-not (Test-Path $Python)) {
     throw "Offline Python bootstrap did not create $Python"
   }
-  $env:PYTHONPATH = Join-Path $Root 'flaskserver\src'
+  Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
   & $Python (Join-Path $Root 'flaskserver\tests\hardening_regression.py')
   if ($LASTEXITCODE -ne 0) {
     throw "Server hardening regression failed with exit code $LASTEXITCODE"

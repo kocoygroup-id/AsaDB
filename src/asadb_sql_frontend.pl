@@ -441,8 +441,9 @@ keyword(time). keyword(timestamp). keyword(tinyint). keyword(tinytext). keyword(
 keyword(union). keyword(unique). keyword(unknown). keyword(unsigned). keyword(update). keyword(user). keyword(use). keyword(using). keyword(values).
 keyword(varchar). keyword(varbinary). keyword(where). keyword(xor). keyword(year). keyword(zerofill).
 keyword(truncate). keyword(view). keyword(trigger). keyword(procedure). keyword(function).
-keyword(false). keyword(grant). keyword(revoke). keyword(commit). keyword(rollback). keyword(start).
+keyword(false). keyword(fulltext). keyword(generated). keyword(grant). keyword(revoke). keyword(commit). keyword(rollback). keyword(spatial). keyword(start). keyword(stored).
 keyword(transaction). keyword(lock). keyword(unlock). keyword(explain). keyword(analyze). keyword(when).
+keyword(always). keyword(virtual).
 
 split_statements(Tokens, Statements) :- split_statements_(Tokens, [], [], Rev), reverse(Rev, Statements).
 split_statements_([], Acc, Out, [Stmt|Out]) :- reverse(Acc, Stmt), !.
@@ -583,7 +584,8 @@ parse_single_alter([kw(add),kw(column)|Rest], add_column(Name, Type, Options), T
     parse_ident(Rest, Name, AfterName),
     ( AfterName = [H|T], is_column_type_token(H) ->
         split_type_options_ext([H|T], TypeTokens, OptionTokens, Tail),
-        tokens_text(TypeTokens, Type),
+        canonical_column_type_tokens(TypeTokens, CanonicalTypeTokens),
+        tokens_text(CanonicalTypeTokens, Type),
         parse_column_options(OptionTokens, Options)
     ; fail
     ).
@@ -591,7 +593,8 @@ parse_single_alter([kw(add)|Rest], add_column(Name, Type, Options), Tail) :- !,
     parse_ident(Rest, Name, AfterName),
     ( AfterName = [H|T], is_column_type_token(H) ->
         split_type_options_ext([H|T], TypeTokens, OptionTokens, Tail),
-        tokens_text(TypeTokens, Type),
+        canonical_column_type_tokens(TypeTokens, CanonicalTypeTokens),
+        tokens_text(CanonicalTypeTokens, Type),
         parse_column_options(OptionTokens, Options)
     ; fail
     ).
@@ -603,7 +606,8 @@ parse_single_alter([kw(modify),kw(column)|Rest], modify_column(Name, Type, Optio
     parse_ident(Rest, Name, AfterName),
     ( AfterName = [H|T], is_column_type_token(H) ->
         split_type_options_ext([H|T], TypeTokens, OptionTokens, Tail),
-        tokens_text(TypeTokens, Type),
+        canonical_column_type_tokens(TypeTokens, CanonicalTypeTokens),
+        tokens_text(CanonicalTypeTokens, Type),
         parse_column_options(OptionTokens, Options)
     ; fail
     ).
@@ -611,7 +615,8 @@ parse_single_alter([kw(modify)|Rest], modify_column(Name, Type, Options), Tail) 
     parse_ident(Rest, Name, AfterName),
     ( AfterName = [H|T], is_column_type_token(H) ->
         split_type_options_ext([H|T], TypeTokens, OptionTokens, Tail),
-        tokens_text(TypeTokens, Type),
+        canonical_column_type_tokens(TypeTokens, CanonicalTypeTokens),
+        tokens_text(CanonicalTypeTokens, Type),
         parse_column_options(OptionTokens, Options)
     ; fail
     ).
@@ -620,7 +625,8 @@ parse_single_alter([kw(change),kw(column)|Rest], rename_column(OldName, NewName,
     parse_ident(AfterOld, NewName, AfterNew),
     ( AfterNew = [H|T], is_column_type_token(H) ->
         split_type_options_ext([H|T], TypeTokens, OptionTokens, Tail),
-        tokens_text(TypeTokens, Type),
+        canonical_column_type_tokens(TypeTokens, CanonicalTypeTokens),
+        tokens_text(CanonicalTypeTokens, Type),
         parse_column_options(OptionTokens, Options)
     ; fail
     ).
@@ -629,7 +635,8 @@ parse_single_alter([kw(change)|Rest], rename_column(OldName, NewName, Type, Opti
     parse_ident(AfterOld, NewName, AfterNew),
     ( AfterNew = [H|T], is_column_type_token(H) ->
         split_type_options_ext([H|T], TypeTokens, OptionTokens, Tail),
-        tokens_text(TypeTokens, Type),
+        canonical_column_type_tokens(TypeTokens, CanonicalTypeTokens),
+        tokens_text(CanonicalTypeTokens, Type),
         parse_column_options(OptionTokens, Options)
     ; fail
     ).
@@ -853,17 +860,100 @@ parse_table_definitions([Def|Defs], Columns, Constraints) :-
 table_definition_parts(column(Col), [Col|Columns], Constraints, Columns, Constraints).
 table_definition_parts(constraint(Constraint), Columns, [Constraint|Constraints], Columns, Constraints).
 
+% Reserved table-constraint leaders must never fall through to the column
+% parser.  Without this guard an unsupported MySQL form such as
+% `KEY idx USING BTREE (id)` was accepted as a column literally named `key`,
+% silently discarding the index contract.  A malformed or unsupported
+% constraint now fails the complete CREATE TABLE parse and is returned by the
+% public parser as an explicit unsupported statement.
 parse_table_definition(Def, constraint(Constraint)) :-
-    parse_table_constraint(Def, Constraint), !.
+    table_constraint_leader(Def), !,
+    parse_table_constraint(Def, Constraint).
 parse_table_definition(Def, column(Col)) :-
     parse_column_def(Def, Col).
 
+table_constraint_leader([kw(constraint)|_]).
+table_constraint_leader([kw(primary)|_]).
+table_constraint_leader([kw(unique)|_]).
+table_constraint_leader([kw(key)|_]).
+table_constraint_leader([kw(index)|_]).
+table_constraint_leader([kw(check)|_]).
+table_constraint_leader([kw(foreign)|_]).
+table_constraint_leader([kw(references)|_]).
+% FULLTEXT and SPATIAL indexes are not implemented yet.  Tokenizing their
+% leaders lets them fail closed here rather than materialize fake columns.
+table_constraint_leader([kw(fulltext)|_]).
+table_constraint_leader([kw(spatial)|_]).
+
 parse_column_def([NameTok|Rest], col(Name, Type, Options)) :-
     token_ident(NameTok, Name),
-    split_type_options(Rest, TypeTokens, OptionTokens),
+    split_type_options(Rest, TypeTokens0, OptionTokens),
+    canonical_column_type_tokens(TypeTokens0, TypeTokens),
     TypeTokens \= [],
     tokens_text(TypeTokens, Type),
     parse_column_options(OptionTokens, Options).
+
+% MySQL integer display width is formatting metadata, not a storage range.
+% Canonicalizing the common INT(n) form therefore preserves AsaDB's existing
+% INT/INT UNSIGNED validation without retaining a misleading pseudo-type.
+canonical_column_type_tokens([kw(int),sym('('),num(Width),sym(')'),kw(unsigned)],
+                             [kw(int),kw(unsigned)]) :- !,
+    valid_display_width(Width).
+canonical_column_type_tokens([kw(int),sym('('),num(Width),sym(')')],
+                             [kw(int)]) :- !,
+    valid_display_width(Width).
+canonical_column_type_tokens([kw(int)|Rest], [kw(int)|Rest]) :- !,
+    valid_plain_int_suffix(Rest).
+% Charset and collation affect encoding/comparison metadata.  AsaDB stores
+% text as Unicode atoms and currently has no per-column collation contract, so
+% accept only the narrow, unambiguous VARCHAR(n) dump forms and canonicalize
+% them to VARCHAR(n).  Other placements remain explicitly unsupported.
+canonical_column_type_tokens(
+    [kw(varchar),sym('('),num(Limit),sym(')'),kw(character),kw(set),Charset],
+    [kw(varchar),sym('('),num(Limit),sym(')')]) :- !,
+    valid_varchar_limit(Limit),
+    metadata_identifier(Charset).
+canonical_column_type_tokens([kw(varchar),sym('('),num(Limit),sym(')')],
+                             [kw(varchar),sym('('),num(Limit),sym(')')]) :- !,
+    valid_varchar_limit(Limit).
+canonical_column_type_tokens([kw(varchar)], [kw(varchar)]) :- !.
+canonical_column_type_tokens(Tokens, Tokens) :-
+    supported_column_type_tokens(Tokens).
+
+valid_display_width(Width) :- integer(Width), Width > 0.
+valid_plain_int_suffix([]).
+valid_plain_int_suffix([kw(unsigned)]).
+valid_varchar_limit(Limit) :- integer(Limit), Limit > 0.
+metadata_identifier(id(_)).
+metadata_identifier(kw(_)).
+
+unsupported_generated_type_syntax(Tokens) :-
+    member(Token, Tokens),
+    memberchk(Token, [kw(generated),kw(always),kw(as),kw(virtual),kw(stored)]), !.
+
+misplaced_varchar_metadata([_|Tokens]) :-
+    ( memberchk(kw(character), Tokens)
+    ; memberchk(kw(collate), Tokens)
+    ), !.
+
+supported_column_type_tokens([Type]) :-
+    memberchk(Type,
+              [kw(tinyint),kw(smallint),kw(mediumint),kw(int),kw(integer),
+               kw(bigint),kw(float),kw(double),kw(real),kw(decimal),
+               kw(varchar),kw(char),kw(text),kw(tinytext),kw(mediumtext),
+               kw(longtext),kw(date),kw(time),kw(datetime),kw(timestamp),
+               kw(year),kw(bool),kw(boolean)]), !.
+supported_column_type_tokens([Type,kw(unsigned)]) :-
+    memberchk(Type,
+              [kw(tinyint),kw(smallint),kw(mediumint),kw(int),kw(integer),
+               kw(bigint)]), !.
+supported_column_type_tokens([Type,sym('('),num(Width),sym(')')]) :-
+    memberchk(Type, [kw(varchar),kw(char)]),
+    integer(Width), Width > 0, !.
+supported_column_type_tokens([kw(decimal),sym('('),num(Precision),sym(','),
+                              num(Scale),sym(')')]) :-
+    integer(Precision), Precision > 0,
+    integer(Scale), Scale >= 0, Scale =< Precision, !.
 
 parse_table_constraint([kw(constraint), NameTok|Rest], Constraint) :- !,
     token_ident(NameTok, Name),
@@ -970,6 +1060,7 @@ take_options([T|Ts], [T|Os], Rest) :- take_options(Ts, Os, Rest).
 option_start(kw(not)). option_start(kw(null)). option_start(kw(default)).
 option_start(kw(primary)). option_start(kw(key)). option_start(kw(auto_increment)).
 option_start(kw(unique)). option_start(kw(check)). option_start(kw(comment)).
+option_start(kw(generated)). option_start(kw(as)).
 
 parse_column_options([], []).
 parse_column_options([kw(not),kw(null)|Ts], [not_null|Os]) :- !, parse_column_options(Ts, Os).
@@ -982,7 +1073,19 @@ parse_column_options([kw(check),sym('(')|Ts], [check(Expr)|Os]) :- !,
     take_paren_payload(Ts, ExprTokens, Rest),
     parse_expr(ExprTokens, Expr),
     parse_column_options(Rest, Os).
-parse_column_options([T|Ts], [raw_option(T)|Os]) :- parse_column_options(Ts, Os).
+% Generated columns need expression storage/recomputation semantics that the
+% engine does not implement.  Fail the DDL parse instead of keeping GENERATED
+% tokens as ignored raw options and presenting a normal writable column.
+parse_column_options([kw(generated)|_], _) :- !, fail.
+parse_column_options([kw(as)|_], _) :- !, fail.
+% Alternate MySQL option ordering is not canonicalized above; rejecting it is
+% safer than silently dropping charset/collation metadata.
+parse_column_options([kw(character)|_], _) :- !, fail.
+parse_column_options([kw(collate)|_], _) :- !, fail.
+parse_column_options([kw(comment),str(Comment)|Ts],
+                     [raw_option(kw(comment)),raw_option(str(Comment))|Os]) :- !,
+    parse_column_options(Ts, Os).
+parse_column_options([_|_], _) :- fail.
 
 parse_value_groups([], [], []).
 parse_value_groups([sym('(')|Tokens], [Values|Rows], Tail) :-

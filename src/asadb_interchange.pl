@@ -1310,7 +1310,7 @@ row_value_at(Row, Position, Value) :-
 
 convert_sql_stream(Dialect, In, Out,
                    interchange{lines:Lines,copy_rows:CopyRows}) :-
-    SQLState = sql_convert_state(0, 0),
+    SQLState = sql_convert_state(0, 0, false),
     convert_sql_lines(Dialect, In, Out, SQLState),
     arg(1, SQLState, Lines),
     arg(2, SQLState, CopyRows).
@@ -1324,7 +1324,7 @@ convert_sql_lines(Dialect, In, Out, State) :-
       ( Dialect == postgresql,
         postgres_copy_header(Line, Table, Columns) ->
           postgres_copy_to_insert(In, Out, Table, Columns, State)
-      ; convert_sql_line(Dialect, Line, Converted),
+      ; convert_sql_line_state(Dialect, Line, State, Converted),
         ( Converted == skip -> true ; format(Out, '~s~n', [Converted]) )
       ),
       convert_sql_lines(Dialect, In, Out, State)
@@ -1350,8 +1350,56 @@ convert_sql_line(_, Line, skip) :-
     sql_line_upper(Line, Upper),
     sub_string(Upper, 0, 3, _, "/*!"),
     sub_string(Upper, _, 2, _, "*/"), !.
+% A mysqldump normally writes one VALUES tuple per physical line.  Dialect
+% rewrites affect statement/schema tokens, not a MySQL tuple's quoted data.
+% Passing these continuation lines through avoids repeatedly splitting and
+% rescanning hundreds of thousands of values before Reservoir progress starts.
 convert_sql_line(Dialect, Line, Converted) :-
     normalize_sql_dialect_line(Dialect, Line, Converted).
+
+convert_sql_line_state(mysql, Line, State, Line) :-
+    arg(3, State, true),
+    mysql_values_tuple_line(Line), !,
+    update_mysql_values_state(Line, State).
+convert_sql_line_state(Dialect, Line, State, Converted) :-
+    convert_sql_line(Dialect, Line, Converted),
+    update_sql_values_state(Dialect, Line, State).
+
+update_sql_values_state(mysql, Line, State) :- !,
+    arg(3, State, Current),
+    sql_line_upper(Line, Upper),
+    ( Current == true -> InValues = true
+    ; Current == pending,
+      sub_string(Upper, _, _, _, "VALUES") -> InValues = true
+    ; Current == pending -> InValues = pending
+    ; sql_line_starts_any(Upper, ["INSERT "]) ->
+        ( sub_string(Upper, _, _, _, "VALUES") -> InValues = true
+        ; InValues = pending
+        )
+    ; InValues = false
+    ),
+    nb_setarg(3, State, InValues),
+    update_mysql_values_state(Line, State).
+update_sql_values_state(_, _, _).
+
+update_mysql_values_state(Line, State) :-
+    ( mysql_line_terminates_statement(Line) -> nb_setarg(3, State, false)
+    ; true
+    ).
+
+mysql_line_terminates_statement(Line) :-
+    string_codes(Line, Codes0),
+    reverse(Codes0, Reverse0),
+    drop_sql_horizontal_space(Reverse0, [59|_]).
+
+mysql_values_tuple_line(Line) :-
+    string_codes(Line, Codes),
+    drop_sql_horizontal_space(Codes, [40|_]).
+
+drop_sql_horizontal_space([Code|Codes], Rest) :-
+    memberchk(Code, [9,32]), !,
+    drop_sql_horizontal_space(Codes, Rest).
+drop_sql_horizontal_space(Codes, Codes).
 
 normalize_sql_dialect_line(Dialect, Line0, Line) :-
     transform_sql_unquoted(Line0, Line7),

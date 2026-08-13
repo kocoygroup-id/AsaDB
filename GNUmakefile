@@ -1,6 +1,6 @@
 # Copyright (C) 2026 Kocoy Group and AsaDB contributors
 # SPDX-License-Identifier: GPL-3.0-only
-.PHONY: run panel test test-ui test-join test-backup test-interchange test-interchange-stress test-modules test-launchers test-guardian test-windows-source test-package test-pack test-server-e2e test-all check-linux clean release release-linux release-source windows-exe
+.PHONY: run panel test test-reservoir-unique test-ui test-join test-backup test-interchange test-interchange-stress test-modules test-launchers test-guardian test-windows-source test-package test-pack test-server-e2e test-all check-linux clean release release-linux release-source windows-exe
 
 DB ?= data.asa
 SQL ?= examples/demo.sql
@@ -16,10 +16,14 @@ panel:
 	swipl -q -s src/asadb_web.pl -- $(DB) $(PORT)
 
 test:
+	swipl -q -s tests/mysql_ddl_fail_closed_regression.pl
 	swipl -q -s tests/run_tests.pl
 	swipl -q -s tests/reservoir_tests.pl
 	./tests/reservoir_large_sql_regression.sh
 	swipl -q -s tests/tvcc_regression.pl
+
+test-reservoir-unique:
+	./tests/reservoir_unique_cache_regression.sh
 
 test-ui:
 	node tests/ui_regression.js
@@ -60,7 +64,7 @@ test-pack:
 test-server-e2e:
 	./tests/server_e2e_regression.sh
 
-test-all: test test-ui test-join test-backup test-interchange test-modules test-launchers test-guardian test-windows-source test-package test-pack test-server-e2e
+test-all: test test-reservoir-unique test-ui test-join test-backup test-interchange test-modules test-launchers test-guardian test-windows-source test-package test-pack test-server-e2e
 
 check-linux:
 	./scripts/check_linux_runtime.sh

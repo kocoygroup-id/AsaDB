@@ -25,12 +25,12 @@ asadb_schema_validate_insert_shape(Columns, InputColumns, ValueRows) :-
            validate_value_arity(Expected, Values)).
 
 asadb_schema_validate_insert_rows(Columns, Indexes, ExistingRows, NewRows) :-
-    maplist(validate_row(Columns), NewRows),
+    validate_rows(Columns, NewRows),
     append(ExistingRows, NewRows, AllRows),
     validate_unique_indexes(Indexes, AllRows).
 
 asadb_schema_validate_replacement_rows(Columns, Indexes, Rows) :-
-    maplist(validate_row(Columns), Rows),
+    validate_rows(Columns, Rows),
     validate_unique_indexes(Indexes, Rows).
 
 asadb_schema_validate_assignment_columns(_, []).
@@ -57,6 +57,40 @@ validate_value_arity(Expected, Values) :-
     ; throw(error(domain_error(insert_value_count(Expected), Actual), _))
     ).
 
+% Types are part of a table schema, not of an individual value.  Compile the
+% small column signature vector once per validation unit so a 1,000-row INSERT
+% does not repeatedly normalize the same `VARCHAR(150)` atom thousands of
+% times.  This is deliberately local to the call: schema changes cannot leave
+% a stale global type cache behind.
+validate_rows(Columns, Rows) :-
+    compile_column_signatures(Columns, CompiledColumns),
+    maplist(validate_compiled_row(CompiledColumns), Rows).
+
+compile_column_signatures([], []).
+compile_column_signatures([col(Name, Type, Options)|Columns],
+                          [compiled_col(Name, Type, Options, Signature)|Compiled]) :-
+    type_signature(Type, TypeName, Arguments),
+    Signature = type_signature(TypeName, Arguments),
+    compile_column_signatures(Columns, Compiled).
+
+validate_compiled_row([], _).
+validate_compiled_row([compiled_col(Name, Type, Options, Signature)|Columns], row(Pairs)) :-
+    ( lookup_value(Name, Pairs, Value) -> true ; Value = null ),
+    validate_compiled_column_value(Name, Type, Options, Signature, Value),
+    validate_compiled_row(Columns, row(Pairs)).
+
+validate_compiled_column_value(Name, _Type, Options, _, null) :-
+    ( memberchk(not_null, Options) ; memberchk(primary_key, Options) ), !,
+    throw(error(existence_error(non_null_value, Name), _)).
+validate_compiled_column_value(_, _, _, _, null) :- !.
+validate_compiled_column_value(Name, Type, _Options,
+                               type_signature(TypeName, Arguments), Value) :-
+    ( type_accepts(TypeName, Arguments, Value) -> true
+    ; throw(error(domain_error(sql_type(Name, Type), Value), _))
+    ).
+
+% Retained for internal callers that validate one ad-hoc value.  INSERT and
+% replacement validation use the precompiled path above.
 validate_row([], _).
 validate_row([col(Name, Type, Options)|Columns], row(Pairs)) :-
     ( lookup_value(Name, Pairs, Value) -> true ; Value = null ),
