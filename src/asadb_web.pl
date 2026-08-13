@@ -1200,11 +1200,14 @@ import_statement_batch_size(BatchSize) :-
 % the SQL frontend.  The previous implementation queued an entire read block
 % then noticed it was too large; that made 512 KiB a soft limit and could hand
 % approximately 733 KiB to scan/2 in a 64 MiB Reservoir worker.
+% The [] and [Head|Tail] clauses are disjoint, but SWI-Prolog 9.2 can retain a
+% choicepoint without these green cuts.  That choicepoint keeps every prior
+% SQL code list live across batches and defeats the explicit GC boundary.
 enqueue_import_statements_bounded(_, [], _, Statements, Errors,
-                                  Statements, Errors, none, '', false).
+                                  Statements, Errors, none, '', false) :- !.
 enqueue_import_statements_bounded(ImportId, [Codes|Rest], StopOnError,
                                   Statements0, Errors0,
-                                  Statements, Errors, LastStatus, LastMessage, Stop) :-
+                                  Statements, Errors, LastStatus, LastMessage, Stop) :- !,
     ( Codes == [] ->
         enqueue_import_statements_bounded(ImportId, Rest, StopOnError,
                                           Statements0, Errors0,
@@ -1232,10 +1235,10 @@ enqueue_import_statements_bounded(ImportId, [Codes|Rest], StopOnError,
     ).
 
 enqueue_import_chunks_bounded(_, [], _, Statements, Errors,
-                              Statements, Errors, none, '', false).
+                              Statements, Errors, none, '', false) :- !.
 enqueue_import_chunks_bounded(ImportId, [Codes|Rest], StopOnError,
                               Statements0, Errors0,
-                              Statements, Errors, LastStatus, LastMessage, Stop) :-
+                              Statements, Errors, LastStatus, LastMessage, Stop) :- !,
     import_statement_sql_bytes(Codes, StatementBytes),
     flush_before_import_enqueue(ImportId, StatementBytes, StopOnError,
                                 Statements0, Errors0,
@@ -1427,7 +1430,7 @@ import_values_rows_partial(Codes, RevRows, Rows, Continuation, Delimited) :-
     ).
 
 import_partial_rows_to_emit(Rows, [], Delimited, EmitRows, RemainingValues) :- !,
-    append(EmitRows, [LastRow], Rows),
+    once(append(EmitRows, [LastRow], Rows)),
     ( Delimited == true -> append(LastRow, [44], RemainingValues)
     ; RemainingValues = LastRow
     ).

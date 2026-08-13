@@ -111,10 +111,11 @@ request_sql 'USE reservoir_unique; SELECT COUNT(*) AS total FROM mysql_benchmark
 grep -F '72745' "$WORK/count.json" >/dev/null
 grep -F '"status":"error"' "$WORK/count.json" >/dev/null && { cat "$WORK/count.json" >&2; exit 1; } || true
 
-# Retain the exact 72,745-row reproduction above, then cross the production
-# 150,000-entry budget with a small follow-up transaction.  Its two UNIQUE
-# constraints force the bounded snapshot path without inflating the original
-# workload or masking its expected committed count.
+# Retain the exact 72,745-row reproduction above, then begin a follow-up
+# transaction against that existing table.  Rebuilding both UNIQUE validators
+# would exceed the shared 8 MiB trie budget, so this deterministically exercises
+# the bounded disk-snapshot path without inflating the original workload or
+# masking its expected committed count.
 awk 'BEGIN {
   first = 72746
   last = 80000

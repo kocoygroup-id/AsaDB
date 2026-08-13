@@ -2785,21 +2785,26 @@ key_pairs_tree(KeyPairs, Tree) :-
     forall(member(Key-_, KeyPairs), nb_rb_insert(Tree, Key, true)).
 
 % A transaction can hold several UNIQUE constraints at once.  Bounding only
-% rows per table allowed two 50k-key RB trees to remain live in a 64 MiB
-% Reservoir worker.  This is a global *entry* budget across every constraint
-% cache.  The tries retain only compact term hashes, never a VARCHAR key's
-% full term; every hash hit is rechecked against storage before it can reject
-% a value, so collisions cannot weaken uniqueness correctness.
+% rows or entries is not portable: the same trie can occupy materially
+% different amounts of memory across SWI-Prolog releases and platforms.  Use
+% trie_property/2's actual byte count across every live constraint cache.
+% Entry counts remain bookkeeping/diagnostic data.  The tries retain only
+% compact term hashes, never a VARCHAR key's full term; every hash hit is
+% rechecked against storage before it can reject a value, so collisions cannot
+% weaken uniqueness correctness.
 % The trie implementation avoids allocating a Prolog RB node for every key,
 % which leaves headroom for SQL parsing and page construction
 % in the normal 64 MiB Reservoir worker even with two UNIQUE constraints.
-% The entry budget is global across every constraint in the transaction.  If
-% it is exhausted, a streaming temporary B+Tree captures all keys currently
-% in the record store and each RAM trie restarts as a small post-snapshot
-% delta.  This avoids both unbounded live memory and an O(rows * batches) scan
-% cliff on 250k+ row imports.
-insert_key_cache_entry_budget(150000).
-insert_key_cache_reserve_headroom(8192).
+% If the memory budget is exhausted, a streaming temporary B+Tree captures all
+% keys currently in the record store and each RAM trie restarts as a small
+% post-snapshot delta.  The per-entry estimate reserves room for the next
+% bounded execution unit; the exact trie size is checked again after insertion.
+insert_key_cache_memory_budget(8388608).
+% Integer-hash tries grow from roughly 65 bytes/entry at 1k keys to about
+% 106 bytes/entry near the production 72k fixture on both SWI 9.2 and 10.
+% Reserve 128 bytes so an existing table never crosses the hard budget while
+% its initial validator is being built.
+insert_key_cache_estimated_entry_bytes(128).
 insert_key_cache_snapshot_budget(16).
 
 ensure_insert_key_cache(StoreId, _, Columns) :-
@@ -2813,6 +2818,7 @@ ensure_insert_key_cache(StoreId, ExistingCount, Columns) :-
     ; insert_key_cache_can_reserve(ExistingCount) ->
         build_insert_key_delta(StoreId, Columns, Trie, Entries),
         new_insert_key_cache_with_trie(StoreId, Columns, none, Entries, Trie),
+        enforce_insert_key_cache_memory_budget,
         note_plan(insert_validation_scan)
     ; build_insert_key_snapshot(StoreId, Columns, Snapshot, Bloom),
       new_insert_key_cache(StoreId, Columns, Snapshot, 0, Bloom),
@@ -2820,14 +2826,33 @@ ensure_insert_key_cache(StoreId, ExistingCount, Columns) :-
     ).
 
 insert_key_cache_can_reserve(NewEntries) :-
-    insert_key_cache_entry_budget(Budget),
-    insert_key_cache_reserve_headroom(Headroom),
-    insert_key_cache_total_entries(Current),
-    Current + NewEntries + Headroom =< Budget.
+    insert_key_cache_memory_budget(Budget),
+    insert_key_cache_total_bytes(CurrentBytes),
+    insert_key_cache_estimated_entry_bytes(EntryBytes),
+    ProjectedBytes is CurrentBytes + NewEntries * EntryBytes,
+    ProjectedBytes =< Budget.
 
 insert_key_cache_total_entries(Total) :-
     findall(Entries, asadb_insert_key_cache(_, _, _, Entries, _), Values),
     sum_list(Values, Total).
+
+insert_key_cache_total_bytes(Total) :-
+    findall(Bytes,
+            ( asadb_insert_key_cache(_, _, _, Entries, Global),
+              nb_getval(Global, cache_state(Trie, _)),
+              insert_key_trie_bytes(Trie, Entries, Bytes)
+            ),
+            Values),
+    sum_list(Values, Total).
+
+insert_key_trie_bytes(Trie, _, Bytes) :-
+    catch(trie_property(Trie, size(Bytes0)), _, fail), !,
+    Bytes is max(0, Bytes0).
+insert_key_trie_bytes(_, Entries, Bytes) :-
+    % Compatibility fallback for the oldest supported SWI-Prolog builds.  It
+    % intentionally overestimates typical integer-hash trie entries.
+    insert_key_cache_estimated_entry_bytes(EntryBytes),
+    Bytes is Entries * EntryBytes.
 
 insert_key_cache_snapshot_capacity(StoreId, Columns) :-
     aggregate_all(count,
@@ -2947,7 +2972,7 @@ build_insert_key_delta(StoreId, Columns, Trie, Entries) :-
     forall(asadb_record_scan_columns(StoreId, Columns, _, Row),
            ( cache_row_constraint_key(Columns, Row, Key) ->
                  constraint_key_hash(Key, Hash),
-                 trie_insert(Trie, Hash, true),
+                 insert_key_trie_add_hash(Trie, Hash),
                  flag(asadb_insert_cache_build_entries, N, N + 1)
            ; true
            )),
@@ -2982,7 +3007,22 @@ insert_key_snapshot_missing(StoreId, Columns, File, _, Key-_) :-
     )).
 
 constraint_key_hash(Key, Hash) :-
-    term_hash(Key, Hash).
+    % term_hash/2 on SWI-Prolog 9.2 uses a comparatively small default range;
+    % a 72k sequential-key fixture already produced avoidable collisions and
+    % therefore expensive exact record-store probes.  The explicit 31-bit
+    % range is supported by every release runtime and remains only a candidate
+    % filter: canonical rows are still compared before uniqueness is decided.
+    term_hash(Key, -1, 2147483647, Hash).
+
+% The trie is a compact candidate filter, not the uniqueness authority.
+% Distinct canonical keys may share a term_hash/2 value (notably sooner on
+% SWI-Prolog 9.2), and trie_insert/3 rejects an existing key instead of acting
+% like a set insertion.  Preserve one candidate marker per hash; every hit is
+% still checked against the canonical row in the record store below.
+insert_key_trie_add_hash(Trie, Hash) :-
+    ( trie_lookup(Trie, Hash, _) -> true
+    ; trie_insert(Trie, Hash, true)
+    ).
 
 insert_key_trie_missing(StoreId, Columns, Trie, Key-_) :-
     constraint_key_hash(Key, Hash),
@@ -3094,7 +3134,7 @@ invalidate_row_storage_indexes(paged_rows(StoreId, _, _)) :- !,
 invalidate_row_storage_indexes(_).
 
 % The delta is extended only after the record batch succeeds.  Crossing the
-% shared entry budget rebuilds bounded disk snapshots from the now-complete
+% shared memory budget rebuilds bounded disk snapshots from the now-complete
 % record store and releases every old in-memory trie.
 extend_insert_key_caches(StoreId, Count0, Count, NewRows) :-
     findall(cache(Columns, Snapshot, Entries, Global),
@@ -3103,12 +3143,18 @@ extend_insert_key_caches(StoreId, Count0, Count, NewRows) :-
             Caches),
     ( Caches = [] -> true
     ; cache_updates(Caches, NewRows, Updates, AddedEntries),
-      insert_key_cache_total_entries(CurrentEntries),
-      insert_key_cache_entry_budget(Budget),
-      ( CurrentEntries + AddedEntries =< Budget ->
-          apply_insert_key_cache_updates(StoreId, Count0, Count, Updates)
+      ( insert_key_cache_can_reserve(AddedEntries) ->
+          apply_insert_key_cache_updates(StoreId, Count0, Count, Updates),
+          enforce_insert_key_cache_memory_budget
       ; rebuild_all_insert_key_cache_snapshots
       )
+    ).
+
+enforce_insert_key_cache_memory_budget :-
+    insert_key_cache_total_bytes(Bytes),
+    insert_key_cache_memory_budget(Budget),
+    ( Bytes =< Budget -> true
+    ; rebuild_all_insert_key_cache_snapshots
     ).
 
 cache_updates([], _, [], 0).
@@ -3125,7 +3171,9 @@ apply_insert_key_cache_updates(StoreId, Count0, Count, [Columns-Pairs|Updates]) 
     Columns == CachedColumns,
     nb_getval(Global, cache_state(Trie, _)),
     forall(member(Key-_, Pairs),
-           ( constraint_key_hash(Key, Hash), trie_insert(Trie, Hash, true) )),
+           ( constraint_key_hash(Key, Hash),
+             insert_key_trie_add_hash(Trie, Hash)
+           )),
     length(Pairs, Added),
     Entries is Entries0 + Added,
     retract(asadb_insert_key_cache(StoreId, CachedColumns, Snapshot, Entries0,

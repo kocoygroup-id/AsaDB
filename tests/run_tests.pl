@@ -23,6 +23,7 @@ main :-
     run_incremental_insert_assertions,
     run_stop_on_error_assertions,
     run_bounded_insert_batch_assertions,
+    run_insert_key_hash_collision_assertions,
     run_order_by_duplicate_assertions,
     run_order_by_wildcard_assertions,
     run_order_by_filtered_projection_assertions,
@@ -97,6 +98,29 @@ run_bounded_insert_batch_assertions :-
                table([total], [[ExpectedRows]])),
     asadb_shutdown,
     cleanup.
+
+% A UNIQUE-cache trie stores hashes only and exact-checks candidate rows in
+% the record store.  Hash collisions must therefore behave like an idempotent
+% set insertion.  SWI-Prolog 9.2 reaches such a collision in the 72k import
+% fixture much sooner than newer runtimes did, which previously aborted the
+% otherwise valid transaction.
+run_insert_key_hash_collision_assertions :-
+    trie_new(Trie),
+    setup_call_cleanup(
+        true,
+        ( asadb_core:constraint_key_hash([number(2287)], FirstHash),
+          asadb_core:constraint_key_hash([number(5900)], SecondHash),
+          FirstHash \== SecondHash,
+          asadb_core:insert_key_trie_add_hash(Trie, 42),
+          asadb_core:insert_key_trie_add_hash(Trie, 42),
+          trie_lookup(Trie, 42, true)
+        ),
+        trie_destroy(Trie)
+    ), !.
+run_insert_key_hash_collision_assertions :-
+    format('ASSERTION FAILED: UNIQUE hash collision was not idempotent.~n', []),
+    cleanup,
+    halt(1).
 
 bounded_insert_result(ok(inserted(batch_rows, Count)), Count) :-
     Count =< 512.
